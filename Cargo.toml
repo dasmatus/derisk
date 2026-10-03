@@ -8,15 +8,17 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [dependencies]
-mcsapi = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
-# The Smithay compositor host (`derisk session`). Off by default so the shell
-# library and the headless commands build without graphics libraries.
-egui_glow = { version = "0.36.2", default-features = false, optional = true }
-glow = { version = "0.17", optional = true }
-smithay = { version = "0.7.0", default-features = false, features = ["backend_winit", "desktop", "renderer_gl", "wayland_frontend"], optional = true }
+# `derisk session` runs on mcsapi-compositor with the derisk core apps. Off by
+# default so the shell library and headless commands build without graphics.
+# Tracks the mcsapi branch that adds the compositor (stacked on the derisk
+# apps PR) until both land on mcsapi main.
+derisk-apps = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar", optional = true }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar", optional = true }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar", optional = true }
 
 [features]
-host = ["dep:egui_glow", "dep:glow", "dep:smithay"]
+host = ["dep:derisk-apps", "dep:mcsapi-compositor", "dep:mcsapi-runtime"]
