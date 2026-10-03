@@ -14,6 +14,7 @@ use crate::{
     menu::{self, GlobalMenu},
     overview::Battery,
     snap::{Nudge, SnapZone, zone_at},
+    systemd::{self, SessionOp},
     time::Clock,
     tray::Tray,
 };
@@ -35,6 +36,14 @@ pub enum Error {
     UnknownWorkspace(u64),
     /// The action needs a focused window and there is none.
     NoFocusedWindow,
+    /// A destructive session operation was not confirmed by the user.
+    NeedsConfirmation(SessionOp),
+    /// The app name is not a plain command or desktop-file ID.
+    NotLaunchable(String),
+    /// No tray item has this ID.
+    UnknownTrayItem(String),
+    /// Unit actions only apply to currently failed user units.
+    UnknownUnit(String),
 }
 
 impl std::fmt::Display for Error {
@@ -44,6 +53,12 @@ impl std::fmt::Display for Error {
             Self::UnknownWindow(id) => write!(f, "unknown window: {id}"),
             Self::UnknownWorkspace(id) => write!(f, "unknown workspace: {id}"),
             Self::NoFocusedWindow => f.write_str("no focused window"),
+            Self::NeedsConfirmation(op) => {
+                write!(f, "{op:?} needs explicit confirmation (set \"confirmed\": true)")
+            }
+            Self::NotLaunchable(app) => write!(f, "not a launchable app name: {app:?}"),
+            Self::UnknownTrayItem(id) => write!(f, "unknown tray item: {id:?}"),
+            Self::UnknownUnit(unit) => write!(f, "not a failed user unit: {unit:?}"),
         }
     }
 }
@@ -186,6 +201,8 @@ pub struct Shell {
     pub clock: Clock,
     /// Battery state, updated by the host.
     pub battery: Option<Battery>,
+    /// Failed user units, updated by the host (see [`systemd::failed_units`]).
+    pub failed_units: Vec<String>,
 }
 
 fn workspace(id: u64) -> Result<WorkspaceId, Error> {
@@ -214,6 +231,7 @@ impl Shell {
             habits: Habits::default(),
             clock: Clock::default(),
             battery: None,
+            failed_units: Vec::new(),
         };
         shell.apply_profile_layout();
         shell
@@ -495,6 +513,14 @@ impl Shell {
         self.set_mode(window, Mode::Floating { frame: frame.into() })
     }
 
+    fn check_failed_unit(&self, unit: &str) -> Result<(), Error> {
+        if self.failed_units.iter().any(|u| u == unit) {
+            Ok(())
+        } else {
+            Err(Error::UnknownUnit(unit.to_owned()))
+        }
+    }
+
     /// Applies one action, returning work for the host.
     pub fn apply(&mut self, action: Action) -> Result<Vec<Effect>, Error> {
         if !matches!(action, Action::Snap { .. }) {
@@ -502,6 +528,9 @@ impl Shell {
         }
         match action {
             Action::Launch { app } => {
+                if !systemd::is_launchable(&app) {
+                    return Err(Error::NotLaunchable(app));
+                }
                 self.habits.record(&app, self.clock.hour);
                 return Ok(vec![Effect::Launch { app }]);
             }
@@ -606,6 +635,27 @@ impl Shell {
                     window: w.get(),
                     item,
                 }]);
+            }
+            Action::Session { op, confirmed } => {
+                if op.is_destructive() && !confirmed {
+                    return Err(Error::NeedsConfirmation(op));
+                }
+                return Ok(vec![Effect::Session { op }]);
+            }
+            Action::ActivateTray { id, item } => {
+                if !self.tray.items().any(|i| i.id == id) {
+                    return Err(Error::UnknownTrayItem(id));
+                }
+                return Ok(vec![Effect::TrayActivated { id, item }]);
+            }
+            Action::RestartUnit { unit } => {
+                self.check_failed_unit(&unit)?;
+                return Ok(vec![Effect::RestartUnit { unit }]);
+            }
+            Action::ResetFailed { unit } => {
+                self.check_failed_unit(&unit)?;
+                self.failed_units.retain(|u| *u != unit);
+                return Ok(vec![Effect::ResetFailed { unit }]);
             }
         }
         Ok(Vec::new())

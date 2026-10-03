@@ -13,6 +13,8 @@
 //! - [`tray`]: monochrome system tray icons.
 //! - [`animation`]: the startup animation.
 //! - [`assistant`] and [`ipc`]: natural-language and agent control.
+//! - [`systemd`]: apps as transient units, sd_notify, socket activation,
+//!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.
 //!
 //! ```
@@ -40,6 +42,7 @@ pub mod menu;
 pub mod overview;
 pub mod shell;
 pub mod snap;
+pub mod systemd;
 pub mod time;
 pub mod tray;
 pub mod ui;

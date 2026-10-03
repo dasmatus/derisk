@@ -3,7 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::snap::{Direction, SnapZone};
+use crate::{
+    snap::{Direction, SnapZone},
+    systemd::SessionOp,
+};
 
 /// Window arrangement for a workspace's tiled windows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -118,6 +121,33 @@ pub enum Action {
         /// Item ID.
         item: String,
     },
+    /// Lock, suspend, log out, reboot or power off through logind/systemd.
+    Session {
+        /// Operation.
+        op: SessionOp,
+        /// Destructive operations (log out, reboot, power off) are refused
+        /// unless the user explicitly confirmed them.
+        #[serde(default)]
+        confirmed: bool,
+    },
+    /// Activate a tray item, or one of its menu entries.
+    ActivateTray {
+        /// Tray item ID.
+        id: String,
+        /// Menu item ID; `None` for a plain click.
+        #[serde(default)]
+        item: Option<String>,
+    },
+    /// Restart a failed user unit.
+    RestartUnit {
+        /// Unit name.
+        unit: String,
+    },
+    /// Clear a user unit's failed state.
+    ResetFailed {
+        /// Unit name.
+        unit: String,
+    },
 }
 
 impl Action {
@@ -159,5 +189,27 @@ pub enum Effect {
         window: u64,
         /// Item ID.
         item: String,
+    },
+    /// Perform a session operation.
+    Session {
+        /// Operation.
+        op: SessionOp,
+    },
+    /// Forward a tray activation to its StatusNotifierItem.
+    TrayActivated {
+        /// Tray item ID.
+        id: String,
+        /// Menu item ID, if a menu entry was chosen.
+        item: Option<String>,
+    },
+    /// Restart a user unit.
+    RestartUnit {
+        /// Unit name.
+        unit: String,
+    },
+    /// Clear a user unit's failed state.
+    ResetFailed {
+        /// Unit name.
+        unit: String,
     },
 }

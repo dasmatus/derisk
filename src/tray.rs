@@ -143,7 +143,7 @@ impl Tray {
     }
 
     /// Items in ID order.
-    pub fn items(&self) -> impl ExactSizeIterator<Item = &TrayItem> {
+    pub fn items(&self) -> impl ExactSizeIterator<Item = &TrayItem> + DoubleEndedIterator {
         self.items.values()
     }
 

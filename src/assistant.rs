@@ -4,6 +4,7 @@
 use crate::{
     action::{Action, LayoutKind},
     snap::{Direction, SnapZone},
+    systemd::SessionOp,
 };
 
 /// A request clause the assistant did not understand.
@@ -64,7 +65,23 @@ fn clause(text: &str) -> Result<Action, NotUnderstood> {
     let has = |w: &str| words.contains(&w);
     let last_number = || words.iter().rev().find_map(|w| number(w));
 
+    let session = |op| Action::Session {
+        op,
+        confirmed: false,
+    };
     let action = match verb {
+        "lock" => session(SessionOp::Lock),
+        "suspend" | "sleep" => session(SessionOp::Suspend),
+        "hibernate" => session(SessionOp::Hibernate),
+        "logout" | "log" | "sign" if verb == "logout" || has("out") || has("off") => {
+            session(SessionOp::Logout)
+        }
+        "reboot" => session(SessionOp::Reboot),
+        "restart" if has("computer") || has("system") || has("pc") || has("machine") => {
+            session(SessionOp::Reboot)
+        }
+        "shutdown" | "poweroff" => session(SessionOp::PowerOff),
+        "shut" | "power" if has("down") || has("off") => session(SessionOp::PowerOff),
         "show" | "open" | "toggle" | "overview" if has("overview") || has("desktop") => {
             Action::Overview {
                 visible: (verb != "toggle").then_some(true),
