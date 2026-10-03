@@ -157,6 +157,29 @@ $ cargo build --release --features host
 $ PATH=$PWD/target/release:$PATH scripts/showcase.py derisk-showcase.mp4
 ```
 
+## Core apps
+
+The repository is a Cargo workspace: the shell is the root package and the
+core apps live under `crates/`. Each app is an `mcsapi_ui::App` with its logic
+in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
+
+| App | Crate | What it does |
+| --- | --- | --- |
+| Files | `derisk-files` | Places, back/forward/up, sort, filter, hidden files, new folder/file, rename (never overwrites), copy/cut/paste with `name (copy).ext` on clashes, the freedesktop.org trash, and `xdg-open`. |
+| Settings | `derisk-settings` | Dark/light, accent, text size, reduced motion, layout, gaps, workspaces, adaptive profile, input, notifications, and power, saved to `$XDG_CONFIG_HOME/derisk/settings.conf`. `Settings::theme()` gives the shell its colors. |
+| Text Editor | `derisk-editor` | UTF-8 files up to 8 MiB, atomic saves that keep permissions, find and replace, line/column, unsaved-change prompts. |
+| System Monitor | `derisk-monitor` | CPU graph, memory, swap, load, uptime, and a sortable, filterable process table with End process, from `/proc`. |
+| Calculator | `derisk-calculator` | Expressions with precedence, `^`, `%`, functions, `pi`, `e`, `ans`, and history. |
+
+`derisk-apps` lists them, registers them with `mcsapi-runtime`, and keeps the
+running app objects next to their instances (`derisk_apps::Session`), so the
+host only gives each instance a surface and calls `mcsapi_ui::run_frame`.
+To try them in one window without the compositor:
+
+```console
+$ cargo run -p derisk-apps --features preview --bin derisk-preview -- org.derisk.files
+```
+
 ## Building
 
 Requires Rust 1.95 and the system libraries mcsapi links against, for
@@ -165,9 +188,9 @@ example on Debian/Ubuntu:
 ```console
 $ sudo apt install libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libinput-dev libudev-dev libgbm-dev libseat-dev libdrm-dev
 $ cargo build
-$ cargo test
-$ cargo clippy --all-targets -- -D warnings
-$ cargo clippy --all-targets --features host -- -D warnings
+$ cargo test --workspace
+$ cargo clippy --workspace --all-targets -- -D warnings
+$ cargo clippy --workspace --all-targets --features derisk/host -- -D warnings
 ```
 
 ## License

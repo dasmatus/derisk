@@ -1,0 +1,28 @@
+[package]
+name = "derisk-apps"
+description = "The derisk core apps, registered with mcsapi-runtime and ready for a host to launch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+derisk-calculator.workspace = true
+derisk-editor.workspace = true
+derisk-files.workspace = true
+derisk-monitor.workspace = true
+derisk-settings.workspace = true
+mcsapi-runtime.workspace = true
+mcsapi-ui.workspace = true
+eframe = { workspace = true, optional = true }
+
+[features]
+# A desktop window that runs the apps through eframe, for trying them out
+# before a compositor host exists. Off by default to keep CI free of windowing
+# dependencies.
+preview = ["dep:eframe"]
+
+[[bin]]
+name = "derisk-preview"
+required-features = ["preview"]
