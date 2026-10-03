@@ -1,0 +1,14 @@
+[Unit]
+Description=derisk agent control socket
+Documentation=https://github.com/dasmatus/derisk
+PartOf=derisk-session.target
+
+[Socket]
+# JSON-lines agent protocol; only the session user may connect.
+ListenStream=%t/derisk/agent.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
+
+[Install]
+WantedBy=derisk-session.target
