@@ -37,9 +37,11 @@ def request(obj):
     with socket.socket(socket.AF_UNIX) as s:
         s.connect(agent)
         s.sendall((json.dumps(obj) + "\n").encode())
-        data = b""
         while not data.endswith(b"\n"):
-            data += s.recv(65536)
+            chunk = s.recv(65536)
+            if not chunk:
+                raise ConnectionError("agent socket closed before sending a response")
+            data += chunk
     return json.loads(data)
 
 
