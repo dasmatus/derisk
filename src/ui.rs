@@ -406,7 +406,7 @@ impl ShellUi {
         let pointer = ui.input(|i| i.pointer.latest_pos());
         self.overview_drag = self
             .overview_drag
-            .filter(|w| shell.workspace_of(*w).is_some());
+            .filter(|w| shell.workspace_of(*w) == Some(open[active as usize - 1]));
         let dragging = self.overview_drag;
         let drop_on = pointer.and_then(|p| cells.iter().position(|c| to_rect(*c).contains(p)));
         for (i, cell) in cells.iter().enumerate() {
