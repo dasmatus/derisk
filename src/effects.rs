@@ -36,7 +36,7 @@ pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 pub const LOW_POWER_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 /// The least panel opacity in low power mode, where nothing is blurred.
-const LOW_POWER_MIN_OPACITY: f32 = 0.92;
+const LOW_POWER_MIN_OPACITY: f32 = 0.97;
 
 /// The user's effect preferences.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

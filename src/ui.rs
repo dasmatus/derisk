@@ -339,8 +339,14 @@ impl ShellUi {
                 }
                 ui.menu_button("derisk", |ui| system_menu(ui, actions));
                 if let Some(w) = focused {
-                    let (app, _) = shell.window_label(w).unwrap_or_default();
-                    ui.label(RichText::new(app).strong());
+                    let (app, title) = shell.window_label(w).unwrap_or_default();
+                    // Reverse-DNS app IDs (org.derisk.files) read better as the title.
+                    let name = if app.contains('.') && !title.is_empty() {
+                        title
+                    } else {
+                        app
+                    };
+                    ui.label(RichText::new(name).strong());
                 }
                 for menu in shell.menus.bar(focused.map(|w| w.get())) {
                     menu_button(ui, &menu, focused.map(|w| w.get()), actions);
@@ -509,6 +515,12 @@ impl ShellUi {
                 StrokeKind::Inside,
             );
             let (app, title) = shell.window_label(*w).unwrap_or_default();
+            // Reverse-DNS app IDs (org.derisk.files) read better as the title.
+            let (app, title) = if app.contains('.') && !title.is_empty() {
+                (title, app)
+            } else {
+                (app, title)
+            };
             ui.painter().text(
                 r.center() - vec2(0.0, 10.0),
                 Align2::CENTER_CENTER,
@@ -642,6 +654,9 @@ impl ShellUi {
         match assistant::interpret(&self.assistant) {
             Ok(parsed) => {
                 self.reply = Some(format!("On it ({} step(s)).", parsed.len()));
+                // Get out of the way so the result is visible, unless the
+                // request was about the overview itself.
+                let close = !parsed.iter().any(|a| matches!(a, Action::Overview { .. }));
                 // Typed by the user at the console, so session operations count
                 // as confirmed. Agents over IPC must confirm explicitly.
                 actions.extend(parsed.into_iter().map(|a| match a {
@@ -651,6 +666,11 @@ impl ShellUi {
                     },
                     other => other,
                 }));
+                if close {
+                    actions.push(Action::Overview {
+                        visible: Some(false),
+                    });
+                }
                 self.assistant.clear();
             }
             Err(e) => self.reply = Some(e.to_string()),

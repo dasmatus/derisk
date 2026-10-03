@@ -9,9 +9,13 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-mcsapi = { git = "https://github.com/dasmatus/mcsapi" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi" }
+# Until dasmatus/mcsapi#19 (panel blur and frame pacing) merges, every mcsapi
+# crate comes from its branch so the apps and the compositor share one
+# mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
+mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
@@ -35,11 +39,12 @@ mcsapi.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
-# The Smithay compositor host (`derisk session`). Off by default so the shell
-# library and the headless commands build without graphics libraries.
-egui_glow = { version = "0.36.2", default-features = false, optional = true }
-glow = { version = "0.17", optional = true }
-smithay = { version = "0.7.0", default-features = false, features = ["backend_winit", "desktop", "renderer_gl", "wayland_frontend"], optional = true }
+# `derisk session` runs on mcsapi-compositor with the derisk core apps. Off by
+# default so the shell library and headless commands build without graphics.
+derisk-apps = { workspace = true, optional = true }
+mcsapi-compositor = { workspace = true, optional = true }
+mcsapi-runtime = { workspace = true, optional = true }
 
 [features]
-host = ["dep:egui_glow", "dep:glow", "dep:smithay"]
+host = ["dep:derisk-apps", "dep:mcsapi-compositor", "dep:mcsapi-runtime"]
+

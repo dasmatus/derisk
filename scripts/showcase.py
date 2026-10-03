@@ -3,7 +3,7 @@
 
 Runs `derisk session` nested in a virtual X server (Xvfb), drives it with
 real input through xdotool and the agent socket, and records the screen
-with ffmpeg. Needs: Xvfb, xdotool, ffmpeg, foot, neofetch, htop, cmatrix,
+with ffmpeg. Needs: Xvfb, xdotool, ffmpeg, foot, neofetch, htop,
 and a `derisk` built with `--features host` on PATH.
 
     scripts/showcase.py [OUTPUT.mp4]
@@ -137,51 +137,64 @@ def main():
         type_text("neofetch\n")
         time.sleep(2.5)
 
-        # 2. Agent-first: ask the running session from inside the terminal.
-        type_text("derisk do open foot and snap it right\n")
+        # 2. Agent-first: from the terminal, ask the session for the Files app
+        #    (an in-process mcsapi-runtime app) on the right half.
+        type_text("derisk do open files and snap it right\n")
         wait_for(lambda: len(windows()) == 2)
         time.sleep(1.5)
 
-        # 3. Snap Assist offers the other half: pick the first terminal.
+        # 3. Snap Assist offers the other half: pick the terminal.
         click(W // 4, H // 2)
-        time.sleep(1.2)
+        time.sleep(1.0)
         type_text("htop\n")
-        time.sleep(2.5)
+        time.sleep(2.0)
 
-        # 4. Drag a title bar to the top edge to maximize, then to a corner.
-        left = next(w for w in windows() if w["frame"] and w["frame"]["x"] < W // 2)
-        x, y = title_bar(left)
-        drag(x, y, W // 2, 2, 1.4)
-        time.sleep(1.5)
+        # 4. Browse files: click into the Files window and open a folder.
+        files = next(w for w in windows() if w["app_id"] == "org.derisk.files")
+        f = files["frame"]
+        click(f["x"] + 300, f["y"] + 66)
+        key("ctrl+a", pause=0.2)
+        type_text("/usr/share\n", 45)
+        time.sleep(2.0)
+
+        # 5. The overview: workspaces, exposé, widgets; ask for the calculator.
+        key("super", pause=1.5)
+        type_text("open calculator and snap it top right", 40)
+        key("Return", pause=2.0)
+        type_text("12*(3+4)\n", 90)
+        time.sleep(1.8)
+
+        # 6. Drag a title bar to the top edge to maximize, then to a corner.
         x, y = title_bar(focused())
-        drag(x, y, W - 3, H - 3, 1.6)
-        time.sleep(1.5)
+        drag(x, y, W // 2, 2, 1.3)
+        time.sleep(1.4)
+        x, y = title_bar(focused())
+        drag(x, y, 3, H - 3, 1.5)
+        time.sleep(1.4)
 
-        # 5. Windows-style keyboard snapping.
-        key("super+Left", "super+Up", "super+Right", pause=1.0)
-        time.sleep(0.6)
-
-        # 6. Tiling layouts: monocle and back to tall.
-        key("super+t", pause=0.8)
+        # 7. Windows-style keyboard snapping and tiling layouts.
+        key("super+Right", "super+Up", pause=1.0)
         key("super+m", pause=1.4)
         key("super+shift+m", pause=1.4)
 
-        # 7. The overview: workspaces, exposé and widgets; ask the assistant.
-        key("super", pause=1.5)
-        type_text("open foot and move it to workspace 2", 45)
-        key("Return", pause=2.5)
-        key("Escape", pause=1.0)
-        key("super+2", pause=1.0)
-        type_text("cmatrix\n")
-        time.sleep(3.0)
+        # 8. Settings on workspace 2, the text editor and system monitor.
+        request({"method": "ask", "text": "open settings and move it to workspace 2"})
+        time.sleep(1.0)
+        key("super+2", pause=2.5)
+        request({"method": "ask", "text": "open editor and snap it left"})
+        time.sleep(1.2)
+        type_text("Hello from derisk: apps, tiling and an assistant.", 40)
+        time.sleep(1.0)
+        request({"method": "ask", "text": "open monitor"})
+        time.sleep(2.5)
         key("super+1", pause=1.5)
 
-        # 8. The global menu: the Window menu lives in the top bar.
-        click(150, 14)
+        # 9. The global menu lives in the top bar.
+        click(200, 14)
         time.sleep(1.5)
         key("Escape", pause=0.8)
 
-        # 9. Overview again, pick a window from the exposé grid.
+        # 10. Overview again, then pick a window from the exposé grid.
         key("super", pause=1.8)
         click(420, 420)
         time.sleep(2.0)
