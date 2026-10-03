@@ -89,9 +89,14 @@ fn effects_map_to_systemd_commands() {
 
 #[test]
 fn session_start_exports_environment_then_starts_the_target() {
-    let cmds = systemd::session_start_argv();
-    assert!(cmds[0].contains(&"WAYLAND_DISPLAY".to_owned()));
+    let cmds = systemd::session_start_argv("wayland-7");
+    assert_eq!(cmds[0][..3], ["systemctl", "--user", "set-environment"]);
+    assert!(cmds[0].contains(&"WAYLAND_DISPLAY=wayland-7".to_owned()));
+    assert!(cmds[0].contains(&"XDG_SESSION_TYPE=wayland".to_owned()));
+    assert!(cmds[0].contains(&"DISPLAY=".to_owned()));
     assert_eq!(cmds[1][0], "dbus-update-activation-environment");
+    assert!(cmds[1].contains(&"WAYLAND_DISPLAY=wayland-7".to_owned()));
+    assert!(cmds[1].contains(&"DISPLAY=".to_owned()));
     assert_eq!(
         cmds.last().unwrap().last().unwrap(),
         "derisk-session.target"

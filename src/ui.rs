@@ -25,7 +25,7 @@ use crate::{
     geom::{inset, rect},
     menu::{Menu, MenuEntry},
     overview::{OverviewLayout, Widget, fit, grid},
-    shell::{DropTarget, Shell},
+    shell::{DropTarget, Shell, WindowPlacement},
     systemd::SessionOp,
 };
 
@@ -78,6 +78,7 @@ pub struct ShellUi {
     assistant: String,
     reply: Option<String>,
     notes: String,
+    overview_open: bool,
     tray: Option<(u64, Vec<TextureHandle>)>,
 }
 
@@ -93,6 +94,7 @@ impl ShellUi {
             assistant: String::new(),
             reply: None,
             notes: String::new(),
+            overview_open: false,
             tray: None,
         }
     }
@@ -102,62 +104,80 @@ impl ShellUi {
         self.reply.as_deref()
     }
 
-    /// Paints server-side title bars, buttons on the left.
+    /// Paints server-side title bars, buttons on the left, bottom to top.
     pub fn paint_decorations(&self, painter: &Painter, shell: &Shell) {
+        for p in shell.placements() {
+            self.paint_decoration(painter, shell, &p);
+        }
+    }
+
+    /// Paints one window's title bar and border.
+    ///
+    /// Hosts that interleave decorations with client surfaces (so a window
+    /// above covers the title bar of one below) call this per placement.
+    pub fn paint_decoration(&self, painter: &Painter, shell: &Shell, p: &WindowPlacement) {
         let bar = shell.profile().title_bar;
         let theme = &self.theme;
-        for p in shell.placements() {
-            let radius = CornerRadius {
-                nw: 10,
-                ne: 10,
-                sw: 0,
-                se: 0,
-            };
-            painter.rect_filled(
-                to_rect(bar.bar(p.frame)),
-                radius,
+        let radius = CornerRadius {
+            nw: 10,
+            ne: 10,
+            sw: 0,
+            se: 0,
+        };
+        // A soft shadow separates overlapping windows.
+        painter.add(
+            egui::epaint::Shadow {
+                offset: [0, 6],
+                blur: if p.focused { 28 } else { 16 },
+                spread: 0,
+                color: Color32::from_black_alpha(if p.focused { 150 } else { 90 }),
+            }
+            .as_shape(to_rect(p.frame), radius),
+        );
+        painter.rect_filled(
+            to_rect(bar.bar(p.frame)),
+            radius,
+            if p.focused {
+                theme.surface
+            } else {
+                theme.background
+            },
+        );
+        painter.rect_stroke(
+            to_rect(p.frame),
+            radius,
+            Stroke::new(
+                1.0,
                 if p.focused {
-                    theme.surface
-                } else {
-                    theme.background
-                },
-            );
-            painter.rect_stroke(
-                to_rect(p.frame),
-                radius,
-                Stroke::new(
-                    1.0,
-                    if p.focused {
-                        theme.accent
-                    } else {
-                        theme.border
-                    },
-                ),
-                StrokeKind::Inside,
-            );
-            for (button, area) in bar.buttons(p.frame) {
-                let color = if p.focused {
-                    button_color(button)
+                    theme.accent
                 } else {
                     theme.border
-                };
-                let r = to_rect(area);
-                painter.circle_filled(r.center(), r.width() / 2.0, color);
-            }
-            let title_area = to_rect(bar.title(p.frame));
-            let label = shell
-                .window_label(p.window)
-                .map(|(app, title)| if title.is_empty() { app } else { title })
-                .unwrap_or_default();
-            let size = (bar.height as f32 * 0.42).max(11.0);
-            painter.text(
-                title_area.center(),
-                Align2::CENTER_CENTER,
-                elide(label, title_area.width(), size),
-                FontId::proportional(size),
-                theme.foreground,
-            );
+                },
+            ),
+            StrokeKind::Inside,
+        );
+        for (button, area) in bar.buttons(p.frame) {
+            let color = if p.focused {
+                button_color(button)
+            } else {
+                theme.border
+            };
+            let r = to_rect(area);
+            painter.circle_filled(r.center(), r.width() / 2.0, color);
         }
+        let title_area = to_rect(bar.title(p.frame));
+        let label = shell
+            .window_label(p.window)
+            .map(|(app, title)| if title.is_empty() { app } else { title })
+            .unwrap_or_default();
+        let size = (bar.height as f32 * 0.42).max(11.0);
+        painter.text(
+            title_area.center(),
+            Align2::CENTER_CENTER,
+            elide(label, title_area.width(), size),
+            FontId::proportional(size),
+            theme.foreground,
+        );
     }
 
     /// Shows the chrome above client surfaces and returns requested actions.
@@ -172,6 +192,7 @@ impl ShellUi {
         if shell.overview_visible() {
             self.overview(ui, shell, &mut actions);
         }
+        self.overview_open = shell.overview_visible();
         self.top_bar(ui, shell, frame, &mut actions);
         if !frame.done {
             let painter = ui.ctx().layer_painter(egui::LayerId::new(
@@ -496,6 +517,10 @@ impl ShellUi {
                         .hint_text("Ask derisk… e.g. \"open firefox and snap it left\"")
                         .desired_width(f32::INFINITY),
                 );
+                // Opening the overview focuses the assistant, so typing just works.
+                if !self.overview_open {
+                    response.request_focus();
+                }
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     self.submit(actions);
                 }
@@ -703,6 +728,35 @@ fn entries(
             }
         }
     }
+}
+
+/// Paints the desktop wallpaper: a vertical gradient with a soft accent glow
+/// and the derisk mark in the lower right corner.
+pub fn paint_wallpaper(painter: &Painter, screen: Rect, theme: &Theme) {
+    let top = Color32::from_rgb(17, 24, 39);
+    let bottom = Color32::from_rgb(30, 27, 75);
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(screen.left_top(), top);
+    mesh.colored_vertex(screen.right_top(), top);
+    mesh.colored_vertex(screen.left_bottom(), bottom);
+    mesh.colored_vertex(screen.right_bottom(), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
+    let glow = screen.center() + vec2(screen.width() * 0.22, screen.height() * 0.18);
+    for i in 0..12 {
+        let r = screen.height() * (0.55 - i as f32 * 0.04);
+        painter.circle_filled(glow, r, theme.accent.gamma_multiply(0.012));
+    }
+    let mark = screen.right_bottom() - vec2(64.0, 56.0);
+    painter.circle_filled(mark, 18.0, theme.accent.gamma_multiply(0.35));
+    painter.text(
+        mark,
+        Align2::CENTER_CENTER,
+        "d",
+        FontId::proportional(22.0),
+        theme.background.gamma_multiply(0.9),
+    );
 }
 
 /// Paints one frame of the startup animation over `screen`.
