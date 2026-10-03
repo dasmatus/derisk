@@ -71,6 +71,54 @@ pub enum Profile {
     Desktop,
 }
 
+/// When the shell saves power by dropping blur, animations and frame rate.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LowPower {
+    /// Never.
+    Off,
+    /// While running on battery.
+    #[default]
+    OnBattery,
+    /// Always.
+    On,
+}
+
+impl LowPower {
+    /// Every mode, in display order.
+    pub const ALL: [Self; 3] = [Self::Off, Self::OnBattery, Self::On];
+
+    /// The mode's label in the Settings app.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::OnBattery => "On battery",
+            Self::On => "Always",
+        }
+    }
+
+    /// Whether low power mode applies, given whether the device runs on
+    /// battery right now.
+    pub const fn active(self, on_battery: bool) -> bool {
+        match self {
+            Self::Off => false,
+            Self::OnBattery => on_battery,
+            Self::On => true,
+        }
+    }
+}
+
+/// How opaque each shell panel is, in percent (20–100). Below 100 the
+/// blurred desktop shows through.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PanelOpacity {
+    /// The top bar.
+    pub top_bar: u8,
+    /// The overview backdrop.
+    pub overview: u8,
+    /// The Snap Assist picker.
+    pub snap_assist: u8,
+}
+
 /// Appearance preferences.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Appearance {
@@ -82,6 +130,10 @@ pub struct Appearance {
     pub text_scale: f32,
     /// Replace motion with cross-fades.
     pub reduce_motion: bool,
+    /// Background blur under translucent panels, 0 (off) to 10.
+    pub blur: u8,
+    /// Panel opacity.
+    pub panels: PanelOpacity,
 }
 
 /// Window management preferences.
@@ -130,6 +182,8 @@ pub struct Power {
     pub lock_after_min: u16,
     /// Minutes of inactivity before suspending.
     pub suspend_after_min: u16,
+    /// When low power mode turns on.
+    pub low_power: LowPower,
 }
 
 /// All derisk preferences.
@@ -155,6 +209,12 @@ impl Default for Settings {
                 accent: Accent::Lime,
                 text_scale: 1.0,
                 reduce_motion: false,
+                blur: 6,
+                panels: PanelOpacity {
+                    top_bar: 70,
+                    overview: 80,
+                    snap_assist: 85,
+                },
             },
             desktop: DesktopPrefs {
                 layout: Layout::Tall,
@@ -177,6 +237,7 @@ impl Default for Settings {
                 dim_after_min: 5,
                 lock_after_min: 10,
                 suspend_after_min: 30,
+                low_power: LowPower::OnBattery,
             },
         }
     }
@@ -215,6 +276,7 @@ macro_rules! enum_text {
 enum_text!(ColorScheme { Dark => "dark", Light => "light" });
 enum_text!(Accent { Lime => "lime", Sky => "sky", Violet => "violet", Rose => "rose", Amber => "amber" });
 enum_text!(Layout { Tall => "tall", Monocle => "monocle" });
+enum_text!(LowPower { Off => "off", OnBattery => "on_battery", On => "on" });
 enum_text!(Profile { Automatic => "automatic", Phone => "phone", Tablet => "tablet", Desktop => "desktop" });
 
 fn parse_bool(text: &str) -> Option<bool> {
@@ -276,6 +338,12 @@ impl Settings {
             "appearance.accent" => put(&mut a.accent, Accent::parse(value)),
             "appearance.text_scale" => put(&mut a.text_scale, parse_in(value, 0.75, 2.0)),
             "appearance.reduce_motion" => put(&mut a.reduce_motion, parse_bool(value)),
+            "appearance.blur" => put(&mut a.blur, parse_in(value, 0, 10)),
+            "appearance.top_bar_opacity" => put(&mut a.panels.top_bar, parse_in(value, 20, 100)),
+            "appearance.overview_opacity" => put(&mut a.panels.overview, parse_in(value, 20, 100)),
+            "appearance.snap_assist_opacity" => {
+                put(&mut a.panels.snap_assist, parse_in(value, 20, 100))
+            }
             "desktop.layout" => put(&mut d.layout, Layout::parse(value)),
             "desktop.gaps" => put(&mut d.gaps, parse_in(value, 0, 64)),
             "desktop.workspaces" => put(&mut d.workspaces, parse_in(value, 1, 9)),
@@ -292,6 +360,7 @@ impl Settings {
             "power.dim_after_min" => put(&mut p.dim_after_min, parse_in(value, 0, 240)),
             "power.lock_after_min" => put(&mut p.lock_after_min, parse_in(value, 0, 240)),
             "power.suspend_after_min" => put(&mut p.suspend_after_min, parse_in(value, 0, 240)),
+            "power.low_power" => put(&mut p.low_power, LowPower::parse(value)),
             _ => false,
         }
     }
@@ -311,6 +380,10 @@ impl Settings {
              appearance.accent = {}\n\
              appearance.text_scale = {}\n\
              appearance.reduce_motion = {}\n\
+             appearance.blur = {}\n\
+             appearance.top_bar_opacity = {}\n\
+             appearance.overview_opacity = {}\n\
+             appearance.snap_assist_opacity = {}\n\
              desktop.layout = {}\n\
              desktop.gaps = {}\n\
              desktop.workspaces = {}\n\
@@ -324,11 +397,16 @@ impl Settings {
              notifications.lock_screen_previews = {}\n\
              power.dim_after_min = {}\n\
              power.lock_after_min = {}\n\
-             power.suspend_after_min = {}\n",
+             power.suspend_after_min = {}\n\
+             power.low_power = {}\n",
             a.scheme.as_str(),
             a.accent.as_str(),
             a.text_scale,
             a.reduce_motion,
+            a.blur,
+            a.panels.top_bar,
+            a.panels.overview,
+            a.panels.snap_assist,
             d.layout.as_str(),
             d.gaps,
             d.workspaces,
@@ -343,6 +421,7 @@ impl Settings {
             p.dim_after_min,
             p.lock_after_min,
             p.suspend_after_min,
+            p.low_power.as_str(),
         )
     }
 

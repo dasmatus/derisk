@@ -1,4 +1,5 @@
 use derisk::{action::Action, geom::rect, shell::Shell, ui::ShellUi};
+use derisk_settings::LowPower;
 use mcsapi::toolkit::egui;
 
 fn frame(
@@ -94,4 +95,32 @@ fn overview_button_in_the_top_bar_toggles_the_overview() {
     frame(&ctx, &mut ui, &shell, size, vec![click(true)], 5010);
     let actions = frame(&ctx, &mut ui, &shell, size, vec![click(false)], 5020);
     assert_eq!(actions, vec![Action::Overview { visible: None }]);
+}
+
+#[test]
+fn translucent_panels_report_blur_areas_unless_low_power() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.map_window("editor", "notes.md");
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5000);
+    let bar = shell.profile().top_bar;
+    let areas: Vec<_> = ui.blur_regions().iter().map(|b| b.area).collect();
+    assert!(areas.contains(&rect(0, 0, 1920, bar)), "{areas:?}");
+    assert!(areas.contains(&shell.work_area()), "{areas:?}");
+    assert!(ui.blur_regions().iter().all(|b| b.strength > 0));
+
+    shell.effects.low_power = LowPower::On;
+    frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5100);
+    assert!(ui.blur_regions().is_empty());
+
+    shell.effects.low_power = LowPower::Off;
+    shell.effects.blur = 0;
+    frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5200);
+    assert!(ui.blur_regions().is_empty());
 }

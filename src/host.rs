@@ -25,6 +25,7 @@ use std::{
 
 use derisk::{
     action::{Action, Effect},
+    effects::SettingsWatch,
     geom::rect,
     ipc,
     keys::{self, Key, Mods, SuperTap},
@@ -200,6 +201,7 @@ pub struct Host {
     super_tap: SuperTap,
     suppressed_keys: HashSet<u32>,
     last_tick: Instant,
+    settings: SettingsWatch,
 
     children: Vec<Child>,
     launches: u64,
@@ -320,6 +322,7 @@ pub fn run(options: Options) -> Result {
         super_tap: SuperTap::default(),
         suppressed_keys: HashSet::new(),
         last_tick: Instant::now() - Duration::from_secs(5),
+        settings: SettingsWatch::new(derisk_settings::default_path()),
         children: Vec::new(),
         launches: 0,
     };
@@ -376,7 +379,7 @@ pub fn run(options: Options) -> Result {
         .handle()
         .insert_source(Timer::immediate(), |_, _, host| {
             host.render();
-            TimeoutAction::ToDuration(Duration::from_millis(16))
+            TimeoutAction::ToDuration(host.shell.look().frame_interval)
         })?;
 
     event_loop.run(None, &mut host, |host| {
@@ -462,7 +465,8 @@ impl Host {
         self.start.elapsed().as_millis() as u32
     }
 
-    /// Refreshes the clock, battery and failed units about once a second.
+    /// Refreshes the clock, battery, effect settings and failed units about
+    /// once a second.
     fn tick(&mut self) {
         if self.last_tick.elapsed() < Duration::from_secs(1) {
             return;
@@ -470,6 +474,9 @@ impl Host {
         self.last_tick = Instant::now();
         self.shell.clock = Clock::now_utc();
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
+        if let Some(effects) = self.settings.poll() {
+            self.shell.effects = effects;
+        }
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
         }

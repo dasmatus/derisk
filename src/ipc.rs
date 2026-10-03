@@ -103,6 +103,8 @@ pub struct State {
     pub clock: Clock,
     /// Battery.
     pub battery: Option<Battery>,
+    /// Whether low power mode is on (no blur or animations, 30 fps).
+    pub low_power: bool,
     /// Failed systemd user units.
     pub failed_units: Vec<String>,
 }
@@ -144,6 +146,7 @@ pub fn state(shell: &Shell) -> State {
         suggestions: shell.habits.suggestions(shell.clock.hour, 5),
         clock: shell.clock,
         battery: shell.battery,
+        low_power: shell.look().low_power,
         failed_units: shell.failed_units.clone(),
     }
 }
@@ -174,7 +177,7 @@ pub fn tools() -> Value {
     json!({"tools": [
         {
             "name": "get_state",
-            "description": "Describe the desktop: workspaces, windows (id, app, title, mode, frame, focus), overview, focused window's global menus, tray, app suggestions, failed systemd user units, clock and battery.",
+            "description": "Describe the desktop: workspaces, windows (id, app, title, mode, frame, focus), overview, focused window's global menus, tray, app suggestions, failed systemd user units, clock, battery and low power mode.",
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
