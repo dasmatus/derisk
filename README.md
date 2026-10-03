@@ -25,7 +25,14 @@ derisk takes the good parts from many desktops:
 Super+Space (or the search field in the top bar) opens one box for
 everything. Type to search, in a single ranked list:
 
-- **Apps**: the core apps, plus suggestions learned from your habits.
+- **Apps** from their `.desktop` files: every installed application
+  (XDG data dirs, user files first, `Hidden`/`NoDisplay`/`OnlyShowIn`
+  respected) and the core apps, plus suggestions learned from your habits.
+- **App actions** from each `.desktop` file's `[Desktop Action]` groups,
+  such as Firefox's "New Private Window". The core apps ship their own
+  `.desktop` files (`crates/derisk-apps/data`), so "Appearance" opens
+  Settings on that page and "Downloads" opens Files there. From a terminal:
+  `derisk launch org.derisk.settings --action power`.
 - **Windows** on every workspace; choosing one switches there and focuses it.
 - **App commands**: every item in the focused app's global menus
   (`register_menu`), so apps get palette commands for free.
@@ -33,7 +40,7 @@ everything. Type to search, in a single ranked list:
   overview, layouts, focus, workspaces and moving the window between them.
 - **Session, tray and services**: lock, suspend, log out, reboot, power off
   (destructive ones need a second Enter), tray items, failed units.
-- **Settings pages** and **files** under your home folder.
+- **Files** under your home folder.
 
 Anything else goes to the assistant: `open firefox and snap it left`,
 Enter, done. When a typed sentence is something the assistant understands

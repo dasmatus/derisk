@@ -1,0 +1,22 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+GenericName=File Manager
+Comment=Browse, copy, rename, and trash files
+Keywords=file manager;folders;browse;trash;
+Icon=system-file-manager
+Exec=derisk launch org.derisk.files
+Categories=System;FileManager;
+Actions=new-window;documents;downloads;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=derisk launch org.derisk.files --action new-window
+
+[Desktop Action documents]
+Name=Documents
+Exec=derisk launch org.derisk.files --action documents
+
+[Desktop Action downloads]
+Name=Downloads
+Exec=derisk launch org.derisk.files --action downloads

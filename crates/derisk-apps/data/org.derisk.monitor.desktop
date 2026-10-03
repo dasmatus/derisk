@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=System Monitor
+GenericName=Task Manager
+Comment=CPU, memory, and running processes
+Keywords=task manager;processes;cpu;memory;kill;
+Icon=utilities-system-monitor
+Exec=derisk launch org.derisk.monitor
+Categories=System;Monitor;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=derisk launch org.derisk.monitor --action new-window

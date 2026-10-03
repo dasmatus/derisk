@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Text Editor
+GenericName=Text Editor
+Comment=Edit plain-text files
+Keywords=notepad;text;code;write;
+Icon=accessories-text-editor
+Exec=derisk launch org.derisk.editor
+Categories=Utility;TextEditor;
+Actions=new-document;
+
+[Desktop Action new-document]
+Name=New Document
+Exec=derisk launch org.derisk.editor --action new-document

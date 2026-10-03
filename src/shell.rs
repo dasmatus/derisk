@@ -50,6 +50,8 @@ pub enum Error {
     /// The path is not an absolute path to an existing, non-executable file
     /// or folder.
     NotOpenable(String),
+    /// Not a valid desktop action ID.
+    UnknownAction(String),
 }
 
 impl std::fmt::Display for Error {
@@ -69,6 +71,7 @@ impl std::fmt::Display for Error {
             Self::UnknownTrayItem(id) => write!(f, "unknown tray item: {id:?}"),
             Self::UnknownUnit(unit) => write!(f, "not a failed user unit: {unit:?}"),
             Self::NotOpenable(path) => write!(f, "cannot open {path:?}"),
+            Self::UnknownAction(id) => write!(f, "not a desktop action ID: {id:?}"),
         }
     }
 }
@@ -575,6 +578,16 @@ impl Shell {
                 }
                 self.habits.record(&app, self.clock.hour);
                 return Ok(vec![Effect::Launch { app }]);
+            }
+            Action::LaunchAction { app, id } => {
+                if !systemd::is_launchable(&app) {
+                    return Err(Error::NotLaunchable(app));
+                }
+                if !crate::desktop::is_action_id(&id) {
+                    return Err(Error::UnknownAction(id));
+                }
+                self.habits.record(&app, self.clock.hour);
+                return Ok(vec![Effect::LaunchAction { app, id }]);
             }
             Action::Close { window } => {
                 let window = self.target(window)?.get();

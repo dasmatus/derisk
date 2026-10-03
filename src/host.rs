@@ -13,17 +13,18 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::mpsc,
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 
 use derisk::{
     action::{Action, Effect},
+    desktop::{self, DesktopEntry},
     geom::rect,
     ipc,
     keys::{self, Key, Mods, SuperTap},
     overview::Battery,
-    palette::{self, Category, Entry},
+    palette::{self, Entry},
     shell::{Mode, PointerOutcome, Shell},
     snap::{Direction, SnapZone},
     systemd::{self, Priority},
@@ -65,49 +66,56 @@ pub struct Session {
     start: Instant,
     last_tick: Option<Instant>,
     palette_open: bool,
-    files: Option<mpsc::Receiver<Vec<PathBuf>>>,
+    index: Option<mpsc::Receiver<Index>>,
+    core_apps: Vec<DesktopEntry>,
+    installed: Vec<DesktopEntry>,
+    pending_actions: PendingActions,
 }
 
-/// Settings pages, for palette entries that open Settings.
-const SETTINGS_PAGES: [(&str, &str); 6] = [
-    (
-        "Appearance",
-        "theme dark light accent colors text size motion",
-    ),
-    ("Desktop", "layout gaps workspaces profile"),
-    ("Input", "keyboard mouse pointer touchpad"),
-    ("Notifications", "banners sounds"),
-    ("Power", "dim lock suspend battery"),
-    ("About", "version"),
-];
+/// Core-app actions waiting for the compositor to launch their app, shared
+/// between [`Session`] (which queues them) and [`CoreApps`] (which takes
+/// them when the launch arrives).
+type PendingActions = Arc<Mutex<Vec<(String, String)>>>;
 
-/// Palette entries for the core apps and Settings pages.
-fn palette_entries() -> Vec<Entry> {
-    let mut entries: Vec<Entry> = derisk_apps::APPS
+/// What the palette indexes in the background: files under home and the
+/// installed applications.
+type Index = (Vec<PathBuf>, Vec<DesktopEntry>);
+
+/// The core apps' own `.desktop` files, parsed.
+fn core_desktop_entries() -> Vec<DesktopEntry> {
+    derisk_apps::APPS
         .iter()
-        .map(|app| Entry::app(app.id, app.name, app.summary, app.icon, app.keywords))
-        .collect();
-    entries.extend(SETTINGS_PAGES.iter().map(|(page, keywords)| {
-        Entry::new(
-            Category::Setting,
-            "⚙",
-            *page,
-            vec![Action::Launch {
-                app: derisk_apps::SETTINGS.to_owned(),
-            }],
-        )
-        .detail("Settings")
-        .keywords(format!("settings preferences {keywords}"))
-    }));
-    entries
+        .filter_map(|app| DesktopEntry::parse(&app.desktop_id(), app.desktop_file))
+        .collect()
+}
+
+/// Installed applications except hidden ones and copies of the core apps.
+fn installed_apps() -> Vec<DesktopEntry> {
+    desktop::scan(&desktop::application_dirs())
+        .into_iter()
+        .filter(|e| !e.no_display && derisk_apps::find(&e.id).is_none())
+        .collect()
+}
+
+/// Palette entries for the core apps and installed apps, with their
+/// desktop actions.
+fn palette_entries(core: &[DesktopEntry], installed: &[DesktopEntry]) -> Vec<Entry> {
+    let core = core.iter().flat_map(|e| {
+        let icon = derisk_apps::find(&e.id).map_or("🖥", |app| app.icon);
+        palette::desktop_app(e, icon)
+    });
+    let installed = installed.iter().flat_map(|e| palette::desktop_app(e, "🖥"));
+    core.chain(installed).collect()
 }
 
 impl Session {
-    fn new(options: &Options) -> Self {
+    fn new(options: &Options, pending_actions: PendingActions) -> Self {
         let (w, h) = options.size;
         let shell = Shell::new(rect(0, 0, w, h), false);
         let mut ui = ShellUi::new(&shell, options.reduced_motion);
-        ui.palette.extra = palette_entries();
+        let core_apps = core_desktop_entries();
+        let installed = installed_apps();
+        ui.palette.extra = palette_entries(&core_apps, &installed);
         Self {
             shell,
             ui,
@@ -119,7 +127,10 @@ impl Session {
             start: Instant::now(),
             last_tick: None,
             palette_open: false,
-            files: None,
+            index: None,
+            core_apps,
+            installed,
+            pending_actions,
         }
     }
 
@@ -139,27 +150,79 @@ impl Session {
     /// so file results stay fresh without stalling a frame.
     fn palette_opened(&mut self) {
         let open = self.shell.palette_visible();
-        if open
-            && !self.palette_open
-            && let Some(home) = std::env::var_os("HOME")
-        {
+        if open && !self.palette_open {
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(palette::index_files(Path::new(&home), 4, 20_000));
+                let files = std::env::var_os("HOME")
+                    .map(|home| palette::index_files(Path::new(&home), 4, 20_000))
+                    .unwrap_or_default();
+                let _ = tx.send((files, installed_apps()));
             });
-            self.files = Some(rx);
+            self.index = Some(rx);
         }
         self.palette_open = open;
-        if let Some(files) = self.files.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        if let Some((files, installed)) = self.index.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.ui.palette.files = files;
-            self.files = None;
+            self.ui.palette.extra = palette_entries(&self.core_apps, &installed);
+            self.installed = installed;
+            self.index = None;
         }
+    }
+
+    /// Runs `argv` for `app`: as a transient unit with `--execute`,
+    /// otherwise as a child with this session's `WAYLAND_DISPLAY`.
+    fn spawn_command(&mut self, app: &str, argv: &[String]) {
+        self.launches += 1;
+        if self.execute {
+            if let Some(mut unit) = systemd::launch_command_argv(app, self.launches, argv) {
+                let split = unit.iter().position(|a| a == "--").unwrap_or(unit.len());
+                unit.insert(
+                    split,
+                    format!("--setenv=WAYLAND_DISPLAY={}", self.wayland_display),
+                );
+                let _ = systemd::run(&unit);
+            }
+        } else if let Some((program, args)) = argv.split_first()
+            && let Err(e) = std::process::Command::new(program)
+                .args(args)
+                .env("WAYLAND_DISPLAY", &self.wayland_display)
+                .spawn()
+        {
+            log(Priority::Warning, &format!("{program}: {e}"));
+        }
+    }
+
+    /// Runs an app's desktop action: core apps open in-process through
+    /// [`CoreApps`], installed apps run the action's `Exec`.
+    fn launch_action(&mut self, app: &str, id: &str) {
+        if let Some(core) = derisk_apps::find(app) {
+            if core.create_action(id).is_none() {
+                log(Priority::Info, &format!("{} has no action {id:?}", core.id));
+                return;
+            }
+            if let Ok(mut pending) = self.pending_actions.lock() {
+                pending.push((core.id.to_owned(), id.to_owned()));
+            }
+            self.commands.push(Command::Launch(core.id.to_owned()));
+            return;
+        }
+        let Some(argv) = self
+            .installed
+            .iter()
+            .find(|e| e.id == app)
+            .and_then(|e| e.action_argv(id))
+        else {
+            log(Priority::Info, &format!("{app} has no action {id:?}"));
+            return;
+        };
+        self.spawn_command(app, &argv);
     }
 
     fn perform(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match &effect {
                 Effect::Launch { app } => self.commands.push(Command::Launch(app.clone())),
+                Effect::LaunchAction { app, id } => self.launch_action(app, id),
                 Effect::Close { window } => {
                     if let Some(id) = WindowId::new(*window) {
                         self.commands.push(Command::Close(id));
@@ -403,9 +466,18 @@ impl compositor::Shell for Session {
             log(Priority::Warning, &format!("refusing to launch {app:?}"));
             return Vec::new();
         }
+        // An installed app's desktop file ID runs its `Exec`; any other name
+        // runs as a plain command.
+        let command = self
+            .installed
+            .iter()
+            .find(|e| e.id == app)
+            .map(DesktopEntry::argv)
+            .filter(|argv| !argv.is_empty())
+            .unwrap_or_else(|| vec![app.strip_suffix(".desktop").unwrap_or(app).to_owned()]);
         self.launches += 1;
         if self.execute
-            && let Some(mut argv) = systemd::launch_argv(app, self.launches)
+            && let Some(mut argv) = systemd::launch_command_argv(app, self.launches, &command)
         {
             // systemd-run takes its options before the `--` and the command.
             let split = argv.iter().position(|a| a == "--").unwrap_or(argv.len());
@@ -415,7 +487,7 @@ impl compositor::Shell for Session {
             );
             return argv;
         }
-        vec![app.strip_suffix(".desktop").unwrap_or(app).to_owned()]
+        command
     }
 
     fn take_commands(&mut self) -> Vec<Command> {
@@ -424,13 +496,18 @@ impl compositor::Shell for Session {
 }
 
 /// The derisk core apps, as in-process windows.
-struct CoreApps(derisk_apps::Session);
+struct CoreApps {
+    session: derisk_apps::Session,
+    pending_actions: PendingActions,
+}
 
 impl Apps for CoreApps {
-    /// Accepts app IDs (`org.derisk.files`), their last segment (`files`),
-    /// and display names (`text editor`, `texteditor`).
+    /// Accepts app IDs (`org.derisk.files`), desktop file IDs
+    /// (`org.derisk.files.desktop`), their last segment (`files`), and
+    /// display names (`text editor`, `texteditor`).
     fn resolve(&self, name: &str) -> Option<AppId> {
         let name = name.trim().to_lowercase();
+        let name = name.strip_suffix(".desktop").unwrap_or(&name).to_owned();
         derisk_apps::APPS
             .iter()
             .find(|app| {
@@ -443,16 +520,24 @@ impl Apps for CoreApps {
             .map(|app| app.app_id())
     }
 
+    /// Launches `app`, through its desktop action if one was queued for it.
     fn launch(&mut self, app: &AppId) -> std::result::Result<InstanceId, mcsapi_runtime::Error> {
-        self.0.launch(app)
+        let action = self.pending_actions.lock().ok().and_then(|mut pending| {
+            let i = pending.iter().position(|(id, _)| id == app.as_str())?;
+            Some(pending.remove(i).1)
+        });
+        match action {
+            Some(action) => self.session.launch_action(app, &action),
+            None => self.session.launch(app),
+        }
     }
 
     fn stop(&mut self, instance: InstanceId) {
-        let _ = self.0.stop(instance);
+        let _ = self.session.stop(instance);
     }
 
     fn app_mut(&mut self, instance: InstanceId) -> Option<&mut dyn mcsapi_compositor::App> {
-        self.0
+        self.session
             .app_mut(instance)
             .map(|app| app as &mut dyn mcsapi_compositor::App)
     }
@@ -464,8 +549,12 @@ impl Apps for CoreApps {
 
 /// Runs the session until the window is closed.
 pub fn run(options: Options) -> Result {
-    let session = Session::new(&options);
-    let apps = CoreApps(derisk_apps::Session::new()?);
+    let pending_actions = PendingActions::default();
+    let session = Session::new(&options, pending_actions.clone());
+    let apps = CoreApps {
+        session: derisk_apps::Session::new()?,
+        pending_actions,
+    };
     let (w, h) = options.size;
     let mut compositor = Compositor::new(session)
         .title("derisk")

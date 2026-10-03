@@ -27,6 +27,14 @@ pub enum Action {
         /// App ID or command name.
         app: String,
     },
+    /// Run one of an app's desktop actions (performed by the host), such as
+    /// Firefox's `new-private-window`.
+    LaunchAction {
+        /// Desktop file ID (`firefox.desktop`) or core app ID.
+        app: String,
+        /// Action ID from the app's `.desktop` file.
+        id: String,
+    },
     /// Ask a window to close (performed by the host).
     Close {
         /// Target window.
@@ -191,6 +199,13 @@ pub enum Effect {
     Launch {
         /// App ID or command name.
         app: String,
+    },
+    /// Run an app's desktop action.
+    LaunchAction {
+        /// Desktop file ID or core app ID.
+        app: String,
+        /// Action ID.
+        id: String,
     },
     /// Send the client a close request (e.g. `xdg_toplevel.close`).
     Close {

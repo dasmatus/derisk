@@ -39,6 +39,7 @@ use std::{
 use crate::{
     action::{Action, LayoutKind},
     assistant,
+    desktop::DesktopEntry,
     menu::{self, MenuEntry},
     shell::Shell,
     systemd::SessionOp,
@@ -49,6 +50,8 @@ use crate::{
 pub enum Category {
     /// An application to launch.
     App,
+    /// An app's desktop action, such as "New Private Window".
+    AppAction,
     /// An open window to switch to.
     Window,
     /// A command from the focused app's own menus.
@@ -74,6 +77,7 @@ impl Category {
     pub fn heading(self) -> &'static str {
         match self {
             Self::App => "Apps",
+            Self::AppAction => "App actions",
             Self::Window => "Windows",
             Self::AppCommand => "App commands",
             Self::Command => "Commands",
@@ -89,7 +93,12 @@ impl Category {
     fn is_command(self) -> bool {
         matches!(
             self,
-            Self::AppCommand | Self::Command | Self::Workspace | Self::Session | Self::System
+            Self::AppAction
+                | Self::AppCommand
+                | Self::Command
+                | Self::Workspace
+                | Self::Session
+                | Self::System
         )
     }
 }
@@ -169,6 +178,42 @@ impl Entry {
         .detail(summary)
         .keywords(format!("{id} {}", keywords.join(" ")))
     }
+}
+
+/// Entries for an app from its `.desktop` file: the app itself, then one
+/// per desktop action.
+pub fn desktop_app(app: &DesktopEntry, icon: &str) -> Vec<Entry> {
+    let summary = if app.comment.is_empty() {
+        &app.generic_name
+    } else {
+        &app.comment
+    };
+    let mut out = vec![
+        Entry::new(
+            Category::App,
+            icon,
+            app.name.clone(),
+            vec![Action::Launch {
+                app: app.id.clone(),
+            }],
+        )
+        .detail(summary.clone())
+        .keywords(app.search_terms()),
+    ];
+    out.extend(app.actions.iter().map(|action| {
+        Entry::new(
+            Category::AppAction,
+            icon,
+            action.name.clone(),
+            vec![Action::LaunchAction {
+                app: app.id.clone(),
+                id: action.id.clone(),
+            }],
+        )
+        .detail(app.name.clone())
+        .keywords(format!("{} {}", app.name, action.id).to_lowercase())
+    }));
+    out
 }
 
 /// How often each entry was chosen, so frequent picks rank first.
@@ -308,15 +353,23 @@ fn in_scope(scope: Scope, category: Category) -> bool {
 
 /// Indices into `entries` matching `query`, best first.
 ///
-/// Files only show once something is typed, so an empty query lists apps,
-/// windows and commands, most used first.
+/// Files and app actions only show once something is typed (or once
+/// picked), so an empty query lists apps, windows and commands, most used
+/// first.
 pub fn search(entries: &[Entry], query: &str, history: &History) -> Vec<usize> {
     let (scope, query) = scope(query);
     let mut hits: Vec<(u32, usize)> = entries
         .iter()
         .enumerate()
         .filter(|(_, e)| in_scope(scope, e.category))
-        .filter(|(_, e)| !(query.is_empty() && scope == Scope::All && e.category == Category::File))
+        .filter(|(_, e)| {
+            // Files and app actions are many; an empty query only lists the
+            // ones picked before.
+            !(query.is_empty()
+                && scope == Scope::All
+                && matches!(e.category, Category::File | Category::AppAction)
+                && history.boost(e) == 0)
+        })
         .filter_map(|(i, e)| score(e, query).map(|s| (s + history.boost(e), i)))
         .collect();
     // Higher score first; ties keep catalog order (apps, windows, commands, ...).
