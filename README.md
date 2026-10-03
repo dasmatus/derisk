@@ -83,6 +83,41 @@ $ systemctl --user start derisk-agent.socket
 ## Usage
 
 ```console
+$ cargo run --release --features host -- session --launch foot
+```
+
+`derisk session` runs the desktop as a Smithay compositor nested in a window
+of your current X11 or Wayland session. Apps launched from it (or from any
+terminal with `WAYLAND_DISPLAY` set to the socket it prints) get derisk's
+title bars, tiling, snapping, overview and assistant. The agent protocol is
+served on `$XDG_RUNTIME_DIR/derisk/agent.sock` against the live desktop:
+
+```console
+$ derisk do open foot and snap it right     # natural language, from any terminal
+$ derisk send '{"method":"state"}'           # raw agent protocol
+```
+
+Session options: `--launch <app>` (repeatable), `--size WxH`,
+`--socket PATH`, `--reduced-motion`, and `--execute` to launch apps as
+systemd units and run logind session operations.
+
+### Keyboard
+
+| Chord | Action |
+| --- | --- |
+| Super (tap), Super+A | Overview (the assistant is focused, just type) |
+| Super+←/→/↑/↓ | Snap halves and quarters, maximize, restore, minimize |
+| Super+1…9 / Super+Shift+1…9 | Switch workspace / move the window there |
+| Super+J / Super+K, Alt+Tab | Focus next / previous |
+| Super+Enter | Promote to the main pane |
+| Super+Q | Close |
+| Super+F / Super+T | Float / tile |
+| Super+M / Super+Shift+M | Monocle / tall |
+| Escape | Leave the overview |
+
+### Headless commands
+
+```console
 $ derisk demo          # headless walkthrough: tiling, drag-to-snap, snap assist, assistant, startup animation, UI render
 $ derisk ask <text>    # how the assistant interprets a request
 $ derisk agent [--socket PATH | --socket-activated] [--execute]
@@ -94,14 +129,33 @@ windows in the headless shell. With `--execute`, effects run through systemd
 
 ## Status
 
-This is the shell: window management policy, decorations, the top bar,
-overview, assistant, agent protocol and systemd integration, as a library
-(`derisk`) plus the `derisk` binary. The compositor host still has to be
-written: the Smithay backend and renderer that feed outputs, input and
-xdg-shell toplevels into `derisk::shell::Shell`, draw `derisk::ui::ShellUi`
-with mcsapi's toolkit, and bridge D-Bus menus (`com.canonical.dbusmenu`) and
-StatusNotifierItem to the global menu and tray. Until then `derisk` runs
-headless.
+- **Shell** (library `derisk`): window management policy, decorations, the
+  top bar, overview, assistant, agent protocol, keyboard shortcuts and
+  systemd integration.
+- **Compositor host** (`derisk session`, feature `host`): Smithay with the
+  winit backend and the GLES renderer. It manages xdg-shell toplevels and
+  popups with server-side decorations (xdg-decoration), shm buffers, seat
+  input, data device and outputs; draws title bars, client surfaces and the
+  egui chrome per window in stacking order; and serves the agent socket on
+  the live desktop.
+
+Still to do: a DRM/KMS + libinput backend to run on a bare TTY (today the
+session runs nested), layer-shell, XWayland, popup grabs, and bridging D-Bus
+menus (`com.canonical.dbusmenu`) and StatusNotifierItem to the global menu
+and tray. Apps that insist on client-side decorations (GTK, weston clients)
+draw their own title bar inside derisk's.
+
+## Showcase video
+
+`scripts/showcase.py` records the desktop in a virtual X server: it starts
+Xvfb, runs `derisk session`, drives it with xdotool and the agent socket, and
+encodes with ffmpeg. It needs Xvfb, xdotool, ffmpeg, foot, neofetch, htop and
+cmatrix.
+
+```console
+$ cargo build --release --features host
+$ PATH=$PWD/target/release:$PATH scripts/showcase.py derisk-showcase.mp4
+```
 
 ## Building
 
@@ -113,6 +167,7 @@ $ sudo apt install libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libinp
 $ cargo build
 $ cargo test
 $ cargo clippy --all-targets -- -D warnings
+$ cargo clippy --all-targets --features host -- -D warnings
 ```
 
 ## License

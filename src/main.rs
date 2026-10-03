@@ -1,8 +1,12 @@
 //! `derisk` command-line entry point.
 //!
-//! Until the Smithay compositor host lands, the shell runs headless: windows
+//! `derisk session` (built with the `host` feature) runs the desktop as a
+//! Smithay compositor. The other commands run the shell headless: windows
 //! announced by agents or the demo are simulated, while systemd effects
 //! (launching apps as units, session operations) can be executed for real.
+
+#[cfg(feature = "host")]
+mod host;
 
 use std::{
     io::{self, BufRead, BufReader, Write},
@@ -38,9 +42,19 @@ const USAGE: &str = "\
 derisk: an adaptive, agent-first Wayland desktop shell built on mcsapi
 
 USAGE:
+    derisk session [OPTIONS]      Run the desktop (needs the `host` feature)
     derisk demo                   Run a headless walkthrough
     derisk ask <request...>       Show how the assistant interprets a request
+    derisk do <request...>        Ask the running session's assistant to do it
+    derisk send <json>            Send one agent-protocol request to the session
     derisk agent [OPTIONS]        Serve the JSON-lines agent protocol
+
+SESSION OPTIONS:
+    --launch <APP>        Launch an app once the session is up (repeatable)
+    --size <WxH>          Window size when nested (default 1280x800)
+    --socket <PATH>       Agent socket (default $XDG_RUNTIME_DIR/derisk/agent.sock)
+    --reduced-motion      Cross-fade instead of the full startup animation
+    --execute             Launch apps as systemd units and run session operations
 
 AGENT OPTIONS:
     --socket <PATH>       Listen on a Unix socket (default: stdin/stdout)
@@ -54,8 +68,13 @@ type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
+        Some("session") => session(&args[1..]),
         Some("demo") => demo(),
         Some("ask") => ask(&args[1..].join(" ")),
+        Some("do") => {
+            send(&serde_json::json!({"method": "ask", "text": args[1..].join(" ")}).to_string())
+        }
+        Some("send") => send(&args[1..].join(" ")),
         Some("agent") => agent(&args[1..]),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
@@ -69,9 +88,68 @@ fn main() {
     }
 }
 
+#[cfg(feature = "host")]
+fn session(args: &[String]) -> Result {
+    let mut options = host::Options {
+        size: (1280, 800),
+        ..Default::default()
+    };
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--launch" => options
+                .launch
+                .push(it.next().ok_or("--launch needs an app")?.clone()),
+            "--size" => {
+                let size = it.next().ok_or("--size needs WxH")?;
+                let (w, h) = size.split_once('x').ok_or("--size needs WxH")?;
+                options.size = (w.parse()?, h.parse()?);
+            }
+            "--socket" => {
+                options.socket = Some(PathBuf::from(it.next().ok_or("--socket needs a path")?));
+            }
+            "--reduced-motion" => options.reduced_motion = true,
+            "--execute" => options.execute = true,
+            other => return Err(format!("unknown session option: {other}").into()),
+        }
+    }
+    host::run(options)
+}
+
+#[cfg(not(feature = "host"))]
+fn session(_args: &[String]) -> Result {
+    Err("this derisk was built without the compositor host; rebuild with `--features host`".into())
+}
+
 fn ask(text: &str) -> Result {
     let actions = assistant::interpret(text).map_err(|e| format!("{e:?}"))?;
     println!("{}", serde_json::to_string_pretty(&actions)?);
+    Ok(())
+}
+
+/// The running session's agent socket: `$DERISK_AGENT_SOCKET`, else
+/// `$XDG_RUNTIME_DIR/derisk/agent.sock`.
+fn session_socket() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("DERISK_AGENT_SOCKET") {
+        return Ok(path.into());
+    }
+    let dir = std::env::var_os("XDG_RUNTIME_DIR").ok_or("XDG_RUNTIME_DIR is not set")?;
+    Ok(PathBuf::from(dir).join("derisk").join("agent.sock"))
+}
+
+/// Sends one request line to the running session and prints the response.
+fn send(line: &str) -> Result {
+    let path = session_socket()?;
+    let mut stream = UnixStream::connect(&path)
+        .map_err(|e| format!("no derisk session on {}: {e}", path.display()))?;
+    writeln!(stream, "{}", line.trim())?;
+    let mut response = String::new();
+    BufReader::new(stream).read_line(&mut response)?;
+    let value: serde_json::Value = serde_json::from_str(&response)?;
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    if value["ok"] == false {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
