@@ -136,7 +136,11 @@ impl ClickTracker {
     /// Records a click on `target`; returns true when it completes a double click.
     pub fn click(&mut self, target: u64, time_ms: u64) -> bool {
         let double = matches!(self.last, Some((t, at)) if t == target && time_ms.saturating_sub(at) <= Self::THRESHOLD_MS);
-        self.last = if double { None } else { Some((target, time_ms)) };
+        self.last = if double {
+            None
+        } else {
+            Some((target, time_ms))
+        };
         double
     }
 }

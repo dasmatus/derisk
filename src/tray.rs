@@ -33,8 +33,10 @@ impl Pixmap {
             return None;
         }
         let rgba = argb
-            .chunks_exact(4)
-            .flat_map(|p| [p[1], p[2], p[3], p[0]])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[a, r, g, b]| [r, g, b, a])
             .collect();
         Some(Self {
             width,
@@ -44,7 +46,7 @@ impl Pixmap {
     }
 
     fn pixels(&self) -> impl Iterator<Item = &[u8]> {
-        self.rgba.chunks_exact(4)
+        self.rgba.as_chunks::<4>().0.iter().map(|p| &p[..])
     }
 }
 

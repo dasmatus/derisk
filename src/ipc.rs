@@ -150,7 +150,8 @@ pub fn state(shell: &Shell) -> State {
 
 /// Tool descriptions for LLM agents, in MCP `tools/list` shape.
 pub fn tools() -> Value {
-    let window = json!({"type": "integer", "description": "Window ID; omit for the focused window"});
+    let window =
+        json!({"type": "integer", "description": "Window ID; omit for the focused window"});
     let zone = json!({"enum": ["left", "right", "top_left", "top_right", "bottom_left", "bottom_right", "maximize"]});
     let action = json!({
         "oneOf": [
@@ -238,7 +239,6 @@ pub fn handle_line(shell: &mut Shell, line: &str) -> (String, Vec<Effect>) {
     };
     (reply(result), effects)
 }
-
 
 fn to_value(value: &impl Serialize) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)

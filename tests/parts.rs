@@ -1,0 +1,147 @@
+use derisk::{
+    adaptive::{FormFactor, Habits, Profile},
+    animation::StartupAnimation,
+    geom::rect,
+    overview::{Battery, grid},
+    snap::{Direction, Nudge, SnapConfig, SnapZone, zone_at},
+    time::Clock,
+    tray::{Pixmap, monochrome},
+};
+
+#[test]
+fn snap_zones_follow_windows_conventions() {
+    let area = rect(0, 28, 1920, 1052);
+    let cfg = SnapConfig::default();
+    assert_eq!(zone_at((0, 500), area, cfg), Some(SnapZone::Left));
+    assert_eq!(zone_at((1919, 500), area, cfg), Some(SnapZone::Right));
+    assert_eq!(zone_at((900, 28), area, cfg), Some(SnapZone::Maximize));
+    assert_eq!(zone_at((900, 5), area, cfg), Some(SnapZone::Maximize));
+    assert_eq!(zone_at((2, 40), area, cfg), Some(SnapZone::TopLeft));
+    assert_eq!(
+        zone_at((1918, 1078), area, cfg),
+        Some(SnapZone::BottomRight)
+    );
+    assert_eq!(zone_at((900, 1079), area, cfg), None);
+    assert_eq!(zone_at((900, 500), area, cfg), None);
+
+    let left = SnapZone::Left.geometry(area, 0);
+    assert_eq!((left.loc.x, left.size.w, left.size.h), (0, 960, 1052));
+    assert_eq!(SnapZone::Left.complement(), Some(SnapZone::Right));
+}
+
+#[test]
+fn super_arrow_nudges_like_windows() {
+    assert_eq!(
+        SnapZone::nudge(None, Direction::Left),
+        Nudge::Snap(SnapZone::Left)
+    );
+    assert_eq!(
+        SnapZone::nudge(Some(SnapZone::Left), Direction::Up),
+        Nudge::Snap(SnapZone::TopLeft)
+    );
+    assert_eq!(
+        SnapZone::nudge(Some(SnapZone::Left), Direction::Right),
+        Nudge::Restore
+    );
+    assert_eq!(
+        SnapZone::nudge(None, Direction::Up),
+        Nudge::Snap(SnapZone::Maximize)
+    );
+    assert_eq!(SnapZone::nudge(None, Direction::Down), Nudge::Minimize);
+}
+
+#[test]
+fn profiles_adapt_to_the_output() {
+    assert_eq!(
+        Profile::detect(400, 800, true).form_factor,
+        FormFactor::Phone
+    );
+    assert_eq!(
+        Profile::detect(1280, 800, true).form_factor,
+        FormFactor::Tablet
+    );
+    assert_eq!(
+        Profile::detect(2560, 1440, false).form_factor,
+        FormFactor::Desktop
+    );
+}
+
+#[test]
+fn habits_suggest_apps_used_at_this_time() {
+    let mut habits = Habits::default();
+    for _ in 0..3 {
+        habits.record("mail", 9);
+    }
+    habits.record("Music", 21);
+    habits.record("music", 21);
+    assert_eq!(habits.suggestions(9, 1), ["mail"]);
+    assert_eq!(habits.suggestions(21, 2), ["music", "mail"]);
+}
+
+#[test]
+fn startup_animation_runs_to_completion() {
+    let anim = StartupAnimation {
+        reduced_motion: false,
+        bar_height: 28.0,
+    };
+    let start = anim.frame(0);
+    assert_eq!(start.cover, 1.0);
+    assert!(!start.done);
+    let end = anim.frame(anim.duration_ms());
+    assert!(end.done);
+    assert_eq!(end.cover, 0.0);
+    assert_eq!(end.shell_opacity, 1.0);
+    let reduced = StartupAnimation {
+        reduced_motion: true,
+        bar_height: 28.0,
+    };
+    assert!(reduced.duration_ms() < anim.duration_ms());
+    assert_eq!(reduced.frame(150).logo_scale, 1.0);
+}
+
+#[test]
+fn tray_icons_become_monochrome() {
+    let icon = Pixmap::from_rgba(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 0]).unwrap();
+    let mono = monochrome(&icon, [10, 20, 30]);
+    assert_eq!(mono.rgba, vec![10, 20, 30, 255, 10, 20, 30, 0]);
+    assert!(Pixmap::from_rgba(2, 2, vec![0; 3]).is_none());
+
+    // Fully opaque icons are masked by luminance instead of alpha.
+    let opaque = Pixmap::from_rgba(2, 1, vec![255, 255, 255, 255, 0, 0, 0, 255]).unwrap();
+    let mono = monochrome(&opaque, [1, 2, 3]);
+    assert_ne!(mono.rgba[3], mono.rgba[7]);
+    assert!(mono.rgba.chunks(4).all(|p| p[..3] == [1, 2, 3]));
+}
+
+#[test]
+fn clock_and_calendar() {
+    let c = Clock::from_unix(1_791_018_000, 0); // 2026-10-03 09:00 UTC
+    assert_eq!((c.year, c.month, c.day, c.hour), (2026, 10, 3, 9));
+    assert_eq!(c.date_label(), "Sat 3 Oct");
+    assert_eq!(c.time_label(), "09:00");
+    assert_eq!(c.days_in_month(), 31);
+    assert_eq!(c.first_weekday(), 3);
+}
+
+#[test]
+fn overview_grid_and_battery() {
+    let cells = grid(5, rect(0, 0, 1000, 600), 10);
+    assert_eq!(cells.len(), 5);
+    for pair in cells.windows(2) {
+        assert!(pair[0] != pair[1]);
+    }
+    let dir = std::env::temp_dir().join(format!("derisk-psu-{}", std::process::id()));
+    let bat = dir.join("BAT0");
+    std::fs::create_dir_all(&bat).unwrap();
+    std::fs::write(bat.join("type"), "Battery\n").unwrap();
+    std::fs::write(bat.join("capacity"), "77\n").unwrap();
+    std::fs::write(bat.join("status"), "Charging\n").unwrap();
+    assert_eq!(
+        Battery::read(&dir),
+        Some(Battery {
+            percent: 77,
+            charging: true
+        })
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -22,7 +22,9 @@ impl std::error::Error for NotUnderstood {}
 const NUMBERS: [&str; 9] = [
     "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
 ];
-const FILLER: [&str; 9] = ["it", "the", "window", "this", "that", "to", "please", "a", "app"];
+const FILLER: [&str; 9] = [
+    "it", "the", "window", "this", "that", "to", "please", "a", "app",
+];
 
 fn number(word: &str) -> Option<u64> {
     word.parse::<u64>().ok().or_else(|| {

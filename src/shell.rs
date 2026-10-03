@@ -54,7 +54,10 @@ impl std::fmt::Display for Error {
             Self::UnknownWorkspace(id) => write!(f, "unknown workspace: {id}"),
             Self::NoFocusedWindow => f.write_str("no focused window"),
             Self::NeedsConfirmation(op) => {
-                write!(f, "{op:?} needs explicit confirmation (set \"confirmed\": true)")
+                write!(
+                    f,
+                    "{op:?} needs explicit confirmation (set \"confirmed\": true)"
+                )
             }
             Self::NotLaunchable(app) => write!(f, "not a launchable app name: {app:?}"),
             Self::UnknownTrayItem(id) => write!(f, "unknown tray item: {id:?}"),
@@ -456,7 +459,11 @@ impl Shell {
         if let Mode::Floating { frame } = info.mode {
             info.restore = Some(frame.into());
         }
-        if mode != (Mode::Snapped { zone: SnapZone::Maximize }) {
+        if mode
+            != (Mode::Snapped {
+                zone: SnapZone::Maximize,
+            })
+        {
             info.before_maximize = None;
         }
         info.mode = mode;
@@ -510,7 +517,12 @@ impl Shell {
         let frame = self.windows[&window]
             .restore
             .unwrap_or_else(|| self.default_float());
-        self.set_mode(window, Mode::Floating { frame: frame.into() })
+        self.set_mode(
+            window,
+            Mode::Floating {
+                frame: frame.into(),
+            },
+        )
     }
 
     fn check_failed_unit(&self, unit: &str) -> Result<(), Error> {
@@ -568,7 +580,11 @@ impl Shell {
                             other => self.set_mode(w, other)?,
                         }
                     }
-                    Nudge::Minimize => return self.apply(Action::Minimize { window: Some(w.get()) }),
+                    Nudge::Minimize => {
+                        return self.apply(Action::Minimize {
+                            window: Some(w.get()),
+                        });
+                    }
                 }
             }
             Action::Tile { window } => {
@@ -582,7 +598,11 @@ impl Shell {
             Action::ToggleMaximize { window } => {
                 let w = self.target(window)?;
                 let info = &self.windows[&w];
-                if info.mode == (Mode::Snapped { zone: SnapZone::Maximize }) {
+                if info.mode
+                    == (Mode::Snapped {
+                        zone: SnapZone::Maximize,
+                    })
+                {
                     match info.before_maximize.unwrap_or(Mode::Tiled) {
                         Mode::Floating { .. } => self.float(w)?,
                         other => self.set_mode(w, other)?,
@@ -609,7 +629,10 @@ impl Shell {
                     other => other.into(),
                 })?;
             }
-            Action::MoveToWorkspace { window, workspace: n } => {
+            Action::MoveToWorkspace {
+                window,
+                workspace: n,
+            } => {
                 let w = self.target(window)?;
                 self.desktop
                     .move_window(w, workspace(n)?)
@@ -713,25 +736,19 @@ impl Shell {
             .filter(visible)
             .filter(|w| self.windows[w].mode == Mode::Tiled)
             .collect();
-        let topmost_tiled = self
-            .stack
-            .iter()
-            .rev()
-            .find(|w| tiled.contains(w))
-            .copied();
+        let topmost_tiled = self.stack.iter().rev().find(|w| tiled.contains(w)).copied();
         let tile_area = inset(area, gap / 2);
         let layout = ws.layout();
-        let mut out: Vec<WindowPlacement> =
-            match layout.arrange(tile_area, tiled.iter().copied()) {
-                Ok(placements) if layout != Layout::Monocle => placements
-                    .map(|p| place(p.window, inset(p.geometry, gap - gap / 2)))
-                    .collect(),
-                // Monocle, or too little space to tile: show the topmost tiled window.
-                _ => topmost_tiled
-                    .map(|w| place(w, inset(tile_area, gap - gap / 2)))
-                    .into_iter()
-                    .collect(),
-            };
+        let mut out: Vec<WindowPlacement> = match layout.arrange(tile_area, tiled.iter().copied()) {
+            Ok(placements) if layout != Layout::Monocle => placements
+                .map(|p| place(p.window, inset(p.geometry, gap - gap / 2)))
+                .collect(),
+            // Monocle, or too little space to tile: show the topmost tiled window.
+            _ => topmost_tiled
+                .map(|w| place(w, inset(tile_area, gap - gap / 2)))
+                .into_iter()
+                .collect(),
+        };
 
         for &w in &self.stack {
             if !members.contains(&w) || !visible(&w) {
@@ -838,29 +855,29 @@ impl Shell {
         };
         let frame = rect(point.0 - drag.grab.0, point.1 - drag.grab.1, size.0, size.1);
         let info = self.windows.get_mut(&drag.window)?;
-        info.mode = Mode::Floating { frame: frame.into() };
+        info.mode = Mode::Floating {
+            frame: frame.into(),
+        };
         info.before_maximize = None;
         self.raise(drag.window);
 
         let area = self.work_area();
-        drag.target = if let Some(zone) = zone_at(point, area, self.profile.snap) {
-            DropTarget::Snap {
-                zone,
-                preview: zone.geometry(area, self.profile.gap),
-            }
-        } else if let Some(under) = self
-            .placements()
-            .into_iter()
-            .rev()
-            .find(|p| p.window != drag.window && p.mode == Mode::Tiled && contains(p.frame, point))
-        {
-            DropTarget::Tile {
-                onto: under.window,
-                preview: under.frame,
-            }
-        } else {
-            DropTarget::Float
-        };
+        drag.target =
+            if let Some(zone) = zone_at(point, area, self.profile.snap) {
+                DropTarget::Snap {
+                    zone,
+                    preview: zone.geometry(area, self.profile.gap),
+                }
+            } else if let Some(under) = self.placements().into_iter().rev().find(|p| {
+                p.window != drag.window && p.mode == Mode::Tiled && contains(p.frame, point)
+            }) {
+                DropTarget::Tile {
+                    onto: under.window,
+                    preview: under.frame,
+                }
+            } else {
+                DropTarget::Float
+            };
         self.drag = Some(drag);
         Some(drag.target)
     }

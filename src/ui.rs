@@ -125,7 +125,14 @@ impl ShellUi {
             painter.rect_stroke(
                 to_rect(p.frame),
                 radius,
-                Stroke::new(1.0, if p.focused { theme.accent } else { theme.border }),
+                Stroke::new(
+                    1.0,
+                    if p.focused {
+                        theme.accent
+                    } else {
+                        theme.border
+                    },
+                ),
                 StrokeKind::Inside,
             );
             for (button, area) in bar.buttons(p.frame) {
@@ -205,11 +212,7 @@ impl ShellUi {
         let cells = grid(assist.candidates.len(), assist.frame, 16);
         for (window, cell) in assist.candidates.iter().zip(cells) {
             let r = to_rect(inset(cell, 8));
-            let response = ui.interact(
-                r,
-                Id::new(("derisk-assist", window.get())),
-                Sense::click(),
-            );
+            let response = ui.interact(r, Id::new(("derisk-assist", window.get())), Sense::click());
             let stroke = if response.hovered() {
                 self.theme.accent
             } else {
@@ -266,8 +269,7 @@ impl ShellUi {
                 ui.spacing_mut().item_spacing.x = 12.0;
                 if ui
                     .add(
-                        egui::Button::new(RichText::new("◆").color(self.theme.accent))
-                            .frame(false),
+                        egui::Button::new(RichText::new("◆").color(self.theme.accent)).frame(false),
                     )
                     .on_hover_text("Overview")
                     .clicked()
@@ -363,11 +365,8 @@ impl ShellUi {
 
     fn overview(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
         let area = shell.work_area();
-        ui.painter().rect_filled(
-            to_rect(area),
-            0,
-            self.theme.background.gamma_multiply(0.92),
-        );
+        ui.painter()
+            .rect_filled(to_rect(area), 0, self.theme.background.gamma_multiply(0.92));
         let layout = OverviewLayout::new(area, shell.profile().form_factor);
 
         // Workspace strip.

@@ -148,7 +148,11 @@ pub fn session_argv(op: SessionOp, session_id: Option<&str>) -> Vec<String> {
 ///
 /// `instance` makes launched unit names unique. Effects handled over Wayland
 /// (closing windows, menu activation) return `None`.
-pub fn effect_argv(effect: &Effect, instance: u64, session_id: Option<&str>) -> Option<Vec<String>> {
+pub fn effect_argv(
+    effect: &Effect,
+    instance: u64,
+    session_id: Option<&str>,
+) -> Option<Vec<String>> {
     match effect {
         Effect::Launch { app } => launch_argv(app, instance),
         Effect::Session { op } => Some(session_argv(*op, session_id)),
@@ -158,9 +162,16 @@ pub fn effect_argv(effect: &Effect, instance: u64, session_id: Option<&str>) -> 
                 .to_vec(),
         ),
         Effect::RestartUnit { unit } => Some(
-            ["systemctl", "--user", "restart", "--no-block", "--", unit.as_str()]
-                .map(str::to_owned)
-                .to_vec(),
+            [
+                "systemctl",
+                "--user",
+                "restart",
+                "--no-block",
+                "--",
+                unit.as_str(),
+            ]
+            .map(str::to_owned)
+            .to_vec(),
         ),
         Effect::Close { .. } | Effect::MenuActivated { .. } | Effect::TrayActivated { .. } => None,
     }

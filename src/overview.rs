@@ -65,7 +65,12 @@ impl OverviewLayout {
                 let strip = 56.min(h / 6);
                 Self {
                     widgets: rect(x, y, w, widgets_h),
-                    windows: rect(x, y + widgets_h + 12, w, (h - widgets_h - strip - 24).max(1)),
+                    windows: rect(
+                        x,
+                        y + widgets_h + 12,
+                        w,
+                        (h - widgets_h - strip - 24).max(1),
+                    ),
                     workspaces: rect(x, y + h - strip, w, strip),
                 }
             }

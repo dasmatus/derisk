@@ -99,8 +99,12 @@ fn demo() -> Result {
             ],
         }],
     );
-    let dot = Pixmap::from_rgba(2, 2, vec![255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 255])
-        .ok_or("bad pixmap")?;
+    let dot = Pixmap::from_rgba(
+        2,
+        2,
+        vec![255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 255],
+    )
+    .ok_or("bad pixmap")?;
     shell
         .tray
         .insert("network", "Wi-Fi", &dot, Vec::new(), [248, 250, 252]);
@@ -125,7 +129,11 @@ fn demo() -> Result {
         println!(
             "snap assist offers {:?} for windows {:?}",
             assist.zone,
-            assist.candidates.iter().map(|w| w.get()).collect::<Vec<_>>()
+            assist
+                .candidates
+                .iter()
+                .map(|w| w.get())
+                .collect::<Vec<_>>()
         );
     }
     shell.apply(Action::Snap {
@@ -146,7 +154,10 @@ fn demo() -> Result {
         }
     }
     let (firefox, _) = shell.map_window("firefox", "New Tab");
-    println!("  firefox mapped as window {firefox}: {:?}", shell.mode(firefox));
+    println!(
+        "  firefox mapped as window {firefox}: {:?}",
+        shell.mode(firefox)
+    );
 
     let mut ui = ShellUi::new(&shell, false);
     println!("\nstartup animation:");
@@ -158,7 +169,9 @@ fn demo() -> Result {
         );
     }
 
-    shell.apply(Action::Overview { visible: Some(true) })?;
+    shell.apply(Action::Overview {
+        visible: Some(true),
+    })?;
     let ctx = egui::Context::default();
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
@@ -243,7 +256,11 @@ impl Host {
             let ok = systemd::run(&argv).is_ok_and(|o| o.status.success());
             let effect_json = serde_json::to_string(effect).unwrap_or_default();
             systemd::log(
-                if ok { Priority::Info } else { Priority::Warning },
+                if ok {
+                    Priority::Info
+                } else {
+                    Priority::Warning
+                },
                 &format!("{} {}", if ok { "ran" } else { "failed" }, argv.join(" ")),
                 &[("DERISK_EFFECT", &effect_json)],
             );
@@ -281,7 +298,8 @@ fn agent(args: &[String]) -> Result {
     }
 
     let listener = if activated {
-        let fd = systemd::listen_fd().ok_or("no socket passed by systemd (LISTEN_PID/LISTEN_FDS)")?;
+        let fd =
+            systemd::listen_fd().ok_or("no socket passed by systemd (LISTEN_PID/LISTEN_FDS)")?;
         // SAFETY: systemd handed this listening socket to this very process
         // (LISTEN_PID matched) and nothing else in the process owns the fd.
         Some(UnixListener::from(unsafe { OwnedFd::from_raw_fd(fd) }))
@@ -345,7 +363,10 @@ fn serve(stream: UnixStream, host: &Mutex<Host>) -> io::Result<()> {
 /// Binds a user-only socket, replacing a stale socket (never any other file).
 fn bind(path: &Path) -> Result<UnixListener> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
     }
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         if !meta.file_type().is_socket() {
