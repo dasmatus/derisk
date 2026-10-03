@@ -196,6 +196,24 @@ $ cargo clippy --workspace --all-targets -- -D warnings
 $ cargo clippy --workspace --all-targets --features derisk/host -- -D warnings
 ```
 
+### Nix
+
+`flake.nix` has a dev shell with the Rust toolchain and the Wayland, libinput,
+GPU and windowing libraries. With [nix-direnv](https://github.com/nix-community/nix-direnv),
+`direnv allow` enters it on `cd` (see `.envrc`).
+
+```console
+$ nix develop                # the dev shell
+$ nix build                  # derisk with the host feature, plus its systemd units in share/systemd/user
+$ nix build .#derisk-preview # the apps' preview window
+$ nix run . -- session --launch foot
+$ nix flake check            # rustfmt, clippy and tests (default and host + preview)
+$ nix fmt                    # nixfmt and rustfmt
+```
+
+mcsapi comes from Cargo.lock, not a flake input: `cargo update -p mcsapi`
+moves it for Cargo and Nix alike.
+
 ## License
 
 GPL-3.0-only
