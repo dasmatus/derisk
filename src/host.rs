@@ -58,6 +58,11 @@ pub struct Session {
     ui: ShellUi,
     execute: bool,
     wayland_display: String,
+    /// `DISPLAY` for X11 apps (Xwayland starts when one connects).
+    x11_display: Option<String>,
+    /// The session environment and target are set up on the first tick,
+    /// once the Wayland and X11 displays are both known.
+    session_pending: bool,
     launches: u64,
     commands: Vec<Command>,
     super_tap: SuperTap,
@@ -66,6 +71,30 @@ pub struct Session {
 }
 
 impl Session {
+    /// Exports the session environment to systemd and D-Bus (with
+    /// `--execute`) and reports the session ready.
+    fn start_session(&mut self) {
+        if self.execute {
+            let x11 = self.x11_display.as_deref();
+            for argv in systemd::session_start_argv(&self.wayland_display, x11) {
+                let _ = systemd::run(&argv);
+            }
+        }
+        let x11 = self
+            .x11_display
+            .as_deref()
+            .map(|d| format!(", DISPLAY={d} (Xwayland on demand)"))
+            .unwrap_or_default();
+        log(
+            Priority::Notice,
+            &format!(
+                "derisk session on WAYLAND_DISPLAY={}{x11}",
+                self.wayland_display
+            ),
+        );
+        systemd::notify_ready("derisk session running");
+    }
+
     fn new(options: &Options) -> Self {
         let (w, h) = options.size;
         let shell = Shell::new(rect(0, 0, w, h), false);
@@ -75,6 +104,8 @@ impl Session {
             ui,
             execute: options.execute,
             wayland_display: String::new(),
+            x11_display: None,
+            session_pending: false,
             launches: 0,
             commands: Vec::new(),
             super_tap: SuperTap::default(),
@@ -184,20 +215,18 @@ impl compositor::Shell for Session {
 
     fn session_started(&mut self, wayland_display: &str) {
         self.wayland_display = wayland_display.to_owned();
-        if self.execute {
-            for argv in systemd::session_start_argv(wayland_display) {
-                let _ = systemd::run(&argv);
-            }
-        }
-        log(
-            Priority::Notice,
-            &format!("derisk session on WAYLAND_DISPLAY={wayland_display}"),
-        );
-        systemd::notify_ready("derisk session running");
+        self.session_pending = true;
+    }
+
+    fn x11_display_reserved(&mut self, display: &str) {
+        self.x11_display = Some(display.to_owned());
     }
 
     /// Refreshes the clock, battery and failed units about once a second.
     fn tick(&mut self) {
+        if std::mem::take(&mut self.session_pending) {
+            self.start_session();
+        }
         if self
             .last_tick
             .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
@@ -321,6 +350,9 @@ impl compositor::Shell for Session {
                 split,
                 format!("--setenv=WAYLAND_DISPLAY={}", self.wayland_display),
             );
+            if let Some(display) = &self.x11_display {
+                argv.insert(split, format!("--setenv=DISPLAY={display}"));
+            }
             return argv;
         }
         vec![app.strip_suffix(".desktop").unwrap_or(app).to_owned()]

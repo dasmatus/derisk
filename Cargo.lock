@@ -392,6 +392,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "core_detect"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -691,6 +697,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e985e0451871ad22fb8d2b6b076e2028a502a0d3950998c2c5c0a4f9b5d9679"
+dependencies = [
+ "cfg-if",
+ "core_detect",
+ "multiversion_no_op",
+ "rustversion",
+ "scopeguard",
+ "simdutf8",
 ]
 
 [[package]]
@@ -1273,7 +1293,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Ffinish-derisk-1xutar#15931ac6b6bf13e18ad0aed40faf3b9d8e0f0ca5"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Ffinish-derisk-1xutar#c57b59dc8551dfc51292681c987e1208a250beff"
 dependencies = [
  "egui",
  "smithay",
@@ -1282,25 +1302,27 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Ffinish-derisk-1xutar#15931ac6b6bf13e18ad0aed40faf3b9d8e0f0ca5"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Ffinish-derisk-1xutar#c57b59dc8551dfc51292681c987e1208a250beff"
 dependencies = [
  "egui_glow",
  "glow",
  "mcsapi",
  "mcsapi-runtime",
  "mcsapi-ui",
+ "rustix 1.1.5",
  "smithay",
+ "x11rb",
 ]
 
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Ffinish-derisk-1xutar#15931ac6b6bf13e18ad0aed40faf3b9d8e0f0ca5"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Ffinish-derisk-1xutar#c57b59dc8551dfc51292681c987e1208a250beff"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Ffinish-derisk-1xutar#15931ac6b6bf13e18ad0aed40faf3b9d8e0f0ca5"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Ffinish-derisk-1xutar#c57b59dc8551dfc51292681c987e1208a250beff"
 dependencies = [
  "egui",
  "mcsapi",
@@ -1350,6 +1372,12 @@ dependencies = [
  "num-traits",
  "pxfm",
 ]
+
+[[package]]
+name = "multiversion_no_op"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "naga"
@@ -2267,6 +2295,7 @@ dependencies = [
  "cursor-icon",
  "downcast-rs",
  "drm-fourcc",
+ "encoding_rs",
  "errno",
  "gl_generator",
  "indexmap",
@@ -2275,6 +2304,7 @@ dependencies = [
  "profiling",
  "rand",
  "rustix 1.1.5",
+ "scopeguard",
  "sha2",
  "smallvec",
  "tempfile",
@@ -2288,6 +2318,7 @@ dependencies = [
  "wayland-protocols-wlr",
  "wayland-server",
  "winit",
+ "x11rb",
  "xkbcommon",
 ]
 

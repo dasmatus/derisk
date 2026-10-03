@@ -177,19 +177,20 @@ pub fn effect_argv(
     }
 }
 
-/// Commands to run once the compositor's Wayland socket is up.
+/// Commands to run once the compositor's Wayland socket is up, with the X11
+/// display Xwayland serves (on demand) if any.
 ///
 /// Exports the session environment to the user manager and D-Bus activation
 /// environment, then starts [`SESSION_TARGET`] (which binds
 /// `graphical-session.target`), so portals, tray hosts and autostart units see
 /// the right display.
-pub fn session_start_argv(wayland_display: &str) -> Vec<Vec<String>> {
+pub fn session_start_argv(wayland_display: &str, x11_display: Option<&str>) -> Vec<Vec<String>> {
     let environment = [
         format!("WAYLAND_DISPLAY={wayland_display}"),
         "XDG_CURRENT_DESKTOP=derisk".to_owned(),
         "XDG_SESSION_TYPE=wayland".to_owned(),
         "XDG_SESSION_DESKTOP=derisk".to_owned(),
-        "DISPLAY=".to_owned(),
+        format!("DISPLAY={}", x11_display.unwrap_or_default()),
     ];
     let mut systemd_environment = ["systemctl", "--user", "set-environment"]
         .map(str::to_owned)

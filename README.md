@@ -57,8 +57,8 @@ first); unit actions only apply to units that are currently failed.
   (`systemd::FocusBoost`, with the unit found from the client's cgroup via
   `systemd::unit_of_pid`; called by the compositor host on focus changes).
 - **Session target.** `derisk-session.target` binds `graphical-session.target`
-  and pulls in XDG autostart; the compositor exports `WAYLAND_DISPLAY` and
-  friends to the user manager and D-Bus activation environment first
+  and pulls in XDG autostart; the compositor exports `WAYLAND_DISPLAY`,
+  `DISPLAY` and friends to the user manager and D-Bus activation environment first
   (`systemd::session_start_argv`).
 - **Socket-activated agent.** `derisk-agent.socket` listens on
   `$XDG_RUNTIME_DIR/derisk/agent.sock` (mode 0600) and starts
@@ -143,7 +143,7 @@ windows in the headless shell. With `--execute`, effects run through systemd
   title bars, chrome and the agent socket on the live desktop.
 
 Still to do: a DRM/KMS + libinput backend to run on a bare TTY (today the
-session runs nested), layer-shell, XWayland, popup grabs, and bridging D-Bus
+session runs nested), layer-shell, popup grabs, and bridging D-Bus
 menus (`com.canonical.dbusmenu`) and StatusNotifierItem to the global menu
 and tray. Apps that insist on client-side decorations (GTK, weston clients)
 draw their own title bar inside derisk's.

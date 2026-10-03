@@ -89,7 +89,7 @@ fn effects_map_to_systemd_commands() {
 
 #[test]
 fn session_start_exports_environment_then_starts_the_target() {
-    let cmds = systemd::session_start_argv("wayland-7");
+    let cmds = systemd::session_start_argv("wayland-7", None);
     assert_eq!(cmds[0][..3], ["systemctl", "--user", "set-environment"]);
     assert!(cmds[0].contains(&"WAYLAND_DISPLAY=wayland-7".to_owned()));
     assert!(cmds[0].contains(&"XDG_SESSION_TYPE=wayland".to_owned()));
@@ -101,6 +101,13 @@ fn session_start_exports_environment_then_starts_the_target() {
         cmds.last().unwrap().last().unwrap(),
         "derisk-session.target"
     );
+}
+
+#[test]
+fn session_start_exports_the_x11_display_when_there_is_one() {
+    let cmds = systemd::session_start_argv("wayland-7", Some(":1"));
+    assert!(cmds[0].contains(&"DISPLAY=:1".to_owned()));
+    assert!(cmds[1].contains(&"DISPLAY=:1".to_owned()));
 }
 
 #[test]
