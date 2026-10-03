@@ -1,6 +1,8 @@
 use std::{
-    fmt, fs, io,
+    fmt, fs,
+    io::{self, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use mcsapi_ui::{Theme, egui::Color32};
@@ -360,11 +362,15 @@ impl Settings {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
-        let mut temporary = path.as_os_str().to_owned();
-        temporary.push(".tmp");
-        let temporary = PathBuf::from(temporary);
-        fs::write(&temporary, self.to_text())?;
-        fs::rename(&temporary, path)
+        let (temporary, mut file) = create_beside(path)?;
+        file.write_all(self.to_text().as_bytes())
+            .and_then(|()| {
+                drop(file);
+                fs::rename(&temporary, path)
+            })
+            .inspect_err(|_| {
+                let _ = fs::remove_file(&temporary);
+            })
     }
 
     /// The shell and app colors these settings select.
@@ -395,4 +401,28 @@ pub fn default_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))?;
     Some(config.join("derisk").join("settings.conf"))
+}
+
+/// Creates a new file next to `path` to save through. `create_new` refuses
+/// an existing name, including a planted symbolic link, so the save never
+/// writes through someone else's link; the name only has to be unlikely, not
+/// secret.
+fn create_beside(path: &Path) -> io::Result<(PathBuf, fs::File)> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let mut attempts = 0;
+    loop {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        attempts += 1;
+        let candidate = path.with_file_name(format!(".{name}.{}-{n}.tmp", std::process::id()));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && attempts < 64 => {}
+            Err(error) => return Err(error),
+        }
+    }
 }

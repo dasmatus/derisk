@@ -44,6 +44,26 @@ fn saving_keeps_permissions_and_clears_dirty() {
 }
 
 #[test]
+fn saving_does_not_write_through_a_planted_link() {
+    let dir = temp_dir("link");
+    let victim = dir.join("victim");
+    fs::write(&victim, "keep").unwrap();
+    let path = dir.join("note");
+    std::os::unix::fs::symlink(&victim, dir.join("note.derisk-save")).unwrap();
+    let mut doc = Document::default();
+    doc.text.push_str("new\n");
+    doc.save_as(&path).unwrap();
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "keep");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new\n");
+    assert_eq!(
+        fs::read_dir(&dir).unwrap().count(),
+        3,
+        "no temporary file left"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn finds_replaces_and_reports_positions() {
     let mut doc = Document::default();
     doc.text = "Alpha beta\nALPHA gamma\nalpha".into();

@@ -93,6 +93,13 @@ fn copies_trees_and_keeps_links() {
         Path::new("a.txt")
     );
     assert!(copy_recursive(&dir.0.join("src"), &dir.0.join("src/sub/inner")).is_err());
+    std::os::unix::fs::symlink(dir.0.join("src"), dir.0.join("alias")).unwrap();
+    assert!(
+        copy_recursive(&dir.0.join("src"), &dir.0.join("alias/sub/inner")).is_err(),
+        "an alias of the source is still inside it"
+    );
+    assert!(!dir.0.join("src/sub/inner").exists());
+    fs::remove_file(dir.0.join("alias")).unwrap();
     assert!(move_path(&dir.0.join("src"), &dir.0.join("src/sub/inner")).is_err());
     assert!(move_path(&dir.0.join("src/a.txt"), &dir.0.join("dst/sub/b.txt")).is_err());
     move_path(&dir.0.join("src"), &dir.0.join("moved")).unwrap();
@@ -235,6 +242,21 @@ fn copy_and_cut_paste() {
     assert!(files.clipboard().is_none(), "cut clipboard empties");
     files.select_all();
     assert_eq!(files.selection().len(), 1);
+    files.clear_selection();
+
+    // A cut that fails part way keeps only what is still to move.
+    let b = dir.file("dest/b.txt", 1);
+    let c = dir.file("dest/c.txt", 1);
+    files.refresh().unwrap();
+    files.select(&b, false);
+    files.select(&c, true);
+    files.set_clipboard(ClipboardOp::Cut);
+    fs::create_dir(dir.0.join("back")).unwrap();
+    files.navigate(dir.0.join("back")).unwrap();
+    let held = files.clipboard().unwrap().1.to_vec();
+    fs::remove_file(&held[1]).unwrap();
+    assert!(files.paste().is_err());
+    assert_eq!(files.clipboard().unwrap().1, &held[1..]);
     files.clear_selection();
     assert!(files.selection().is_empty());
 }

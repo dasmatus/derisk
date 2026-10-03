@@ -134,12 +134,33 @@ pub fn unused_path(dir: &Path, name: &OsStr) -> PathBuf {
 /// Copies a file, symbolic link, or directory tree to `to`, which must not
 /// exist. Symbolic links are copied as links, not followed.
 pub fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
-    if to.starts_with(from) {
+    if is_inside(to, from)? {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "cannot copy a folder into itself",
         ));
     }
+    copy_tree(from, to)
+}
+
+/// Whether `to` would land inside the folder `from`. Comparing the spelled
+/// paths misses an alias such as `/link-to-a/sub` for `/a/sub`, which would
+/// make the copy recurse into its own output, so a folder is also compared
+/// by where both paths really are.
+fn is_inside(to: &Path, from: &Path) -> io::Result<bool> {
+    if to.starts_with(from) {
+        return Ok(true);
+    }
+    if !fs::symlink_metadata(from)?.is_dir() {
+        return Ok(false);
+    }
+    let Some(parent) = to.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return Ok(false);
+    };
+    Ok(fs::canonicalize(parent)?.starts_with(fs::canonicalize(from)?))
+}
+
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
     let meta = fs::symlink_metadata(from)?;
     if meta.file_type().is_symlink() {
         std::os::unix::fs::symlink(fs::read_link(from)?, to)
@@ -147,7 +168,7 @@ pub fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
         fs::create_dir(to)?;
         for item in fs::read_dir(from)? {
             let item = item?;
-            copy_recursive(&item.path(), &to.join(item.file_name()))?;
+            copy_tree(&item.path(), &to.join(item.file_name()))?;
         }
         Ok(())
     } else {

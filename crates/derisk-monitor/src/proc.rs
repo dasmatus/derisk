@@ -121,6 +121,9 @@ pub struct PidStat {
     pub ticks: u64,
     /// Number of threads.
     pub threads: u64,
+    /// When the process started, in clock ticks after boot. Together with the
+    /// PID it names one process, since the kernel reuses PIDs.
+    pub start: Option<u64>,
 }
 
 /// Parses `/proc/<pid>/stat`. The name may contain spaces and parentheses,
@@ -130,13 +133,15 @@ pub fn parse_pid_stat(text: &str) -> Option<PidStat> {
     let close = text.rfind(')')?;
     let name = text.get(open + 1..close)?.to_owned();
     let rest: Vec<&str> = text.get(close + 1..)?.split_whitespace().collect();
-    // `rest[0]` is field 3 (state); utime is field 14, stime 15, threads 20.
+    // `rest[0]` is field 3 (state); utime is field 14, stime 15, threads 20,
+    // starttime 22.
     let field = |n: usize| rest.get(n - 3)?.parse::<u64>().ok();
     Some(PidStat {
         name,
         state: rest.first()?.chars().next()?,
         ticks: field(14)? + field(15)?,
         threads: field(20)?,
+        start: field(22),
     })
 }
 

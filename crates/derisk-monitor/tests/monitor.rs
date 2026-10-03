@@ -74,6 +74,12 @@ fn parses_proc_files() {
     );
     assert_eq!(parse_uptime("12.5 3.0"), Some(12.5));
     assert!(parse_pid_stat("garbage").is_none());
+    assert_eq!(
+        parse_pid_stat("9 (a) S 1 9 9 0 -1 0 0 0 0 0 1 2 0 0 20 0 1 0 4242 0")
+            .unwrap()
+            .start,
+        Some(4242)
+    );
     assert_eq!(parse_pid_rss("Name: kthreadd\n"), 0);
     assert_eq!(parse_pid_rss("VmRSS:\t  2048 kB\n"), 2048);
 }
@@ -141,4 +147,21 @@ fn app_sorts_and_filters_rows() {
     );
     assert!(!output.shapes.is_empty());
     output.textures_delta.clear();
+}
+
+#[test]
+fn ending_a_reused_pid_sends_nothing() {
+    let proc = FakeProc::new("reuse");
+    proc.cpu(0, 0);
+    proc.process(42, "chosen", 0, 0);
+    let app = MonitorApp::new(Sampler::new(&proc.0));
+    // The fake process started at tick 100; one chosen at tick 99 is gone.
+    assert_eq!(
+        app.end_process(42, Some(99)),
+        "Process 42 has already ended"
+    );
+    assert_eq!(
+        app.end_process(43, Some(100)),
+        "Process 43 has already ended"
+    );
 }

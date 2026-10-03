@@ -304,7 +304,7 @@ impl Browser {
             return Ok(Vec::new());
         };
         let mut pasted = Vec::new();
-        let mut moved = false;
+        let mut moved = Vec::new();
         let result = paths.iter().try_for_each(|from| {
             let name: OsString = from
                 .file_name()
@@ -319,16 +319,23 @@ impl Browser {
                 ClipboardOp::Copy => fs_ops::copy_recursive(from, &to)?,
                 ClipboardOp::Cut => {
                     fs_ops::move_path(from, &to)?;
-                    moved = true;
+                    moved.push(from.clone());
                 }
             }
             pasted.push(to);
             Ok(())
         });
         // A cut is used up once it moves something; pasting it back into its
-        // own folder keeps it for pasting elsewhere.
-        if moved && result.is_ok() {
-            self.clipboard = None;
+        // own folder keeps it for pasting elsewhere. When a later entry fails,
+        // the ones already moved leave the clipboard so a retry resumes with
+        // the rest instead of tripping over their old paths.
+        if !moved.is_empty() {
+            self.clipboard = if result.is_ok() {
+                None
+            } else {
+                let rest: Vec<_> = paths.into_iter().filter(|p| !moved.contains(p)).collect();
+                Some((op, rest))
+            };
         }
         self.refresh()?;
         self.selection = pasted.iter().cloned().collect();

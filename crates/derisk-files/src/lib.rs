@@ -42,11 +42,14 @@ pub type Opener = Box<dyn FnMut(&Path) -> io::Result<()>>;
 
 /// Opens files with `xdg-open`, without waiting for it.
 pub fn xdg_open(path: &Path) -> io::Result<()> {
-    std::process::Command::new("xdg-open")
+    let mut child = std::process::Command::new("xdg-open")
         .arg(path)
         .stdin(std::process::Stdio::null())
-        .spawn()
-        .map(drop)
+        .spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 #[derive(Debug)]

@@ -287,7 +287,8 @@ pub struct CalculatorApp {
     pub input: String,
     /// Evaluated expressions and results, oldest first.
     pub history: Vec<(String, f64)>,
-    error: Option<Error>,
+    /// The last failed submission and the input it was about.
+    error: Option<(String, Error)>,
 }
 
 impl CalculatorApp {
@@ -296,9 +297,13 @@ impl CalculatorApp {
         self.history.last().map_or(0.0, |(_, value)| *value)
     }
 
-    /// The error from the last [`CalculatorApp::submit`], if any.
+    /// The error from the last [`CalculatorApp::submit`], while the input
+    /// is still the one that failed. Any edit makes it stale.
     pub fn error(&self) -> Option<&Error> {
-        self.error.as_ref()
+        self.error
+            .as_ref()
+            .filter(|(input, _)| *input == self.input)
+            .map(|(_, error)| error)
     }
 
     /// Evaluates the input, records it, and replaces it with the result.
@@ -312,7 +317,7 @@ impl CalculatorApp {
                 self.input = format_number(value);
                 self.error = None;
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => self.error = Some((self.input.clone(), error)),
         }
     }
 
@@ -377,7 +382,7 @@ impl App for CalculatorApp {
                 self.submit();
                 field.request_focus();
             }
-            let preview = match &self.error {
+            let preview = match self.error() {
                 Some(error) => egui::RichText::new(error.to_string()).color(theme.accent),
                 None => match evaluate(&self.input, self.ans()) {
                     Ok(value) => egui::RichText::new(format!("= {}", format_number(value))),

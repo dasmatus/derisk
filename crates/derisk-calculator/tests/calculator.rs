@@ -77,6 +77,9 @@ fn app_keeps_history_and_ans() {
     app.submit();
     assert_eq!(app.error(), Some(&Error::UnexpectedEnd));
     assert_eq!(app.history.len(), 2);
+    app.input.push('2');
+    assert_eq!(app.error(), None, "an edit makes the error stale");
+    app.input.pop();
     let mut output = run_frame(
         &mut app,
         &egui::Context::default(),

@@ -20,8 +20,10 @@
 #![deny(missing_docs)]
 
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use mcsapi_ui::{App, Theme, egui};
@@ -86,15 +88,16 @@ impl Document {
 
     /// Saves to `path` atomically and makes it the document's file.
     pub fn save_as(&mut self, path: &Path) -> io::Result<()> {
-        let mut temporary = path.as_os_str().to_owned();
-        temporary.push(".derisk-save");
-        let temporary = PathBuf::from(temporary);
-        fs::write(&temporary, &self.text)?;
-        if let Ok(meta) = fs::metadata(path) {
-            // Keep the original file's permissions, such as an executable bit.
-            let _ = fs::set_permissions(&temporary, meta.permissions());
-        }
-        fs::rename(&temporary, path).inspect_err(|_| {
+        let (temporary, mut file) = create_beside(path)?;
+        let written = file.write_all(self.text.as_bytes()).and_then(|()| {
+            if let Ok(meta) = fs::metadata(path) {
+                // Keep the original file's permissions, such as an executable bit.
+                let _ = file.set_permissions(meta.permissions());
+            }
+            drop(file);
+            fs::rename(&temporary, path)
+        });
+        written.inspect_err(|_| {
             let _ = fs::remove_file(&temporary);
         })?;
         self.path = Some(path.to_owned());
@@ -331,5 +334,30 @@ impl App for EditorApp {
                 }
             });
         });
+    }
+}
+
+/// Creates a new file next to `path` to save through. `create_new` refuses
+/// an existing name, including a planted symbolic link, so the save never
+/// writes through someone else's link; the name only has to be unlikely, not
+/// secret.
+fn create_beside(path: &Path) -> io::Result<(PathBuf, fs::File)> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let mut attempts = 0;
+    loop {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        attempts += 1;
+        let candidate =
+            path.with_file_name(format!(".{name}.{}-{n}.derisk-save", std::process::id()));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && attempts < 64 => {}
+            Err(error) => return Err(error),
+        }
     }
 }

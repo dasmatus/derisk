@@ -47,6 +47,8 @@ pub struct Process {
     pub rss: u64,
     /// Number of threads.
     pub threads: u64,
+    /// Start time in clock ticks after boot, which tells a reused PID apart.
+    pub start: Option<u64>,
 }
 
 /// One reading of the whole system.
@@ -95,6 +97,15 @@ impl Sampler {
 
     fn read(&self, path: impl AsRef<Path>) -> Option<String> {
         fs::read_to_string(self.root.join(path)).ok()
+    }
+
+    /// The start time of the process now holding `pid`, or `None` when no
+    /// process does.
+    pub fn start_time(&self, pid: u32) -> Option<Option<u64>> {
+        self.read(format!("{pid}/stat"))
+            .as_deref()
+            .and_then(proc::parse_pid_stat)
+            .map(|stat| stat.start)
     }
 
     /// Takes a sample. Rates are zero on the first call. Processes that exit
@@ -151,6 +162,7 @@ impl Sampler {
                     },
                     rss,
                     threads: stat.threads,
+                    start: stat.start,
                 });
             }
         }
@@ -219,7 +231,8 @@ pub struct MonitorApp {
     pub sort: SortKey,
     filter: String,
     selected: Option<u32>,
-    confirm: Option<u32>,
+    /// The PID awaiting confirmation and its start time when it was chosen.
+    confirm: Option<(u32, Option<u64>)>,
     status: Option<String>,
 }
 
@@ -249,6 +262,19 @@ impl MonitorApp {
     pub fn refresh(&mut self) {
         self.snapshot = self.sampler.sample();
         self.last = Some(Instant::now());
+    }
+
+    /// Sends SIGTERM to `pid` if it is still the process that started at
+    /// `start`, and describes the outcome. The PID may have been reused
+    /// while the confirmation was open, and that process was never chosen.
+    pub fn end_process(&self, pid: u32, start: Option<u64>) -> String {
+        if self.sampler.start_time(pid) != Some(start) {
+            return format!("Process {pid} has already ended");
+        }
+        match terminate(pid) {
+            Ok(()) => format!("Asked process {pid} to end"),
+            Err(error) => format!("Could not end {pid}: {error}"),
+        }
     }
 
     /// Visible processes, filtered and sorted.
@@ -321,17 +347,17 @@ impl MonitorApp {
                 .add_enabled(selected.is_some(), egui::Button::new("End process"))
                 .clicked()
             {
-                self.confirm = selected;
+                self.confirm = selected.map(|pid| {
+                    let start = self.snapshot.processes.iter().find(|p| p.pid == pid);
+                    (pid, start.and_then(|p| p.start))
+                });
             }
         });
-        if let Some(pid) = self.confirm {
+        if let Some((pid, start)) = self.confirm {
             ui.horizontal(|ui| {
                 ui.label(format!("Send SIGTERM to process {pid}?"));
                 if ui.button("End process").clicked() {
-                    self.status = Some(match terminate(pid) {
-                        Ok(()) => format!("Asked process {pid} to end"),
-                        Err(error) => format!("Could not end {pid}: {error}"),
-                    });
+                    self.status = Some(self.end_process(pid, start));
                     self.confirm = None;
                 }
                 if ui.button("Cancel").clicked() {

@@ -73,7 +73,22 @@ fn save_and_load_through_a_file() {
     settings.desktop.layout = Layout::Monocle;
     settings.save(&path).unwrap();
     assert_eq!(Settings::load(&path).unwrap().0, settings);
-    assert!(!dir.join("nested/settings.conf.tmp").exists());
+    let left: Vec<_> = std::fs::read_dir(dir.join("nested")).unwrap().collect();
+    assert_eq!(left.len(), 1, "no temporary file is left behind");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn save_does_not_write_through_a_planted_link() {
+    let dir = temp_dir("link");
+    std::fs::create_dir_all(&dir).unwrap();
+    let victim = dir.join("victim");
+    std::fs::write(&victim, "keep").unwrap();
+    let path = dir.join("settings.conf");
+    std::os::unix::fs::symlink(&victim, dir.join("settings.conf.tmp")).unwrap();
+    Settings::default().save(&path).unwrap();
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+    assert_eq!(Settings::load(&path).unwrap().0, Settings::default());
     std::fs::remove_dir_all(dir).unwrap();
 }
 
