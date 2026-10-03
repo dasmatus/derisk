@@ -37,6 +37,7 @@ def request(obj):
     with socket.socket(socket.AF_UNIX) as s:
         s.connect(agent)
         s.sendall((json.dumps(obj) + "\n").encode())
+        data = b""
         while not data.endswith(b"\n"):
             chunk = s.recv(65536)
             if not chunk:

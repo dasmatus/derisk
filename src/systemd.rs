@@ -183,24 +183,25 @@ pub fn effect_argv(
 /// environment, then starts [`SESSION_TARGET`] (which binds
 /// `graphical-session.target`), so portals, tray hosts and autostart units see
 /// the right display.
-pub fn session_start_argv() -> Vec<Vec<String>> {
-    const VARS: [&str; 5] = [
-        "WAYLAND_DISPLAY",
-        "XDG_CURRENT_DESKTOP",
-        "XDG_SESSION_TYPE",
-        "XDG_SESSION_DESKTOP",
-        "DISPLAY",
+pub fn session_start_argv(wayland_display: &str) -> Vec<Vec<String>> {
+    let environment = [
+        format!("WAYLAND_DISPLAY={wayland_display}"),
+        "XDG_CURRENT_DESKTOP=derisk".to_owned(),
+        "XDG_SESSION_TYPE=wayland".to_owned(),
+        "XDG_SESSION_DESKTOP=derisk".to_owned(),
+        "DISPLAY=".to_owned(),
     ];
-    let with = |prefix: &[&str]| -> Vec<String> {
-        prefix
-            .iter()
-            .chain(VARS.iter())
-            .map(|s| (*s).to_owned())
-            .collect()
-    };
+    let mut systemd_environment = ["systemctl", "--user", "set-environment"]
+        .map(str::to_owned)
+        .to_vec();
+    systemd_environment.extend(environment.iter().cloned());
+    let mut dbus_environment = ["dbus-update-activation-environment", "--systemd"]
+        .map(str::to_owned)
+        .to_vec();
+    dbus_environment.extend(environment);
     vec![
-        with(&["systemctl", "--user", "import-environment"]),
-        with(&["dbus-update-activation-environment", "--systemd"]),
+        systemd_environment,
+        dbus_environment,
         ["systemctl", "--user", "--no-block", "start", SESSION_TARGET]
             .map(str::to_owned)
             .to_vec(),

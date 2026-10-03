@@ -10,7 +10,7 @@
 //! `derisk agent`-style requests move real windows.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsString,
     io::{BufRead, BufReader, Write as _},
     os::unix::{
@@ -29,8 +29,8 @@ use derisk::{
     ipc,
     keys::{self, Key, Mods, SuperTap},
     overview::Battery,
-    shell::{PointerOutcome, Shell, WindowPlacement},
-    snap::Direction,
+    shell::{Mode, PointerOutcome, Shell, WindowPlacement},
+    snap::{Direction, SnapZone},
     systemd::{self, Priority},
     time::Clock,
     ui::{ShellUi, paint_wallpaper},
@@ -198,6 +198,7 @@ pub struct Host {
     mods: Mods,
     egui_mods: egui::Modifiers,
     super_tap: SuperTap,
+    suppressed_keys: HashSet<u32>,
     last_tick: Instant,
 
     children: Vec<Child>,
@@ -317,6 +318,7 @@ pub fn run(options: Options) -> Result {
         mods: Mods::default(),
         egui_mods: egui::Modifiers::default(),
         super_tap: SuperTap::default(),
+        suppressed_keys: HashSet::new(),
         last_tick: Instant::now() - Duration::from_secs(5),
         children: Vec::new(),
         launches: 0,
@@ -345,7 +347,7 @@ pub fn run(options: Options) -> Result {
     }
 
     if options.execute {
-        for argv in systemd::session_start_argv() {
+        for argv in systemd::session_start_argv(&host.socket_name.to_string_lossy()) {
             let _ = systemd::run(&argv);
         }
     }
@@ -412,7 +414,14 @@ fn agent_socket(path: Option<PathBuf>) -> Result<Option<(PathBuf, Channel<AgentR
         if !meta.file_type().is_socket() {
             return Err(format!("{} exists and is not a socket", path.display()).into());
         }
-        std::fs::remove_file(&path)?;
+        match UnixStream::connect(&path) {
+            Ok(_) => return Err(format!("{} is already in use", path.display()).into()),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                std::fs::remove_file(&path)?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
     }
     let listener = UnixListener::bind(&path)?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
@@ -585,13 +594,42 @@ impl Host {
             if let Some(toplevel) = window.toplevel() {
                 toplevel.with_pending_state(|state| {
                     state.size = Some(p.client.size);
-                    for s in [
+                    let tiled_edges = match p.mode {
+                        Mode::Tiled => [true, true, true, true],
+                        Mode::Floating { .. } => [false, false, false, false],
+                        Mode::Snapped { zone } => match zone {
+                            SnapZone::Left => [true, false, true, true],
+                            SnapZone::Right => [false, true, true, true],
+                            SnapZone::TopLeft => [true, false, true, false],
+                            SnapZone::TopRight => [false, true, true, false],
+                            SnapZone::BottomLeft => [true, false, false, true],
+                            SnapZone::BottomRight => [false, true, false, true],
+                            SnapZone::Maximize => [false, false, false, false],
+                        },
+                    };
+                    for (s, tiled) in [
                         ToplevelState::TiledLeft,
                         ToplevelState::TiledRight,
                         ToplevelState::TiledTop,
                         ToplevelState::TiledBottom,
-                    ] {
-                        state.states.set(s);
+                    ]
+                    .into_iter()
+                    .zip(tiled_edges)
+                    {
+                        if tiled {
+                            state.states.set(s);
+                        } else {
+                            state.states.unset(s);
+                        }
+                    }
+                    if p.mode
+                        == (Mode::Snapped {
+                            zone: SnapZone::Maximize,
+                        })
+                    {
+                        state.states.set(ToplevelState::Maximized);
+                    } else {
+                        state.states.unset(ToplevelState::Maximized);
                     }
                     if p.focused {
                         state.states.set(ToplevelState::Activated);
@@ -667,7 +705,9 @@ impl Host {
                     event.state(),
                     serial,
                     time,
-                    |host, modifiers, handle| host.filter_key(modifiers, &handle, pressed),
+                    |host, modifiers, handle| {
+                        host.filter_key(modifiers, &handle, pressed, event.key_code().into())
+                    },
                 );
                 if let Some(Some(action)) = action {
                     self.dispatch(vec![action]);
@@ -846,7 +886,11 @@ impl Host {
         modifiers: &ModifiersState,
         handle: &KeysymHandle<'_>,
         pressed: bool,
+        keycode: u32,
     ) -> FilterResult<Option<Action>> {
+        if !pressed && self.suppressed_keys.remove(&keycode) {
+            return FilterResult::Intercept(None);
+        }
         self.mods = Mods {
             logo: modifiers.logo,
             shift: modifiers.shift,
@@ -873,9 +917,11 @@ impl Host {
             && let Some(key) = layout_key(raw)
             && let Some(action) = keys::binding(self.mods, key)
         {
+            self.suppressed_keys.insert(keycode);
             return FilterResult::Intercept(Some(action));
         }
         if pressed && raw == Keysym::Escape && self.shell.overview_visible() {
+            self.suppressed_keys.insert(keycode);
             return FilterResult::Intercept(Some(Action::Overview {
                 visible: Some(false),
             }));
