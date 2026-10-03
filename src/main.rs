@@ -139,10 +139,14 @@ fn session_socket() -> Result<PathBuf> {
 
 /// Sends one request line to the running session and prints the response.
 fn send(line: &str) -> Result {
+    let line = line.trim();
+    if line.is_empty() {
+        return Err("send needs a JSON request".into());
+    }
     let path = session_socket()?;
     let mut stream = UnixStream::connect(&path)
         .map_err(|e| format!("no derisk session on {}: {e}", path.display()))?;
-    writeln!(stream, "{}", line.trim())?;
+    writeln!(stream, "{line}")?;
     let mut response = String::new();
     BufReader::new(stream).read_line(&mut response)?;
     let value: serde_json::Value = serde_json::from_str(&response)?;
