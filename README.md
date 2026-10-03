@@ -38,8 +38,10 @@ everything. Type to search, in a single ranked list:
   (`register_menu`), so apps get palette commands for free.
 - **Commands**: window management (snap, maximize, float, tile, close),
   overview, layouts, focus, workspaces and moving the window between them.
-- **Session, tray and services**: lock, suspend, log out, reboot, power off
-  (destructive ones need a second Enter), tray items, failed units.
+- **System actions**: lock, suspend, hibernate, log out, reboot, power off
+  (destructive ones need a second Enter), tray items and failed units
+  (restart or dismiss). The palette is their home: there is no separate
+  system menu, and the top bar's ⚠ count opens the palette on them.
 - **Files** under your home folder.
 
 Anything else goes to the assistant: `open firefox and snap it left`,
@@ -100,7 +102,7 @@ first); unit actions only apply to units that are currently failed.
   keep-alives and stopping are reported to the service manager; logs go to
   the journal with structured fields (stderr outside systemd).
 - **logind.** Lock, suspend, hibernate, log out, reboot and power off from the
-  system menu, assistant or agents.
+  command palette, assistant or agents.
 - **Failed units widget.** Failed user units show in the top bar and overview
   with restart and reset actions.
 

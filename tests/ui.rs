@@ -261,3 +261,35 @@ fn palette_hands_requests_to_the_assistant() {
         ]
     );
 }
+
+#[test]
+fn failed_units_open_the_palette_on_their_actions() {
+    let (w, h) = (1280.0, 800.0);
+    let mut shell = Shell::new(rect(0, 0, 1280, 800), false);
+    shell.failed_units = vec!["foo.service".into()];
+    let mut ui = ShellUi::new(&shell, true);
+    ui.palette.preset = Some("> failed".into());
+    shell.apply(Action::Palette { visible: None }).unwrap();
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, (w, h), vec![], 5000);
+    let actions = frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }],
+        5000,
+    );
+    assert_eq!(
+        actions[0],
+        Action::RestartUnit {
+            unit: "foo.service".into()
+        }
+    );
+}

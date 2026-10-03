@@ -631,16 +631,31 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
 
     // Session.
     for (title, icon, op, keywords) in [
-        ("Lock Screen", "🔒", SessionOp::Lock, "lock away"),
-        ("Suspend", "🌙", SessionOp::Suspend, "sleep"),
-        ("Hibernate", "❄", SessionOp::Hibernate, "sleep disk"),
-        ("Log Out", "🚪", SessionOp::Logout, "sign out logout exit"),
-        ("Restart", "⟳", SessionOp::Reboot, "reboot"),
+        (
+            "Lock Screen",
+            "🔒",
+            SessionOp::Lock,
+            "lock away system session",
+        ),
+        ("Suspend", "🌙", SessionOp::Suspend, "sleep system power"),
+        (
+            "Hibernate",
+            "❄",
+            SessionOp::Hibernate,
+            "sleep disk system power",
+        ),
+        (
+            "Log Out",
+            "🚪",
+            SessionOp::Logout,
+            "sign out logout exit system session",
+        ),
+        ("Restart", "⟳", SessionOp::Reboot, "reboot system power"),
         (
             "Shut Down",
             "✖",
             SessionOp::PowerOff,
-            "power off poweroff shutdown",
+            "power off poweroff shutdown system",
         ),
     ] {
         let mut e = Entry::new(

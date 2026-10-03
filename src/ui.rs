@@ -30,7 +30,6 @@ use crate::{
     overview::{OverviewLayout, Widget, fit, grid},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
-    systemd::SessionOp,
 };
 
 /// Converts a logical geometry to an egui rectangle.
@@ -98,6 +97,8 @@ pub struct PaletteUi {
     pub files: Vec<PathBuf>,
     /// What was chosen before, for ranking.
     pub history: History,
+    /// Text to start the next opening with, instead of an empty query.
+    pub preset: Option<String>,
     query: String,
     shown_query: String,
     selected: usize,
@@ -330,7 +331,6 @@ impl ShellUi {
                 {
                     actions.push(Action::Overview { visible: None });
                 }
-                ui.menu_button("derisk", |ui| system_menu(ui, actions));
                 if ui
                     .add(
                         egui::Button::new(
@@ -371,9 +371,19 @@ impl ShellUi {
                             b.percent
                         ));
                     }
-                    if !shell.failed_units.is_empty() {
-                        ui.label(format!("⚠ {}", shell.failed_units.len()))
-                            .on_hover_text("Failed user services, see the overview");
+                    if !shell.failed_units.is_empty()
+                        && ui
+                            .add(
+                                egui::Button::new(format!("⚠ {}", shell.failed_units.len()))
+                                    .frame(false),
+                            )
+                            .on_hover_text("Failed user services: restart or dismiss them")
+                            .clicked()
+                    {
+                        self.palette.preset = Some("> failed".to_owned());
+                        actions.push(Action::Palette {
+                            visible: Some(true),
+                        });
                     }
                     self.tray_icons(ui, shell, height, actions);
                 });
@@ -658,7 +668,7 @@ impl ShellUi {
         let theme = self.theme;
         let state = &mut self.palette;
         if !state.open {
-            state.query.clear();
+            state.query = state.preset.take().unwrap_or_default();
             state.shown_query.clear();
             state.selected = 0;
             state.armed = None;
@@ -988,39 +998,6 @@ fn calendar(ui: &mut Ui, shell: &Shell, theme: &Theme) {
                 }
             }
         });
-}
-
-fn system_menu(ui: &mut Ui, actions: &mut Vec<Action>) {
-    for (label, op) in [
-        ("Lock Screen", SessionOp::Lock),
-        ("Suspend", SessionOp::Suspend),
-        ("Hibernate", SessionOp::Hibernate),
-    ] {
-        if ui.button(label).clicked() {
-            actions.push(Action::Session {
-                op,
-                confirmed: false,
-            });
-            ui.close();
-        }
-    }
-    ui.separator();
-    for (label, op) in [
-        ("Log Out", SessionOp::Logout),
-        ("Restart", SessionOp::Reboot),
-        ("Shut Down", SessionOp::PowerOff),
-    ] {
-        // A nested confirmation keeps one stray click from ending the session.
-        ui.menu_button(label, |ui| {
-            if ui.button(format!("{label} now")).clicked() {
-                actions.push(Action::Session {
-                    op,
-                    confirmed: true,
-                });
-                ui.close();
-            }
-        });
-    }
 }
 
 fn menu_button(ui: &mut Ui, menu: &Menu, window: Option<u64>, actions: &mut Vec<Action>) {
