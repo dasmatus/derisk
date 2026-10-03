@@ -13,11 +13,11 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        features: ["", "--features host"]
+        features: ["", "--features derisk/host"]
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.95 --profile minimal --component clippy,rustfmt && rustup default 1.95
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl-dev libgles-dev
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets ${{ matrix.features }} -- -D warnings
-      - run: cargo test ${{ matrix.features }}
+      - run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
+      - run: cargo test --workspace ${{ matrix.features }}

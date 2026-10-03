@@ -1,0 +1,11 @@
+[package]
+name = "derisk-settings"
+description = "derisk Settings app: appearance, desktop, input, notifications, and power preferences"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mcsapi-ui.workspace = true

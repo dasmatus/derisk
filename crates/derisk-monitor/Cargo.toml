@@ -1,0 +1,11 @@
+[package]
+name = "derisk-monitor"
+description = "derisk System Monitor app: CPU, memory, and processes from Linux /proc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mcsapi-ui.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "derisk-files"
+description = "derisk Files app: a file manager with places, clipboard, and freedesktop trash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mcsapi-ui.workspace = true

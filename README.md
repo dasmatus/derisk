@@ -87,13 +87,16 @@ $ cargo run --release --features host -- session --launch foot
 ```
 
 `derisk session` runs the desktop as a Smithay compositor nested in a window
-of your current X11 or Wayland session. Apps launched from it (or from any
+of your current X11 or Wayland session. The core apps (Files, Settings, Text
+Editor, System Monitor, Calculator, in `crates/`) run inside
+the session and launch by name: `--launch files`, `derisk do open calculator`,
+or the overview assistant. Wayland apps launched from it (or from any
 terminal with `WAYLAND_DISPLAY` set to the socket it prints) get derisk's
 title bars, tiling, snapping, overview and assistant. The agent protocol is
 served on `$XDG_RUNTIME_DIR/derisk/agent.sock` against the live desktop:
 
 ```console
-$ derisk do open foot and snap it right     # natural language, from any terminal
+$ derisk do open files and snap it right   # natural language, from any terminal
 $ derisk send '{"method":"state"}'           # raw agent protocol
 ```
 
@@ -132,12 +135,12 @@ windows in the headless shell. With `--execute`, effects run through systemd
 - **Shell** (library `derisk`): window management policy, decorations, the
   top bar, overview, assistant, agent protocol, keyboard shortcuts and
   systemd integration.
-- **Compositor host** (`derisk session`, feature `host`): Smithay with the
-  winit backend and the GLES renderer. It manages xdg-shell toplevels and
-  popups with server-side decorations (xdg-decoration), shm buffers, seat
-  input, data device and outputs; draws title bars, client surfaces and the
-  egui chrome per window in stacking order; and serves the agent socket on
-  the live desktop.
+- **Compositor host** (`derisk session`, feature `host`): derisk's desktop
+  implemented on mcsapi's `mcsapi-compositor` (Smithay, winit backend, GLES
+  renderer). The host manages xdg-shell toplevels and popups with server-side
+  decorations, input and outputs, and runs the `derisk-apps` core apps in
+  process next to Wayland clients; derisk supplies window placement, keys,
+  title bars, chrome and the agent socket on the live desktop.
 
 Still to do: a DRM/KMS + libinput backend to run on a bare TTY (today the
 session runs nested), layer-shell, XWayland, popup grabs, and bridging D-Bus
@@ -149,12 +152,35 @@ draw their own title bar inside derisk's.
 
 `scripts/showcase.py` records the desktop in a virtual X server: it starts
 Xvfb, runs `derisk session`, drives it with xdotool and the agent socket, and
-encodes with ffmpeg. It needs Xvfb, xdotool, ffmpeg, foot, neofetch, htop and
-cmatrix.
+encodes with ffmpeg. It shows Wayland clients and the core apps side by
+side. It needs Xvfb, xdotool, ffmpeg, foot, neofetch and htop.
 
 ```console
 $ cargo build --release --features host
 $ PATH=$PWD/target/release:$PATH scripts/showcase.py derisk-showcase.mp4
+```
+
+## Core apps
+
+The repository is a Cargo workspace: the shell is the root package and the
+core apps live under `crates/`. Each app is an `mcsapi_ui::App` with its logic
+in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
+
+| App | Crate | What it does |
+| --- | --- | --- |
+| Files | `derisk-files` | Places, back/forward/up, sort, filter, hidden files, new folder/file, rename (never overwrites), copy/cut/paste with `name (copy).ext` on clashes, the freedesktop.org trash, and `xdg-open`. |
+| Settings | `derisk-settings` | Dark/light, accent, text size, reduced motion, layout, gaps, workspaces, adaptive profile, input, notifications, and power, saved to `$XDG_CONFIG_HOME/derisk/settings.conf`. `Settings::theme()` gives the shell its colors. |
+| Text Editor | `derisk-editor` | UTF-8 files up to 8 MiB, atomic saves that keep permissions, find and replace, line/column, unsaved-change prompts. |
+| System Monitor | `derisk-monitor` | CPU graph, memory, swap, load, uptime, and a sortable, filterable process table with End process, from `/proc`. |
+| Calculator | `derisk-calculator` | Expressions with precedence, `^`, `%`, functions, `pi`, `e`, `ans`, and history. |
+
+`derisk-apps` lists them, registers them with `mcsapi-runtime`, and keeps the
+running app objects next to their instances (`derisk_apps::Session`), so the
+host only gives each instance a surface and calls `mcsapi_ui::run_frame`.
+To try them in one window without the compositor:
+
+```console
+$ cargo run -p derisk-apps --features preview --bin derisk-preview -- org.derisk.files
 ```
 
 ## Building
@@ -165,9 +191,9 @@ example on Debian/Ubuntu:
 ```console
 $ sudo apt install libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libinput-dev libudev-dev libgbm-dev libseat-dev libdrm-dev
 $ cargo build
-$ cargo test
-$ cargo clippy --all-targets -- -D warnings
-$ cargo clippy --all-targets --features host -- -D warnings
+$ cargo test --workspace
+$ cargo clippy --workspace --all-targets -- -D warnings
+$ cargo clippy --workspace --all-targets --features derisk/host -- -D warnings
 ```
 
 ## License
