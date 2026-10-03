@@ -10,6 +10,9 @@
 //! - [`adaptive`]: phone/tablet/desktop profiles and learned app suggestions.
 //! - [`overview`]: the overview grid and its widgets.
 //! - [`menu`]: the global menu.
+//! - [`palette`]: the command palette (Super+Space), the center of the
+//!   workflow: apps, windows, commands, settings and files in one search,
+//!   with the assistant as the fallback.
 //! - [`tray`]: monochrome system tray icons.
 //! - [`animation`]: the startup animation.
 //! - [`assistant`] and [`ipc`]: natural-language and agent control.
@@ -42,6 +45,7 @@ pub mod ipc;
 pub mod keys;
 pub mod menu;
 pub mod overview;
+pub mod palette;
 pub mod shell;
 pub mod snap;
 pub mod systemd;

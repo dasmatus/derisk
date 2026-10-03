@@ -1,7 +1,10 @@
 //! Shell state on top of mcsapi: tiling plus floating, snapped and minimized
 //! windows, Windows-style dragging, and the overview, menu and tray models.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use mcsapi::{Desktop, Geometry, Layout, WindowId, WorkspaceId};
 use serde::Serialize;
@@ -44,6 +47,9 @@ pub enum Error {
     UnknownTrayItem(String),
     /// Unit actions only apply to currently failed user units.
     UnknownUnit(String),
+    /// The path is not an absolute path to an existing, non-executable file
+    /// or folder.
+    NotOpenable(String),
 }
 
 impl std::fmt::Display for Error {
@@ -62,6 +68,7 @@ impl std::fmt::Display for Error {
             Self::NotLaunchable(app) => write!(f, "not a launchable app name: {app:?}"),
             Self::UnknownTrayItem(id) => write!(f, "unknown tray item: {id:?}"),
             Self::UnknownUnit(unit) => write!(f, "not a failed user unit: {unit:?}"),
+            Self::NotOpenable(path) => write!(f, "cannot open {path:?}"),
         }
     }
 }
@@ -192,6 +199,7 @@ pub struct Shell {
     drag: Option<Drag>,
     clicks: ClickTracker,
     overview: bool,
+    palette: bool,
     snap_assist: Option<SnapAssist>,
     pending: Vec<(String, Vec<Action>)>,
     /// Global menus registered by apps.
@@ -206,6 +214,22 @@ pub struct Shell {
     pub battery: Option<Battery>,
     /// Failed user units, updated by the host (see [`systemd::failed_units`]).
     pub failed_units: Vec<String>,
+}
+
+/// Whether `path` is safe to hand to `xdg-open`: absolute, existing, and
+/// neither executable nor a `.desktop` launcher, so opening it cannot run a
+/// program.
+fn openable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    path.is_absolute()
+        && (meta.is_dir()
+            || (meta.is_file()
+                && meta.permissions().mode() & 0o111 == 0
+                && path.extension().is_none_or(|e| e != "desktop")))
 }
 
 fn workspace(id: u64) -> Result<WorkspaceId, Error> {
@@ -227,6 +251,7 @@ impl Shell {
             drag: None,
             clicks: ClickTracker::default(),
             overview: false,
+            palette: false,
             snap_assist: None,
             pending: Vec::new(),
             menus: GlobalMenu::default(),
@@ -289,6 +314,11 @@ impl Shell {
     /// Whether the overview is showing.
     pub fn overview_visible(&self) -> bool {
         self.overview
+    }
+
+    /// Whether the command palette is showing.
+    pub fn palette_visible(&self) -> bool {
+        self.palette
     }
 
     /// The pending Snap Assist offer, if any.
@@ -648,6 +678,16 @@ impl Shell {
             Action::Overview { visible } => {
                 self.overview = visible.unwrap_or(!self.overview);
                 self.drag = None;
+            }
+            Action::Palette { visible } => {
+                self.palette = visible.unwrap_or(!self.palette);
+                self.drag = None;
+            }
+            Action::Open { path } => {
+                if !openable(Path::new(&path)) {
+                    return Err(Error::NotOpenable(path));
+                }
+                return Ok(vec![Effect::Open { path }]);
             }
             Action::ActivateMenu { window, item } => {
                 let w = self.target(window)?;

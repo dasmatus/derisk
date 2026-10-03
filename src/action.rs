@@ -113,6 +113,20 @@ pub enum Action {
         #[serde(default)]
         visible: Option<bool>,
     },
+    /// Show, hide (`Some`) or toggle (`None`) the command palette.
+    Palette {
+        /// Desired visibility.
+        #[serde(default)]
+        visible: Option<bool>,
+    },
+    /// Open a file or folder with its default application.
+    ///
+    /// Only absolute paths to existing, non-executable files and folders are
+    /// accepted, so this cannot be used to run programs.
+    Open {
+        /// Absolute path.
+        path: String,
+    },
     /// Choose a global-menu item.
     ActivateMenu {
         /// Window owning the menu.
@@ -182,6 +196,11 @@ pub enum Effect {
     Close {
         /// Window.
         window: u64,
+    },
+    /// Open a file or folder with its default application (`xdg-open`).
+    Open {
+        /// Absolute path, checked by the shell.
+        path: String,
     },
     /// Forward a global-menu activation to the app (e.g. dbusmenu `Event`).
     MenuActivated {

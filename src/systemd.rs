@@ -156,6 +156,12 @@ pub fn effect_argv(
     match effect {
         Effect::Launch { app } => launch_argv(app, instance),
         Effect::Session { op } => Some(session_argv(*op, session_id)),
+        // The shell only emits absolute paths, so the path cannot be read as
+        // an option.
+        Effect::Open { path } => launch_argv("xdg-open", instance).map(|mut argv| {
+            argv.push(path.clone());
+            argv
+        }),
         Effect::ResetFailed { unit } => Some(
             ["systemctl", "--user", "reset-failed", "--", unit.as_str()]
                 .map(str::to_owned)

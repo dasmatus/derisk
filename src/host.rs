@@ -23,6 +23,7 @@ use derisk::{
     ipc,
     keys::{self, Key, Mods, SuperTap},
     overview::Battery,
+    palette::{self, Category, Entry},
     shell::{Mode, PointerOutcome, Shell},
     snap::{Direction, SnapZone},
     systemd::{self, Priority},
@@ -63,13 +64,50 @@ pub struct Session {
     super_tap: SuperTap,
     start: Instant,
     last_tick: Option<Instant>,
+    palette_open: bool,
+    files: Option<mpsc::Receiver<Vec<PathBuf>>>,
+}
+
+/// Settings pages, for palette entries that open Settings.
+const SETTINGS_PAGES: [(&str, &str); 6] = [
+    (
+        "Appearance",
+        "theme dark light accent colors text size motion",
+    ),
+    ("Desktop", "layout gaps workspaces profile"),
+    ("Input", "keyboard mouse pointer touchpad"),
+    ("Notifications", "banners sounds"),
+    ("Power", "dim lock suspend battery"),
+    ("About", "version"),
+];
+
+/// Palette entries for the core apps and Settings pages.
+fn palette_entries() -> Vec<Entry> {
+    let mut entries: Vec<Entry> = derisk_apps::APPS
+        .iter()
+        .map(|app| Entry::app(app.id, app.name, app.summary, app.icon, app.keywords))
+        .collect();
+    entries.extend(SETTINGS_PAGES.iter().map(|(page, keywords)| {
+        Entry::new(
+            Category::Setting,
+            "⚙",
+            *page,
+            vec![Action::Launch {
+                app: derisk_apps::SETTINGS.to_owned(),
+            }],
+        )
+        .detail("Settings")
+        .keywords(format!("settings preferences {keywords}"))
+    }));
+    entries
 }
 
 impl Session {
     fn new(options: &Options) -> Self {
         let (w, h) = options.size;
         let shell = Shell::new(rect(0, 0, w, h), false);
-        let ui = ShellUi::new(&shell, options.reduced_motion);
+        let mut ui = ShellUi::new(&shell, options.reduced_motion);
+        ui.palette.extra = palette_entries();
         Self {
             shell,
             ui,
@@ -80,6 +118,8 @@ impl Session {
             super_tap: SuperTap::default(),
             start: Instant::now(),
             last_tick: None,
+            palette_open: false,
+            files: None,
         }
     }
 
@@ -91,6 +131,28 @@ impl Session {
         match self.shell.run(actions) {
             Ok(effects) => self.perform(effects),
             Err(e) => log(Priority::Info, &format!("action failed: {e}")),
+        }
+        self.palette_opened();
+    }
+
+    /// Re-indexes home on a background thread each time the palette opens,
+    /// so file results stay fresh without stalling a frame.
+    fn palette_opened(&mut self) {
+        let open = self.shell.palette_visible();
+        if open
+            && !self.palette_open
+            && let Some(home) = std::env::var_os("HOME")
+        {
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(palette::index_files(Path::new(&home), 4, 20_000));
+            });
+            self.files = Some(rx);
+        }
+        self.palette_open = open;
+        if let Some(files) = self.files.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.ui.palette.files = files;
+            self.files = None;
         }
     }
 
@@ -119,6 +181,25 @@ impl Session {
                                 serde_json::to_string(&effect).unwrap_or_default()
                             ),
                         );
+                    }
+                }
+                Effect::Open { path } => {
+                    if self.execute {
+                        self.launches += 1;
+                        if let Some(mut argv) = systemd::effect_argv(&effect, self.launches, None) {
+                            let split = argv.iter().position(|a| a == "--").unwrap_or(argv.len());
+                            argv.insert(
+                                split,
+                                format!("--setenv=WAYLAND_DISPLAY={}", self.wayland_display),
+                            );
+                            let _ = systemd::run(&argv);
+                        }
+                    } else if let Err(e) = std::process::Command::new("xdg-open")
+                        .arg(path)
+                        .env("WAYLAND_DISPLAY", &self.wayland_display)
+                        .spawn()
+                    {
+                        log(Priority::Warning, &format!("xdg-open {path}: {e}"));
                     }
                 }
                 Effect::MenuActivated { .. } | Effect::TrayActivated { .. } => log(
@@ -217,6 +298,7 @@ impl compositor::Shell for Session {
             x >= g.loc.x && y >= g.loc.y && x < g.loc.x + g.size.w && y < g.loc.y + g.size.h
         };
         self.shell.overview_visible()
+            || self.shell.palette_visible()
             || y < self.shell.profile().top_bar
             || self.shell.snap_assist().is_some_and(|a| inside(a.frame))
             || !self.startup_done()
@@ -262,6 +344,15 @@ impl compositor::Shell for Session {
             }
             return KeyRoute::Consume;
         }
+        if self.shell.palette_visible() {
+            if key.pressed && key.sym == Keysym::Escape {
+                self.dispatch(vec![Action::Palette {
+                    visible: Some(false),
+                }]);
+                return KeyRoute::Consume;
+            }
+            return KeyRoute::Chrome;
+        }
         if self.shell.overview_visible() {
             if key.pressed && key.sym == Keysym::Escape {
                 self.dispatch(vec![Action::Overview {
@@ -304,6 +395,7 @@ impl compositor::Shell for Session {
     fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
+        self.palette_opened();
     }
 
     fn spawn_argv(&mut self, app: &str) -> Vec<String> {
@@ -474,6 +566,7 @@ fn layout_key(sym: Keysym) -> Option<Key> {
         Keysym::Return | Keysym::KP_Enter | Keysym::Linefeed => Key::Enter,
         Keysym::Tab | Keysym::ISO_Left_Tab => Key::Tab,
         Keysym::Escape => Key::Escape,
+        Keysym::space => Key::Space,
         _ => {
             let c = sym.key_char()?.to_ascii_lowercase();
             match c {

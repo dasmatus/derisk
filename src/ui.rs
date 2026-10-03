@@ -5,15 +5,18 @@
 //! 1. [`ShellUi::paint_decorations`] below client surfaces (title bars).
 //! 2. Client surfaces, at [`crate::shell::WindowPlacement::client`].
 //! 3. [`ShellUi::show`] above them: top bar with global menu and tray, snap
-//!    preview and Snap Assist, the overview with widgets, and the startup
-//!    animation.
+//!    preview and Snap Assist, the overview with widgets, the command
+//!    palette, and the startup animation.
 //!
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
 
+use std::path::PathBuf;
+
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Id, Layout, Order, Painter, Pos2, Rect, RichText,
-    Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, pos2, vec2,
+    Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
+    Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, pos2,
+    vec2,
 };
 use mcsapi::{Geometry, toolkit::egui, widgets::Theme};
 
@@ -25,6 +28,7 @@ use crate::{
     geom::{inset, rect},
     menu::{Menu, MenuEntry},
     overview::{OverviewLayout, Widget, fit, grid},
+    palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
     systemd::SessionOp,
 };
@@ -80,7 +84,31 @@ pub struct ShellUi {
     notes: String,
     overview_open: bool,
     tray: Option<(u64, Vec<TextureHandle>)>,
+    /// The command palette.
+    pub palette: PaletteUi,
 }
+
+/// Command palette state. The host fills [`PaletteUi::extra`] and
+/// [`PaletteUi::files`]; the rest is kept between openings.
+#[derive(Default)]
+pub struct PaletteUi {
+    /// Host-provided entries: apps, settings pages.
+    pub extra: Vec<Entry>,
+    /// Indexed files (see [`palette::index_files`]).
+    pub files: Vec<PathBuf>,
+    /// What was chosen before, for ranking.
+    pub history: History,
+    query: String,
+    shown_query: String,
+    selected: usize,
+    armed: Option<String>,
+    message: Option<String>,
+    open: bool,
+}
+
+/// Rows the palette shows at once before scrolling.
+const PALETTE_ROWS: usize = 9;
+const PALETTE_ROW_HEIGHT: f32 = 40.0;
 
 impl ShellUi {
     /// Creates UI state; `reduced_motion` shortens the startup animation.
@@ -96,6 +124,7 @@ impl ShellUi {
             notes: String::new(),
             overview_open: false,
             tray: None,
+            palette: PaletteUi::default(),
         }
     }
 
@@ -194,6 +223,10 @@ impl ShellUi {
         }
         self.overview_open = shell.overview_visible();
         self.top_bar(ui, shell, frame, &mut actions);
+        if shell.palette_visible() {
+            self.palette(ui, shell, &mut actions);
+        }
+        self.palette.open = shell.palette_visible();
         if !frame.done {
             let painter = ui.ctx().layer_painter(egui::LayerId::new(
                 Order::Foreground,
@@ -298,6 +331,20 @@ impl ShellUi {
                     actions.push(Action::Overview { visible: None });
                 }
                 ui.menu_button("derisk", |ui| system_menu(ui, actions));
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("🔍  Search or ask…").color(self.theme.border),
+                        )
+                        .fill(self.theme.surface)
+                        .stroke(Stroke::new(1.0, self.theme.border))
+                        .corner_radius(8),
+                    )
+                    .on_hover_text("Command palette (Super+Space)")
+                    .clicked()
+                {
+                    actions.push(Action::Palette { visible: None });
+                }
                 if let Some(w) = focused {
                     let (app, title) = shell.window_label(w).unwrap_or_default();
                     // Reverse-DNS app IDs (org.derisk.files) read better as the title.
@@ -605,6 +652,210 @@ impl ShellUi {
         ui.add_space(10.0);
     }
 
+    /// The command palette: a search box over [`palette::entries`] with the
+    /// assistant as fallback.
+    fn palette(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        let theme = self.theme;
+        let state = &mut self.palette;
+        if !state.open {
+            state.query.clear();
+            state.shown_query.clear();
+            state.selected = 0;
+            state.armed = None;
+            state.message = None;
+        }
+
+        let entries = palette::entries(shell, &state.extra, &state.files);
+        let hits = palette::search(&entries, &state.query, &state.history);
+        let (scope, text) = palette::scope(&state.query);
+        let mut rows: Vec<&Entry> = if scope == palette::Scope::Ask {
+            Vec::new()
+        } else {
+            hits.iter().take(60).map(|&i| &entries[i]).collect()
+        };
+        // The assistant joins everything-searches and `?`; a request it does
+        // not understand only shows when nothing else matched, to say why.
+        let ask = (!text.is_empty() && matches!(scope, palette::Scope::All | palette::Scope::Ask))
+            .then(|| palette::ask(&state.query))
+            .filter(|ask| !ask.actions.is_empty() || rows.is_empty());
+        if let Some(ask) = &ask {
+            if palette::prefer_assistant(&entries, &hits, &state.query) {
+                rows.insert(0, ask);
+            } else {
+                rows.push(ask);
+            }
+        }
+        if state.query != state.shown_query {
+            state.shown_query = state.query.clone();
+            state.selected = 0;
+            state.armed = None;
+            state.message = None;
+        }
+        state.selected = state.selected.min(rows.len().saturating_sub(1));
+
+        // Keys the text field would otherwise eat.
+        let (down, up, enter, escape) = ui.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::NONE, Key::ArrowDown)
+                    || i.consume_key(Modifiers::NONE, Key::Tab)
+                    || i.consume_key(Modifiers::CTRL, Key::N),
+                i.consume_key(Modifiers::NONE, Key::ArrowUp)
+                    || i.consume_key(Modifiers::SHIFT, Key::Tab)
+                    || i.consume_key(Modifiers::CTRL, Key::P),
+                i.consume_key(Modifiers::NONE, Key::Enter),
+                i.consume_key(Modifiers::NONE, Key::Escape),
+            )
+        });
+        if !rows.is_empty() {
+            if down {
+                state.selected = (state.selected + 1) % rows.len();
+            }
+            if up {
+                state.selected = (state.selected + rows.len() - 1) % rows.len();
+            }
+        }
+        if escape {
+            actions.push(Action::Palette {
+                visible: Some(false),
+            });
+            return;
+        }
+
+        let screen = to_rect(shell.output());
+        // Dim the desktop; clicking it closes the palette.
+        let backdrop = egui::Area::new(Id::new("derisk-palette-backdrop"))
+            .order(Order::Middle)
+            .fixed_pos(screen.min)
+            .show(ui.ctx(), |ui| {
+                let (r, response) = ui.allocate_exact_size(screen.size(), Sense::click());
+                ui.painter()
+                    .rect_filled(r, 0, Color32::from_black_alpha(110));
+                response.clicked()
+            })
+            .inner;
+        if backdrop {
+            actions.push(Action::Palette {
+                visible: Some(false),
+            });
+            return;
+        }
+
+        let width = (screen.width() - 32.0).clamp(240.0, 680.0);
+        let top =
+            screen.top() + (screen.height() * 0.14).max(shell.profile().top_bar as f32 + 16.0);
+        let mut chosen = enter.then_some(state.selected);
+        egui::Area::new(Id::new("derisk-palette"))
+            .order(Order::Foreground)
+            .fixed_pos(pos2(screen.center().x - width / 2.0, top))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(theme.surface)
+                    .stroke(Stroke::new(1.0, theme.border))
+                    .corner_radius(14)
+                    .inner_margin(10)
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 12],
+                        blur: 40,
+                        spread: 0,
+                        color: Color32::from_black_alpha(140),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_width(width - 20.0);
+                        ui.visuals_mut().override_text_color = Some(theme.foreground);
+                        let input = ui.add(
+                            egui::TextEdit::singleline(&mut state.query)
+                                .hint_text("Search apps, windows, commands, files… or ask derisk")
+                                .font(FontId::proportional(18.0))
+                                .frame(egui::Frame::NONE)
+                                .margin(vec2(6.0, 8.0))
+                                .desired_width(f32::INFINITY),
+                        );
+                        input.request_focus();
+                        ui.add_space(4.0);
+                        ui.painter().hline(
+                            ui.min_rect().x_range(),
+                            ui.cursor().top(),
+                            Stroke::new(1.0, theme.border),
+                        );
+                        ui.add_space(6.0);
+                        if rows.is_empty() {
+                            ui.label(
+                                RichText::new("Type to search, or ask in plain words.")
+                                    .color(theme.border),
+                            );
+                        }
+                        let selected = state.selected;
+                        egui::ScrollArea::vertical()
+                            .max_height(PALETTE_ROWS as f32 * PALETTE_ROW_HEIGHT + 40.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                let mut heading = None;
+                                for (i, entry) in rows.iter().enumerate() {
+                                    if heading != Some(entry.category) {
+                                        heading = Some(entry.category);
+                                        ui.label(
+                                            RichText::new(entry.category.heading())
+                                                .size(11.0)
+                                                .color(theme.border),
+                                        );
+                                    }
+                                    let response =
+                                        palette_row(ui, &theme, entry, i == selected);
+                                    if i == selected && (up || down) {
+                                        response.scroll_to_me(None);
+                                    }
+                                    if response.clicked() {
+                                        chosen = Some(i);
+                                    }
+                                }
+                            });
+                        if let Some(message) = &state.message {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(message).color(theme.accent));
+                        }
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("⬆⬇ select   Enter run   Esc close   > commands   @ windows   / files   ? ask")
+                                .size(11.0)
+                                .color(theme.border),
+                        );
+                    });
+            });
+
+        let Some(entry) = chosen.and_then(|i| rows.get(i)).map(|e| (*e).clone()) else {
+            return;
+        };
+        if entry.actions.is_empty() {
+            // The assistant did not understand; say why and keep the text.
+            state.message = Some(entry.detail.clone());
+            return;
+        }
+        if entry.confirm && state.armed.as_deref() != Some(&entry.key()) {
+            state.armed = Some(entry.key());
+            state.message = Some(format!(
+                "Press Enter again to {}.",
+                entry.title.to_lowercase()
+            ));
+            return;
+        }
+        if entry.category != Category::Ask {
+            state.history.record(&entry);
+        }
+        let touches_overview = entry
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::Overview { .. }));
+        actions.extend(entry.actions);
+        actions.push(Action::Palette {
+            visible: Some(false),
+        });
+        if shell.overview_visible() && !touches_overview {
+            actions.push(Action::Overview {
+                visible: Some(false),
+            });
+        }
+    }
+
     /// Interprets the assistant prompt typed at the console.
     fn submit(&mut self, actions: &mut Vec<Action>) {
         match assistant::interpret(&self.assistant) {
@@ -632,6 +883,72 @@ impl ShellUi {
             Err(e) => self.reply = Some(e.to_string()),
         }
     }
+}
+
+/// One palette row: icon, title, detail and shortcut hint.
+fn palette_row(ui: &mut Ui, theme: &Theme, entry: &Entry, selected: bool) -> egui::Response {
+    let (r, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), PALETTE_ROW_HEIGHT),
+        Sense::click(),
+    );
+    let painter = ui.painter_at(r);
+    if selected || response.hovered() {
+        painter.rect_filled(
+            r,
+            8,
+            theme
+                .accent
+                .gamma_multiply(if selected { 0.22 } else { 0.1 }),
+        );
+    }
+    let mid = r.center().y;
+    painter.text(
+        pos2(r.left() + 18.0, mid),
+        Align2::CENTER_CENTER,
+        &entry.icon,
+        FontId::proportional(16.0),
+        theme.foreground,
+    );
+    let shortcut_width = entry
+        .shortcut
+        .as_ref()
+        .map_or(0.0, |s| s.len() as f32 * 7.0 + 16.0);
+    let text_left = r.left() + 40.0;
+    let title_galley = painter.layout_no_wrap(
+        elide(
+            &entry.title,
+            (r.width() - 56.0 - shortcut_width) * 0.6,
+            15.0,
+        ),
+        FontId::proportional(15.0),
+        theme.foreground,
+    );
+    let title_width = title_galley.size().x;
+    painter.galley(
+        pos2(text_left, mid - title_galley.size().y / 2.0),
+        title_galley,
+        theme.foreground,
+    );
+    if !entry.detail.is_empty() {
+        let room = r.right() - shortcut_width - (text_left + title_width + 12.0);
+        painter.text(
+            pos2(text_left + title_width + 12.0, mid),
+            Align2::LEFT_CENTER,
+            elide(&entry.detail, room, 13.0),
+            FontId::proportional(13.0),
+            theme.border,
+        );
+    }
+    if let Some(shortcut) = &entry.shortcut {
+        painter.text(
+            pos2(r.right() - 10.0, mid),
+            Align2::RIGHT_CENTER,
+            shortcut,
+            FontId::monospace(12.0),
+            theme.border,
+        );
+    }
+    response
 }
 
 fn row(count: usize, area: Geometry, gap: i32) -> Vec<Geometry> {

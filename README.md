@@ -16,8 +16,34 @@ derisk takes the good parts from many desktops:
 | Adaptive profiles: phone (monocle, no gaps), tablet, desktop | mobile shells |
 | App suggestions learned from when you launch apps | Android, iOS |
 | Startup animation: logo pops in, ring sweeps, then blooms into the desktop (cross-fade with reduced motion) | — |
+| Command palette (Super+Space) for apps, windows, commands, settings and files, falling back to the assistant | Raycast, Spotlight, VS Code |
 | Built-in assistant and an agent protocol | agent-first |
 | Deep systemd integration | — |
+
+## Command palette
+
+Super+Space (or the search field in the top bar) opens one box for
+everything. Type to search, in a single ranked list:
+
+- **Apps**: the core apps, plus suggestions learned from your habits.
+- **Windows** on every workspace; choosing one switches there and focuses it.
+- **App commands**: every item in the focused app's global menus
+  (`register_menu`), so apps get palette commands for free.
+- **Commands**: window management (snap, maximize, float, tile, close),
+  overview, layouts, focus, workspaces and moving the window between them.
+- **Session, tray and services**: lock, suspend, log out, reboot, power off
+  (destructive ones need a second Enter), tray items, failed units.
+- **Settings pages** and **files** under your home folder.
+
+Anything else goes to the assistant: `open firefox and snap it left`,
+Enter, done. When a typed sentence is something the assistant understands
+and no entry title contains all its words, the assistant row comes first.
+
+Prefixes narrow the list: `>` commands, `@` windows, `/` or `~` files,
+`?` ask the assistant. ↑/↓ (or Tab, Ctrl+N/P) select, Enter runs, Esc
+closes. Picks you use often rise to the top. Agents can open and close it
+with `{"action":"palette"}` and open files with `{"action":"open","path":...}`
+(absolute paths only; executables and `.desktop` files are refused).
 
 ## Agent-first
 
@@ -108,6 +134,7 @@ systemd units and run logind session operations.
 
 | Chord | Action |
 | --- | --- |
+| Super+Space | Command palette |
 | Super (tap), Super+A | Overview (the assistant is focused, just type) |
 | Super+←/→/↑/↓ | Snap halves and quarters, maximize, restore, minimize |
 | Super+1…9 / Super+Shift+1…9 | Switch workspace / move the window there |

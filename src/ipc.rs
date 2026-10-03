@@ -93,6 +93,8 @@ pub struct State {
     pub windows: Vec<WindowState>,
     /// Overview visibility.
     pub overview: bool,
+    /// Whether the command palette is showing.
+    pub palette: bool,
     /// Global menus of the focused window.
     pub menus: Vec<Menu>,
     /// Tray item titles.
@@ -139,6 +141,7 @@ pub fn state(shell: &Shell) -> State {
         workspaces: shell.desktop().workspaces().map(|w| w.id().get()).collect(),
         windows,
         overview: shell.overview_visible(),
+        palette: shell.palette_visible(),
         menus: shell.menus.bar(focused.map(|w| w.get())),
         tray: shell.tray.items().map(|i| i.title.clone()).collect(),
         suggestions: shell.habits.suggestions(shell.clock.hour, 5),
@@ -164,7 +167,8 @@ pub fn tools() -> Value {
             {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "switch_workspace"}, "workspace": {"type": "integer", "minimum": 1}}},
             {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "move_to_workspace"}, "window": window, "workspace": {"type": "integer", "minimum": 1}}},
             {"type": "object", "required": ["action", "layout"], "properties": {"action": {"const": "set_layout"}, "layout": {"enum": ["tall", "monocle"]}}},
-            {"type": "object", "required": ["action"], "properties": {"action": {"const": "overview"}, "visible": {"type": "boolean"}}},
+            {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["overview", "palette"]}, "visible": {"type": "boolean"}}},
+            {"type": "object", "required": ["action", "path"], "properties": {"action": {"const": "open"}, "path": {"type": "string", "description": "Absolute path to an existing file or folder; executables and .desktop files are refused"}}},
             {"type": "object", "required": ["action", "item"], "properties": {"action": {"const": "activate_menu"}, "window": window, "item": {"type": "string"}}},
             {"type": "object", "required": ["action", "op"], "properties": {"action": {"const": "session"}, "op": {"enum": ["lock", "suspend", "hibernate", "logout", "reboot", "power_off"]}, "confirmed": {"type": "boolean", "description": "Required for logout/reboot/power_off; only set after the user explicitly agreed"}}},
             {"type": "object", "required": ["action", "id"], "properties": {"action": {"const": "activate_tray"}, "id": {"type": "string"}, "item": {"type": "string"}}},
@@ -174,7 +178,7 @@ pub fn tools() -> Value {
     json!({"tools": [
         {
             "name": "get_state",
-            "description": "Describe the desktop: workspaces, windows (id, app, title, mode, frame, focus), overview, focused window's global menus, tray, app suggestions, failed systemd user units, clock and battery.",
+            "description": "Describe the desktop: workspaces, windows (id, app, title, mode, frame, focus), overview and command palette visibility, focused window's global menus, tray, app suggestions, failed systemd user units, clock and battery.",
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
