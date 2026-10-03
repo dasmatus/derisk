@@ -1,0 +1,11 @@
+[package]
+name = "derisk-editor"
+description = "derisk Text Editor app: open, edit, find, and save plain-text files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mcsapi-ui.workspace = true

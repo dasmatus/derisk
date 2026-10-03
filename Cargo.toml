@@ -1,24 +1,49 @@
-[package]
-name = "derisk"
+[workspace]
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
-description = "An adaptive, agent-first Wayland desktop shell built on mcsapi"
 license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
-[dependencies]
+[workspace.dependencies]
+# Until dasmatus/mcsapi#16 (mcsapi-compositor) merges, every mcsapi crate comes
+# from its branch so the apps and the compositor share one mcsapi-ui. Then drop
+# the `branch` keys and run `cargo update -p mcsapi`.
 mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar" }
+derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
+derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
+derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
+derisk-monitor = { path = "crates/derisk-monitor", version = "0.1.0" }
+derisk-calculator = { path = "crates/derisk-calculator", version = "0.1.0" }
+derisk-apps = { path = "crates/derisk-apps", version = "0.1.0" }
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+
+[package]
+name = "derisk"
+description = "An adaptive, agent-first Wayland desktop shell built on mcsapi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mcsapi.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
 # `derisk session` runs on mcsapi-compositor with the derisk core apps. Off by
 # default so the shell library and headless commands build without graphics.
-# Tracks the mcsapi branch that adds the compositor (stacked on the derisk
-# apps PR) until both land on mcsapi main.
-derisk-apps = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar", optional = true }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar", optional = true }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/finish-derisk-1xutar", optional = true }
+derisk-apps = { workspace = true, optional = true }
+mcsapi-compositor = { workspace = true, optional = true }
+mcsapi-runtime = { workspace = true, optional = true }
 
 [features]
 host = ["dep:derisk-apps", "dep:mcsapi-compositor", "dep:mcsapi-runtime"]
+
