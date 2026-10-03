@@ -1,0 +1,13 @@
+[package]
+name = "derisk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "An adaptive, agent-first Wayland desktop shell built on mcsapi"
+license = "GPL-3.0-only"
+repository = "https://github.com/dasmatus/derisk"
+
+[dependencies]
+mcsapi = { git = "https://github.com/dasmatus/mcsapi" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
