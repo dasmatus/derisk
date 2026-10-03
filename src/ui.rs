@@ -504,7 +504,7 @@ impl ShellUi {
             let r = to_rect(fit(frame, cell));
             let response =
                 ui.interact(r, Id::new(("derisk-win", w.get())), Sense::click_and_drag());
-            if response.drag_started() {
+            if response.drag_started_by(egui::PointerButton::Primary) {
                 self.overview_drag = Some(*w);
             }
             let lifted = self.overview_drag == Some(*w);
@@ -592,7 +592,7 @@ impl ShellUi {
             );
         }
         if let Some(w) = self.overview_drag
-            && ui.input(|i| i.pointer.any_released())
+            && ui.input(|i| i.pointer.primary_released())
         {
             self.overview_drag = None;
             if let Some(i) = drop_on {
