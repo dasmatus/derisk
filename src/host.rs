@@ -542,7 +542,8 @@ impl Host {
                 _ => log(Priority::Warning, "systemd-run failed, launching directly"),
             }
         }
-        let mut command = Command::new(app);
+        let executable = app.strip_suffix(".desktop").unwrap_or(app);
+        let mut command = Command::new(executable);
         command
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env("XDG_SESSION_TYPE", "wayland")
