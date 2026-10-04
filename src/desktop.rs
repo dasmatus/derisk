@@ -330,9 +330,13 @@ impl DesktopEntry {
     }
 }
 
-/// Whether `id` is a valid action ID: ASCII letters, digits and `-`.
+/// Whether `id` is a valid desktop action identifier.
 pub fn is_action_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
 /// `applications` directories in XDG precedence order: `$XDG_DATA_HOME`
