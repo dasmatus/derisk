@@ -197,9 +197,22 @@ impl ShellUi {
         &self.blurs
     }
 
-    /// Records a translucent panel so the compositor blurs behind it.
-    fn frost(&mut self, area: Rect, corner_radius: u8) {
-        if self.look.blur == 0 {
+    /// The startup animation's frame `elapsed_ms` after start. Low power mode
+    /// skips the animation; reduced motion turns it into a cross-fade.
+    pub fn startup_frame(&self, elapsed_ms: u32) -> StartupFrame {
+        if self.look.low_power {
+            StartupFrame::DONE
+        } else {
+            self.startup.frame(elapsed_ms)
+        }
+    }
+
+    /// Records a panel filled with the background at `opacity` so the
+    /// compositor blurs behind it. Nothing shows through an opaque or
+    /// invisible panel, so those aren't blurred.
+    fn frost(&mut self, area: Rect, corner_radius: u8, opacity: f32) {
+        let opacity = opacity * f32::from(self.theme.background.a()) / 255.0;
+        if self.look.blur == 0 || opacity <= 0.0 || opacity >= 1.0 {
             return;
         }
         let area = Geometry::new(
@@ -305,7 +318,7 @@ impl ShellUi {
         self.look = shell.look();
         self.blurs.clear();
         self.startup.reduced_motion = self.reduced_motion || !self.look.animate;
-        let frame = self.startup.frame(elapsed_ms);
+        let frame = self.startup_frame(elapsed_ms);
         self.drag_preview(ui, shell);
         self.snap_assist(ui, shell, &mut actions);
         if shell.overview_visible() {
@@ -351,7 +364,7 @@ impl ShellUi {
         let Some(assist) = shell.snap_assist() else {
             return;
         };
-        self.frost(to_rect(assist.frame), 12);
+        self.frost(to_rect(assist.frame), 12, self.look.snap_assist);
         ui.painter().rect_filled(
             to_rect(assist.frame),
             12,
@@ -400,9 +413,7 @@ impl ShellUi {
             vec2(output.width(), height),
         );
         let opacity = frame.shell_opacity.max(0.0);
-        if opacity > 0.0 {
-            self.frost(bar, 0);
-        }
+        self.frost(bar, 0, self.look.top_bar * opacity);
         ui.painter().rect_filled(
             bar,
             0,
@@ -597,7 +608,7 @@ impl ShellUi {
             }
         }
         let area = shell.work_area();
-        self.frost(to_rect(area), 0);
+        self.frost(to_rect(area), 0, self.look.overview);
         ui.painter().rect_filled(
             to_rect(area),
             0,

@@ -387,7 +387,7 @@ impl Session {
 
     fn startup_done(&self) -> bool {
         let elapsed = self.start.elapsed().as_millis() as u32;
-        self.ui.startup.frame(elapsed).done
+        self.ui.startup_frame(elapsed).done
     }
 }
 
@@ -572,13 +572,13 @@ impl compositor::Shell for Session {
             return;
         }
         let window = Some(window.get());
-        self.dispatch(vec![match request {
+        let action = match request {
             ClientRequest::Maximize => Action::ToggleMaximize { window },
             ClientRequest::Minimize => Action::Minimize { window },
-            // Requests mcsapi learns later are ignored until derisk has an
-            // action for them.
+            // Requests added to the compositor later are ignored until handled.
             _ => return,
-        }]);
+        };
+        self.dispatch(vec![action]);
     }
 
     fn theme(&self) -> Theme {
@@ -641,10 +641,16 @@ impl compositor::Shell for Session {
             .collect()
     }
 
-    // The look's interval already encodes reduced motion and low power, so
-    // the output's refresh rate does not change it yet.
-    fn frame_interval(&self, _timing: &OutputTiming) -> Duration {
-        self.shell.look().frame_interval
+    fn frame_interval(&self, timing: &OutputTiming) -> Duration {
+        let look = self.shell.look();
+        let timing = OutputTiming {
+            vrr: look.vrr.unwrap_or(timing.vrr),
+            ..*timing
+        };
+        match look.max_fps {
+            Some(fps) => timing.interval_for(fps),
+            None => timing.refresh_interval(),
+        }
     }
 
     fn spawn_argv(&mut self, app: &str) -> Vec<String> {

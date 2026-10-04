@@ -140,8 +140,19 @@ fn overview_grid_and_battery() {
         Battery::read(&dir),
         Some(Battery {
             percent: 77,
-            charging: true
+            charging: true,
+            discharging: false,
         })
     );
+    std::fs::write(bat.join("status"), "Not charging\n").unwrap();
+    let held = Battery::read(&dir).unwrap();
+    assert!(!held.charging && !held.discharging);
+    std::fs::write(bat.join("status"), "Discharging\n").unwrap();
+    assert!(Battery::read(&dir).unwrap().discharging);
+    let ac = dir.join("AC");
+    std::fs::create_dir_all(&ac).unwrap();
+    std::fs::write(ac.join("type"), "Mains\n").unwrap();
+    std::fs::write(ac.join("online"), "1\n").unwrap();
+    assert!(!Battery::read(&dir).unwrap().discharging);
     let _ = std::fs::remove_dir_all(&dir);
 }
