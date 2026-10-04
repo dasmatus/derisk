@@ -18,25 +18,36 @@
 #![deny(missing_docs)]
 
 mod model;
+mod pages;
+mod shortcuts;
 
 use std::path::PathBuf;
 
 use mcsapi_ui::{App, Theme, egui};
 pub use model::{
-    Accent, Appearance, ColorScheme, DesktopPrefs, Input, Layout, LowPower, Notifications,
-    PanelOpacity, Power, Profile, Settings, Vrr, Warning, default_path,
+    Accent, Appearance, BarPosition, ColorScheme, DesktopPrefs, Fit, Input, Layout, LowPower,
+    Notifications, PanelOpacity, Power, Profile, Rgb, Settings, TopBar, Vrr, Wallpaper,
+    WallpaperKind, Warning, WindowStyle, default_path,
 };
+pub use pages::{IMAGE_EXTENSIONS, candidates};
+pub use shortcuts::{Chord, KeyName, Shortcut, Shortcuts};
 
 /// A page of the Settings app.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Page {
-    /// Colors, text size, motion, blur, and panel opacity.
+    /// Colors, text size, motion, blur, panel opacity, and window frames.
     #[default]
     Appearance,
+    /// The desktop background: color, gradient, picture, slideshow, video.
+    Wallpaper,
+    /// The top bar's position and contents.
+    TopBar,
     /// Layout, gaps, workspaces, profile, and variable refresh rate.
     Desktop,
     /// Keyboard and pointer.
     Input,
+    /// Rebindable keyboard shortcuts.
+    Shortcuts,
     /// Banners and sounds.
     Notifications,
     /// Dimming, locking, suspend, and low power mode.
@@ -47,10 +58,13 @@ pub enum Page {
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::Appearance,
+        Self::Wallpaper,
+        Self::TopBar,
         Self::Desktop,
         Self::Input,
+        Self::Shortcuts,
         Self::Notifications,
         Self::Power,
         Self::About,
@@ -60,6 +74,9 @@ impl Page {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
+            Self::Wallpaper => "Wallpaper",
+            Self::TopBar => "Top bar",
+            Self::Shortcuts => "Shortcuts",
             Self::Desktop => "Desktop",
             Self::Input => "Keyboard & pointer",
             Self::Notifications => "Notifications",
@@ -79,6 +96,7 @@ pub struct SettingsApp {
     /// The visible page.
     pub page: Page,
     status: Option<String>,
+    drafts: pages::Drafts,
 }
 
 impl Default for SettingsApp {
@@ -115,8 +133,9 @@ impl SettingsApp {
         };
         Self {
             path,
+            settings: saved.clone(),
+            drafts: pages::Drafts::new(&saved),
             saved,
-            settings: saved,
             page: Page::default(),
             status,
         }
@@ -145,7 +164,7 @@ impl SettingsApp {
         };
         self.status = Some(match self.settings.save(path) {
             Ok(()) => {
-                self.saved = self.settings;
+                self.saved = self.settings.clone();
                 "Saved".into()
             }
             Err(error) => format!("Could not save: {error}"),
@@ -154,7 +173,8 @@ impl SettingsApp {
 
     /// Discards unsaved changes.
     pub fn revert(&mut self) {
-        self.settings = self.saved;
+        self.settings = self.saved.clone();
+        self.drafts = pages::Drafts::new(&self.saved);
         self.status = None;
     }
 
@@ -213,7 +233,17 @@ impl SettingsApp {
                         ui.add(egui::Slider::new(value, 20..=100).suffix(" %"));
                         ui.end_row();
                     }
+                    let w = &mut s.windows;
+                    ui.label("Window corners");
+                    ui.add(egui::Slider::new(&mut w.corner_radius, 0..=20).suffix(" px"));
+                    ui.end_row();
+                    ui.label("Window shadows");
+                    ui.checkbox(&mut w.shadows, "Soft shadow under windows");
+                    ui.end_row();
                 }
+                Page::Wallpaper => pages::wallpaper(ui, &mut s.wallpaper, &mut self.drafts, theme),
+                Page::TopBar => pages::top_bar(ui, &mut s.top_bar, theme),
+                Page::Shortcuts => pages::shortcuts(ui, &mut s.shortcuts, &mut self.drafts, theme),
                 Page::Desktop => {
                     let d = &mut s.desktop;
                     ui.label("Default layout");

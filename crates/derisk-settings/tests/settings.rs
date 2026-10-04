@@ -162,3 +162,113 @@ fn low_power_follows_the_battery_only_when_asked() {
     assert!(warnings.is_empty());
     assert_eq!(settings.power.low_power, LowPower::OnBattery);
 }
+
+#[test]
+fn customization_round_trips() {
+    use derisk_settings::{BarPosition, Chord, Fit, Rgb, Shortcut, WallpaperKind};
+    let mut settings = Settings::default();
+    settings.top_bar.position = BarPosition::Bottom;
+    settings.top_bar.autohide = true;
+    settings.top_bar.search = false;
+    settings.top_bar.clock_24h = false;
+    settings.windows.corner_radius = 0;
+    settings.windows.shadows = false;
+    settings.wallpaper.kind = WallpaperKind::Video;
+    // `#` inside a path or a color is not a comment.
+    settings.wallpaper.path = PathBuf::from("/home/me/Videos/loop #2.webm");
+    settings.wallpaper.fit = Fit::Fit;
+    settings.wallpaper.color = Rgb(0x12, 0xab, 0xef);
+    settings.wallpaper.interval_min = 5;
+    settings.wallpaper.pause_in_low_power = false;
+    settings
+        .shortcuts
+        .set(Shortcut::Palette, Chord::parse("Ctrl+Alt+P"));
+    settings.shortcuts.set(Shortcut::Close, None);
+    let text = settings.to_text();
+    assert!(text.contains("wallpaper.color = #12abef\n"), "{text}");
+    assert!(text.contains("shortcut.palette = Ctrl+Alt+P\n"), "{text}");
+    assert!(text.contains("shortcut.close = none\n"), "{text}");
+    let (parsed, warnings) = Settings::parse(&text);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(parsed, settings);
+}
+
+#[test]
+fn wallpaper_paths_must_be_absolute() {
+    let mut settings = Settings::default();
+    assert!(!settings.set("wallpaper.path", "Pictures/a.png"));
+    assert!(settings.set("wallpaper.path", "/a.png"));
+    assert!(settings.set("wallpaper.path", ""));
+    assert!(!settings.set("wallpaper.color", "red"));
+    assert!(!settings.set("wallpaper.color", "#12345"));
+    assert!(!settings.set("windows.corner_radius", "21"));
+    let (parsed, _) = Settings::parse("wallpaper.color = #102030 # a comment\n");
+    assert_eq!(
+        parsed.wallpaper.color,
+        derisk_settings::Rgb(0x10, 0x20, 0x30)
+    );
+}
+
+#[test]
+fn chords_parse_and_clash() {
+    use derisk_settings::{Chord, KeyName, Shortcut, Shortcuts};
+    let chord = Chord::parse("shift + SUPER + m").unwrap();
+    assert!(chord.logo && chord.shift && !chord.ctrl);
+    assert_eq!(chord.key, KeyName::Letter('m'));
+    assert_eq!(chord.to_string(), "Super+Shift+M");
+    // A plain key would steal typing from apps.
+    assert_eq!(Chord::parse("Shift+M"), None);
+    assert_eq!(Chord::parse("Super+Super+M"), None);
+    assert_eq!(Chord::parse("Super+F13"), None);
+    let mut shortcuts = Shortcuts::default();
+    assert!(shortcuts.clashes().is_empty());
+    shortcuts.set(Shortcut::Close, Chord::parse("Super+F"));
+    assert_eq!(shortcuts.clashes(), [Shortcut::Close, Shortcut::Float]);
+    // The first in the list keeps the chord until the clash is fixed.
+    assert_eq!(
+        shortcuts.lookup(Chord::parse("Super+F").unwrap()),
+        Some(Shortcut::Close)
+    );
+}
+
+#[test]
+fn the_wallpaper_page_renders_every_kind() {
+    let context = egui::Context::default();
+    let mut app = SettingsApp::open(None);
+    app.page = Page::Wallpaper;
+    for kind in derisk_settings::WallpaperKind::ALL {
+        app.settings.wallpaper.kind = kind;
+        let mut output = run_frame(
+            &mut app,
+            &context,
+            egui::RawInput::default(),
+            &Theme::default(),
+        );
+        assert!(!output.shapes.is_empty());
+        output.textures_delta.clear();
+    }
+}
+
+#[test]
+fn slideshow_candidates_are_folders_of_pictures() {
+    use derisk_settings::{WallpaperKind, candidates};
+    let dir = temp_dir("candidates");
+    std::fs::create_dir_all(dir.join("shots")).unwrap();
+    std::fs::write(dir.join("shots/a.PNG"), b"").unwrap();
+    std::fs::create_dir_all(dir.join("empty")).unwrap();
+    std::fs::write(dir.join("b.jpg"), b"").unwrap();
+    std::fs::write(dir.join("c.webm"), b"").unwrap();
+    std::fs::write(dir.join("notes.txt"), b"").unwrap();
+    let dirs = [dir.clone()];
+    assert_eq!(candidates(WallpaperKind::Image, &dirs), [dir.join("b.jpg")]);
+    assert_eq!(
+        candidates(WallpaperKind::Video, &dirs),
+        [dir.join("c.webm")]
+    );
+    // The folder itself holds a picture (b.jpg), and so does shots/.
+    assert_eq!(
+        candidates(WallpaperKind::Slideshow, &dirs),
+        [dir.clone(), dir.join("shots")]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

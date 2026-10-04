@@ -13,6 +13,7 @@
 
 use std::path::PathBuf;
 
+use derisk_settings::BarPosition;
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
     Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, pos2,
@@ -90,6 +91,11 @@ pub struct ShellUi {
     reduced_motion: bool,
     look: Look,
     blurs: Vec<BlurArea>,
+    /// How far an auto-hidden top bar is revealed, 0 (hidden) to 1.
+    bar_shown: f32,
+    /// Where the top bar took the pointer in the last frame; `None` while it
+    /// is hidden.
+    bar_rect: Option<Rect>,
 }
 
 /// Command palette state. The host fills [`PaletteUi::extra`] and
@@ -186,7 +192,15 @@ impl ShellUi {
             reduced_motion,
             look: shell.look(),
             blurs: Vec::new(),
+            bar_shown: 1.0,
+            bar_rect: None,
         }
+    }
+
+    /// Where the top bar was drawn by the last [`ShellUi::show`]; `None`
+    /// while auto-hide keeps it off screen. Hosts give it the pointer there.
+    pub fn bar_rect(&self) -> Option<Rect> {
+        self.bar_rect
     }
 
     /// Areas to blur under the translucent panels shown by the last
@@ -243,9 +257,12 @@ impl ShellUi {
     pub fn paint_decoration(&self, painter: &Painter, shell: &Shell, p: &WindowPlacement) {
         let bar = shell.profile().title_bar;
         let theme = &self.theme;
+        // Client surfaces are drawn square by the compositor, so only the
+        // title bar's top corners round.
+        let r = shell.effects.windows.corner_radius.min(20);
         let radius = CornerRadius {
-            nw: 10,
-            ne: 10,
+            nw: r,
+            ne: r,
             sw: 0,
             se: 0,
         };
@@ -404,12 +421,54 @@ impl ShellUi {
         frame: StartupFrame,
         actions: &mut Vec<Action>,
     ) {
-        let output = to_rect(shell.output());
-        let height = shell.profile().top_bar as f32;
-        let bar = Rect::from_min_size(
-            output.min + vec2(0.0, frame.bar_offset),
-            vec2(output.width(), height),
-        );
+        let prefs = shell.effects.top_bar;
+        let home = to_rect(shell.bar_area());
+        let height = home.height();
+        let bottom = prefs.position == BarPosition::Bottom;
+        // Auto-hide: reveal while the pointer touches the bar's edge or is
+        // over the bar, and while the overview, palette or startup show.
+        let target = if prefs.autohide && frame.done {
+            let output = to_rect(shell.output());
+            let pointer = ui.ctx().input(|i| i.pointer.latest_pos());
+            let at_edge = pointer.is_some_and(|p| {
+                if bottom {
+                    p.y >= output.bottom() - 2.0
+                } else {
+                    p.y <= output.top() + 1.0
+                }
+            });
+            let over = pointer.is_some_and(|p| self.bar_rect.is_some_and(|r| r.contains(p)));
+            let open = shell.overview_visible() || shell.palette_visible();
+            if at_edge || over || open { 1.0 } else { 0.0 }
+        } else {
+            1.0
+        };
+        self.bar_shown = if self.look.animate {
+            let step = ui.ctx().input(|i| i.stable_dt).min(0.1) / 0.15;
+            if target > self.bar_shown {
+                (self.bar_shown + step).min(target)
+            } else {
+                (self.bar_shown - step).max(target)
+            }
+        } else {
+            target
+        };
+        if self.bar_shown != target {
+            ui.ctx().request_repaint();
+        }
+        if self.bar_shown <= 0.0 {
+            self.bar_rect = None;
+            return;
+        }
+        // Slide away from the edge: up for a top bar, down for a bottom one.
+        let hidden = height * (1.0 - self.bar_shown);
+        let offset = if bottom {
+            hidden - frame.bar_offset
+        } else {
+            frame.bar_offset - hidden
+        };
+        let bar = home.translate(vec2(0.0, offset));
+        self.bar_rect = Some(bar);
         let opacity = frame.shell_opacity.max(0.0);
         self.frost(bar, 0, self.look.top_bar * opacity);
         ui.painter().rect_filled(
@@ -437,21 +496,22 @@ impl ShellUi {
                 {
                     actions.push(Action::Overview { visible: None });
                 }
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("🔍  Search or ask…").color(self.theme.border),
+                if prefs.search
+                    && ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("🔍  Search or ask…").color(self.theme.border),
+                            )
+                            .fill(self.theme.surface)
+                            .stroke(Stroke::new(1.0, self.theme.border))
+                            .corner_radius(8),
                         )
-                        .fill(self.theme.surface)
-                        .stroke(Stroke::new(1.0, self.theme.border))
-                        .corner_radius(8),
-                    )
-                    .on_hover_text("Command palette (Super+Space)")
-                    .clicked()
+                        .on_hover_text("Command palette")
+                        .clicked()
                 {
                     actions.push(Action::Palette { visible: None });
                 }
-                if let Some(w) = focused {
+                if let Some(w) = focused.filter(|_| prefs.app_name) {
                     let (app, title) = shell.window_label(w).unwrap_or_default();
                     // Reverse-DNS app IDs (org.derisk.files) read better as the title.
                     let name = if app.contains('.') && !title.is_empty() {
@@ -465,12 +525,17 @@ impl ShellUi {
                     menu_button(ui, &menu, focused.map(|w| w.get()), actions);
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(format!(
-                        "{}  {}",
-                        shell.clock.date_label(),
+                    let time = if prefs.clock_24h {
                         shell.clock.time_label()
-                    ));
-                    if let Some(b) = shell.battery {
+                    } else {
+                        shell.clock.time_label_12h()
+                    };
+                    ui.label(if prefs.date {
+                        format!("{}  {time}", shell.clock.date_label())
+                    } else {
+                        time
+                    });
+                    if let Some(b) = shell.battery.filter(|_| prefs.battery) {
                         ui.label(format!(
                             "{}{}%",
                             if b.charging { "⚡" } else { "▮" },

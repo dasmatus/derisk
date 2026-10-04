@@ -23,6 +23,7 @@
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
 //!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.
+//! - [`wallpaper`]: the desktop background, from a color to a looping video.
 //!
 //! ```
 //! use derisk::{action::Action, geom::rect, shell::Shell, snap::SnapZone};
@@ -58,5 +59,6 @@ pub mod systemd;
 pub mod time;
 pub mod tray;
 pub mod ui;
+pub mod wallpaper;
 
 pub use mcsapi;

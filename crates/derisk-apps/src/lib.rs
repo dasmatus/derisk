@@ -109,9 +109,18 @@ pub const APPS: [AppInfo; 5] = [
     AppInfo {
         id: SETTINGS,
         name: "Settings",
-        summary: "Appearance, desktop, input, notifications, and power",
+        summary: "Appearance, wallpaper, top bar, shortcuts, input, and power",
         icon: "⚙",
-        keywords: &["preferences", "theme", "accent", "keyboard", "power"],
+        keywords: &[
+            "preferences",
+            "theme",
+            "accent",
+            "keyboard",
+            "power",
+            "wallpaper",
+            "background",
+            "shortcuts",
+        ],
         desktop_file: include_str!("../data/org.derisk.settings.desktop"),
         create: || Box::new(derisk_settings::SettingsApp::default()),
         action: settings_action,
@@ -184,8 +193,11 @@ fn settings_action(action: &str) -> Option<Box<dyn App>> {
 
     let page = match action {
         "appearance" => Page::Appearance,
+        "wallpaper" => Page::Wallpaper,
+        "top-bar" => Page::TopBar,
         "desktop" => Page::Desktop,
         "input" => Page::Input,
+        "shortcuts" => Page::Shortcuts,
         "notifications" => Page::Notifications,
         "power" => Page::Power,
         "about" => Page::About,

@@ -21,8 +21,8 @@ use derisk::{
     action::{Action, Effect},
     conversation::Source,
     desktop::{self, DesktopEntry},
-    effects::SettingsWatch,
-    geom::rect,
+    effects::{Effects, SettingsWatch},
+    geom::{inset, rect},
     ipc,
     keys::{self, Key, Mods, SuperTap},
     overview::Battery,
@@ -31,8 +31,10 @@ use derisk::{
     snap::{Direction, SnapZone},
     systemd::{self, Priority},
     time::Clock,
-    ui::{ShellUi, paint_wallpaper},
+    ui::ShellUi,
+    wallpaper::{self, Visibility, WallpaperPainter},
 };
+use derisk_settings::Shortcuts;
 use mcsapi::WindowId;
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, InstanceId,
@@ -73,6 +75,8 @@ pub struct Session {
     installed: Vec<DesktopEntry>,
     pending_actions: PendingActions,
     settings: SettingsWatch,
+    shortcuts: Shortcuts,
+    wallpaper: WallpaperPainter,
 }
 
 /// Core-app actions waiting for the compositor to launch their app, shared
@@ -135,6 +139,8 @@ impl Session {
             installed,
             pending_actions,
             settings: SettingsWatch::new(derisk_settings::default_path()),
+            shortcuts: Shortcuts::default(),
+            wallpaper: WallpaperPainter::default(),
         }
     }
 
@@ -356,8 +362,10 @@ impl compositor::Shell for Session {
         self.last_tick = Some(Instant::now());
         self.shell.clock = Clock::now_utc();
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
-        if let Some(effects) = self.settings.poll() {
-            self.shell.effects = effects;
+        if let Some(settings) = self.settings.poll() {
+            self.shell.effects = Effects::from_settings(&settings);
+            self.shortcuts = settings.shortcuts;
+            self.wallpaper.configure(&settings.wallpaper);
         }
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
@@ -370,7 +378,10 @@ impl compositor::Shell for Session {
         };
         self.shell.overview_visible()
             || self.shell.palette_visible()
-            || y < self.shell.profile().top_bar
+            || self
+                .ui
+                .bar_rect()
+                .is_some_and(|r| r.contains(egui::pos2(x as f32, y as f32)))
             || self.shell.snap_assist().is_some_and(|a| inside(a.frame))
             || !self.startup_done()
     }
@@ -409,7 +420,9 @@ impl compositor::Shell for Session {
             ctrl: key.mods.ctrl,
             alt: key.mods.alt,
         };
-        if let Some(action) = layout_key(key.sym).and_then(|k| keys::binding(mods, k)) {
+        if let Some(action) =
+            layout_key(key.sym).and_then(|k| keys::binding_with(&self.shortcuts, mods, k))
+        {
             if key.pressed {
                 self.dispatch(vec![action]);
             }
@@ -452,7 +465,19 @@ impl compositor::Shell for Session {
     }
 
     fn paint_background(&mut self, painter: &egui::Painter, screen: egui::Rect) {
-        paint_wallpaper(painter, screen, &self.ui.theme);
+        let look = self.shell.look();
+        let seen = Visibility {
+            // A maximized window keeps the gap around it; a strip that thin
+            // isn't worth decoding video for.
+            covered: !self.shell.overview_visible()
+                && wallpaper::covered(
+                    inset(self.shell.work_area(), self.shell.profile().gap),
+                    self.shell.placements().iter().map(|p| p.frame),
+                ),
+            low_power: look.low_power,
+            reduce_motion: !look.animate,
+        };
+        self.wallpaper.paint(painter, screen, &self.ui.theme, seen);
     }
 
     fn paint_decoration(&mut self, painter: &egui::Painter, placement: &Placement) {

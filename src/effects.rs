@@ -26,7 +26,7 @@ use std::{
     time::SystemTime,
 };
 
-use derisk_settings::{LowPower, PanelOpacity, Settings, Vrr};
+use derisk_settings::{LowPower, PanelOpacity, Settings, TopBar, Vrr, WindowStyle};
 use mcsapi::Geometry;
 
 use crate::overview::Battery;
@@ -50,6 +50,10 @@ pub struct Effects {
     pub low_power: LowPower,
     /// Whether the display has variable refresh rate.
     pub vrr: Vrr,
+    /// The top bar's position and contents.
+    pub top_bar: TopBar,
+    /// Window frame corners and shadows.
+    pub windows: WindowStyle,
 }
 
 impl Default for Effects {
@@ -103,6 +107,8 @@ impl Effects {
             reduce_motion: a.reduce_motion,
             low_power: settings.power.low_power,
             vrr: settings.desktop.vrr,
+            top_bar: settings.top_bar,
+            windows: settings.windows,
         }
     }
 
@@ -126,7 +132,7 @@ impl Effects {
             overview: opacity(self.panels.overview),
             snap_assist: opacity(self.panels.snap_assist),
             animate: !low_power && !self.reduce_motion,
-            shadows: !low_power,
+            shadows: !low_power && self.windows.shadows,
             max_fps: low_power.then_some(LOW_POWER_MAX_FPS),
             vrr: match self.vrr {
                 Vrr::Automatic => None,
@@ -137,8 +143,8 @@ impl Effects {
     }
 }
 
-/// Reloads [`Effects`] when the settings file changes, so the Settings app
-/// applies live.
+/// Reloads the settings when the file changes, so the Settings app applies
+/// live.
 #[derive(Debug)]
 pub struct SettingsWatch {
     path: Option<PathBuf>,
@@ -161,11 +167,11 @@ impl SettingsWatch {
         self.path.as_deref()
     }
 
-    /// New effects on the first call and whenever the file's modification
+    /// The settings on the first call and whenever the file's modification
     /// time changes (including when it appears or goes away), else `None`.
-    pub fn poll(&mut self) -> Option<Effects> {
+    pub fn poll(&mut self) -> Option<Settings> {
         let Some(path) = &self.path else {
-            return (!std::mem::replace(&mut self.loaded, true)).then(Effects::default);
+            return (!std::mem::replace(&mut self.loaded, true)).then(Settings::default);
         };
         let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         if self.loaded && modified == self.modified {
@@ -174,7 +180,7 @@ impl SettingsWatch {
         let (settings, _) = Settings::load(path).ok()?;
         self.loaded = true;
         self.modified = modified;
-        Some(Effects::from_settings(&settings))
+        Some(settings)
     }
 }
 
@@ -258,6 +264,14 @@ mod tests {
     }
 
     #[test]
+    fn shadows_follow_the_window_style() {
+        let mut effects = Effects::default();
+        assert!(effects.resolve(None).shadows);
+        effects.windows.shadows = false;
+        assert!(!effects.resolve(None).shadows);
+    }
+
+    #[test]
     fn reduce_motion_stops_animation_but_keeps_blur() {
         let effects = Effects {
             reduce_motion: true,
@@ -290,24 +304,24 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.conf");
         let mut watch = SettingsWatch::new(Some(path.clone()));
-        assert_eq!(watch.poll(), Some(Effects::default()));
+        assert_eq!(watch.poll(), Some(Settings::default()));
         assert_eq!(watch.poll(), None);
 
         std::fs::write(&path, "appearance.blur = 2\npower.low_power = on\n").unwrap();
-        let effects = watch.poll().expect("file appeared");
+        let effects = Effects::from_settings(&watch.poll().expect("file appeared"));
         assert_eq!(effects.blur, 2);
         assert_eq!(effects.low_power, LowPower::On);
         assert_eq!(watch.poll(), None);
 
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(watch.poll(), Some(Effects::default()));
+        assert_eq!(watch.poll(), Some(Settings::default()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn watch_without_a_path_yields_defaults_once() {
         let mut watch = SettingsWatch::new(None);
-        assert_eq!(watch.poll(), Some(Effects::default()));
+        assert_eq!(watch.poll(), Some(Settings::default()));
         assert_eq!(watch.poll(), None);
     }
 }
