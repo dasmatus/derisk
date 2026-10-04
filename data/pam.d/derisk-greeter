@@ -1,0 +1,8 @@
+#%PAM-1.0
+# The greeter's own session under `derisk display-manager`. The greeter never
+# authenticates; this exists so pam_systemd gives it a logind session of
+# class greeter on the seat, which cage needs to open the display. Install as
+# /etc/pam.d/derisk-greeter.
+auth     required  pam_deny.so
+account  required  pam_permit.so
+session  optional  pam_systemd.so

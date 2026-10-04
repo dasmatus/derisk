@@ -20,8 +20,8 @@
 //! - [`assistant`] and [`ipc`]: natural-language and agent control.
 //! - [`conversation`]: requests and their progress, shown in the palette.
 //! - [`keys`]: keyboard shortcuts.
-//! - [`lock`] and [`greetd`]: the lock screen, and logging in through greetd
-//!   with the same screen.
+//! - [`lock`] and [`greetd`]: the lock screen, and the login conversation
+//!   `derisk greeter` holds with `derisk display-manager` (or greetd).
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
 //!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.

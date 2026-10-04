@@ -1618,7 +1618,8 @@ pub fn show_greeter(
         match login.phase().clone() {
             Phase::User => {
                 if users.len() > 1 {
-                    ui.horizontal_wrapped(|ui| {
+                    // One per line, centered under the clock like the rest.
+                    ui.vertical_centered(|ui| {
                         for user in users {
                             if ui.selectable_label(login.username == *user, user).clicked() {
                                 login.username = user.clone();

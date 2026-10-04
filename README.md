@@ -124,20 +124,24 @@ first); unit actions only apply to units that are currently failed.
   lock-session`, `lock-sessions`, `busctl wait` on the session's `Lock`
   signal) and sets logind's `LockedHint`. While locked the agent protocol
   answers nothing.
-- **Login screen.** `derisk greeter` is the lock screen as a
-  [greetd](https://git.sr.ht/~kennylevinsen/greetd) greeter: it asks who is
-  logging in (filled in when there is one regular user), relays PAM's
-  questions from greetd, and asks greetd to start the session command given
-  after `--`. greetd owns PAM and the logind session; the greeter checks
-  nothing itself. Like `derisk session` it runs nested, so under greetd it
-  runs inside cage:
+- **Display manager.** `derisk display-manager` replaces gdm: run as root
+  from a system service, it starts `derisk greeter` (the lock screen as a
+  login screen) on a VT as an unprivileged user, checks the password it is
+  given with PAM (`data/pam.d/derisk-login`), and then opens the user's PAM
+  session, so pam_systemd registers it with logind and pam_systemd_home
+  unlocks a homed home area, and runs the session command as the user. When
+  the session ends the greeter comes back. The root half draws nothing; the
+  greeter talks to it over greetd's protocol on a socket only the greeter
+  user can open, so `derisk greeter` also runs unchanged under greetd. Both
+  run nested for now, so each runs inside cage:
 
-  ```toml
-  # /etc/greetd/config.toml
-  [default_session]
-  command = "cage -s -- derisk greeter -- cage -s -- derisk session --execute"
-  user = "greeter"
+  ```console
+  # derisk display-manager --vt 1 -- \
+      cage -s -- derisk greeter -- cage -s -- derisk session --execute
   ```
+
+  It needs a `derisk-greeter` system user and the two PAM services in
+  `data/pam.d`.
 - **Failed units widget.** Failed user units show in the top bar and overview
   with restart and reset actions.
 
@@ -149,6 +153,7 @@ $ cp data/systemd/user/* ~/.config/systemd/user/
 $ systemctl --user daemon-reload
 $ systemctl --user start derisk-agent.socket   # headless only; a session serves the socket itself
 $ sudo install -m644 data/pam.d/derisk /etc/pam.d/derisk   # for the lock screen
+$ sudo install -m644 data/pam.d/derisk-login data/pam.d/derisk-greeter /etc/pam.d/   # for the display manager
 ```
 
 ## Usage

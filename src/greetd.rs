@@ -6,6 +6,10 @@
 //! socket in `$GREETD_SOCK`: each message is JSON preceded by its length as a
 //! native-endian `u32`, and every request gets exactly one response.
 //!
+//! `derisk display-manager` serves the same protocol to the same greeter, so
+//! the greeter runs unchanged under either; the server half is
+//! [`read_request`] and [`write_response`].
+//!
 //! [`Login`] is that conversation as a state machine, kept free of sockets
 //! and drawing so it can be tested: the host feeds it what the user typed and
 //! what greetd answered, and sends whatever request it returns.
@@ -15,7 +19,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 
 /// A request to greetd.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
     /// Start authenticating `username`.
@@ -41,7 +45,7 @@ pub enum Request {
 }
 
 /// What an auth message asks for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMessageType {
     /// A prompt whose answer may be shown, such as a user name.
@@ -55,7 +59,7 @@ pub enum AuthMessageType {
 }
 
 /// greetd's answer to a [`Request`].
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     /// The request succeeded.
@@ -76,30 +80,48 @@ pub enum Response {
     },
 }
 
-/// Writes one length-prefixed message.
-pub fn write_request(w: &mut impl Write, request: &Request) -> io::Result<()> {
-    let body = serde_json::to_vec(request)?;
-    let len = u32::try_from(body.len()).map_err(|_| io::Error::other("request too long"))?;
+fn write_message(w: &mut impl Write, message: &impl Serialize) -> io::Result<()> {
+    let body = serde_json::to_vec(message)?;
+    let len = u32::try_from(body.len()).map_err(|_| io::Error::other("message too long"))?;
     w.write_all(&len.to_ne_bytes())?;
     w.write_all(&body)?;
     w.flush()
 }
 
-/// Largest response accepted. greetd's are a few hundred bytes; this bounds
-/// what a confused peer can make the greeter allocate.
-const MAX_RESPONSE: u32 = 64 * 1024;
+/// Largest message accepted. greetd's are a few hundred bytes; this bounds
+/// what a confused peer can make either side allocate.
+const MAX_MESSAGE: u32 = 64 * 1024;
 
-/// Reads one length-prefixed message.
-pub fn read_response(r: &mut impl Read) -> io::Result<Response> {
+fn read_message<T: for<'de> Deserialize<'de>>(r: &mut impl Read) -> io::Result<T> {
     let mut len = [0; 4];
     r.read_exact(&mut len)?;
     let len = u32::from_ne_bytes(len);
-    if len > MAX_RESPONSE {
-        return Err(io::Error::other(format!("{len}-byte response from greetd")));
+    if len > MAX_MESSAGE {
+        return Err(io::Error::other(format!("{len}-byte message")));
     }
     let mut body = vec![0; len as usize];
     r.read_exact(&mut body)?;
     Ok(serde_json::from_slice(&body)?)
+}
+
+/// Writes one request (the greeter's side).
+pub fn write_request(w: &mut impl Write, request: &Request) -> io::Result<()> {
+    write_message(w, request)
+}
+
+/// Reads one response (the greeter's side).
+pub fn read_response(r: &mut impl Read) -> io::Result<Response> {
+    read_message(r)
+}
+
+/// Reads one request (the display manager's side).
+pub fn read_request(r: &mut impl Read) -> io::Result<Request> {
+    read_message(r)
+}
+
+/// Writes one response (the display manager's side).
+pub fn write_response(w: &mut impl Write, response: &Response) -> io::Result<()> {
+    write_message(w, response)
 }
 
 /// Where the conversation is.
@@ -411,9 +433,24 @@ mod tests {
         framed.extend(body);
         assert_eq!(read_response(&mut &framed[..]).unwrap(), secret());
 
-        let mut huge = (MAX_RESPONSE + 1).to_ne_bytes().to_vec();
+        let mut huge = (MAX_MESSAGE + 1).to_ne_bytes().to_vec();
         huge.extend(b"{}");
         assert!(read_response(&mut &huge[..]).is_err());
+    }
+
+    #[test]
+    fn server_side_round_trips() {
+        let mut wire = Vec::new();
+        let request = Request::StartSession {
+            cmd: vec!["derisk".into(), "session".into()],
+            env: vec!["A=b".into()],
+        };
+        write_request(&mut wire, &request).unwrap();
+        assert_eq!(read_request(&mut &wire[..]).unwrap(), request);
+
+        let mut wire = Vec::new();
+        write_response(&mut wire, &auth_error()).unwrap();
+        assert_eq!(read_response(&mut &wire[..]).unwrap(), auth_error());
     }
 
     #[test]
