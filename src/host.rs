@@ -40,8 +40,9 @@ use derisk::{
 };
 use mcsapi::WindowId;
 use mcsapi_compositor::{
-    self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, InstanceId,
-    KeyInput, KeyRoute, Keysym, OutputTiming, Placement, Press, Remote, Theme, egui,
+    self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, Input,
+    InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press, Remote,
+    Theme, egui,
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -514,14 +515,20 @@ impl compositor::Shell for Session {
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
         // Windows make room for the on-screen keyboard, and what it typed
-        // for them goes to the focused one.
+        // for them goes to the focused one. It goes through the same
+        // synthetic-input path agents use, so the keyboard can't confirm
+        // what only a direct tap may (the power-off dialog).
         self.shell.keyboard = self.ui.keyboard_height(&self.shell);
         for typed in self.ui.take_window_input() {
-            self.commands.push(match typed {
-                Typed::Text(text) => Command::TypeText(text),
-                Typed::Backspace => Command::Key(Keysym::BackSpace),
-                Typed::Enter => Command::Key(Keysym::Return),
-            });
+            let key = |sym| Input::Key {
+                sym,
+                mods: Modifiers::default(),
+            };
+            self.commands.push(Command::Input(match typed {
+                Typed::Text(text) => Input::Text(text),
+                Typed::Backspace => key(Keysym::BackSpace),
+                Typed::Enter => key(Keysym::Return),
+            }));
         }
         // Requests typed in the palette; their progress shows in its
         // conversation.
