@@ -59,6 +59,11 @@ SESSION OPTIONS:
     --socket <PATH>       Agent socket (default $XDG_RUNTIME_DIR/derisk/agent.sock)
     --reduced-motion      Cross-fade instead of the full startup animation
     --execute             Launch apps as systemd units and run session operations
+    --runtime <ROLE> <COMMAND>
+                          Start COMMAND (split on spaces) on the compositor's
+                          own connection as a panel or overlay: ROLE is app,
+                          overlay, or panel:<top|bottom|left|right>:<size>
+                          [:keyboard]. For GPUI programs (repeatable)
 
 AGENT OPTIONS:
     --socket <PATH>       Listen on a Unix socket (default: stdin/stdout)
@@ -115,6 +120,20 @@ fn session(args: &[String]) -> Result {
             }
             "--reduced-motion" => options.reduced_motion = true,
             "--execute" => options.execute = true,
+            "--runtime" => {
+                let role = host::parse_role(it.next().ok_or("--runtime needs a role")?)?;
+                let command = it.next().ok_or("--runtime needs a command")?;
+                let argv: Vec<&str> = command.split_whitespace().collect();
+                if argv.is_empty() {
+                    return Err("--runtime needs a command".into());
+                }
+                // Panels and overlays are part of the desktop: bring them
+                // back if they exit.
+                let restart = role != mcsapi_compositor::Role::App;
+                options
+                    .runtime
+                    .push(mcsapi_compositor::RuntimeClient::new(argv, role).restart(restart));
+            }
             other => return Err(format!("unknown session option: {other}").into()),
         }
     }
