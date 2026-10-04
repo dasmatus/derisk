@@ -11,7 +11,8 @@ repository = "https://github.com/dasmatus/derisk"
 [workspace.dependencies]
 # Until dasmatus/mcsapi#24 (a lock cancels the held press; it builds on #23's
 # frame pacing by refresh rate and VRR) merges, every mcsapi crate comes from
-# its branch so the apps and the compositor share one mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
+# its branch so the apps and the compositor share one mcsapi-ui. Then drop the
+# `branch` keys and run `cargo update -p mcsapi`.
 mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
 mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
 mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
