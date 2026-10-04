@@ -20,7 +20,12 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, mpsc},
+    process::{Child, Command as ProcessCommand, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -732,55 +737,125 @@ pub fn run(options: Options) -> Result {
         .title("derisk")
         .size(w, h)
         .apps(apps);
-    if let Some(path) = agent_socket(options.socket, compositor.remote())? {
+    // One remote for everything: each call to `remote()` replaces the
+    // compositor's job channel, which would disconnect the earlier handles.
+    let remote = compositor.remote();
+    if let Some(path) = agent_socket(options.socket, remote.clone())? {
         log(
             Priority::Notice,
             &format!("agent protocol on {}", path.display()),
         );
     }
-    if let Some(path) = lock_path {
-        watch_lock_signal(path, compositor.remote());
-    }
+    let lock_watch = lock_path.map(|path| LockWatch::start(path, remote));
     for app in options.launch {
         compositor = compositor.launch(app);
     }
-    compositor.run()?;
+    let result = compositor.run();
+    if let Some(watch) = lock_watch {
+        watch.stop();
+    }
+    result?;
     systemd::notify_stopping();
     Ok(())
 }
 
 /// Locks the screen whenever logind sends this session `Lock`, until the
 /// session ends or `busctl wait` stops working.
-fn watch_lock_signal(path: String, remote: Remote<Session>) {
-    std::thread::spawn(move || {
-        let argv = systemd::lock_signal_argv(&path);
-        loop {
-            match systemd::run(&argv) {
-                Ok(output) if output.status.success() => {
-                    if !remote.run(Session::lock_screen) {
+struct LockWatch {
+    child: Arc<Mutex<Option<Child>>>,
+    stopping: Arc<AtomicBool>,
+}
+
+impl LockWatch {
+    fn start(path: String, remote: Remote<Session>) -> Self {
+        let child = Arc::new(Mutex::new(None::<Child>));
+        let stopping = Arc::new(AtomicBool::new(false));
+        let watch = Self {
+            child: child.clone(),
+            stopping: stopping.clone(),
+        };
+        std::thread::spawn(move || {
+            let argv = systemd::lock_signal_argv(&path);
+            loop {
+                match wait_for_lock(&argv, &child, &stopping) {
+                    Ok(true) => {
+                        if !remote.run(Session::lock_screen) {
+                            return;
+                        }
+                    }
+                    Ok(false) => return,
+                    Err(e) => {
+                        log(
+                            Priority::Warning,
+                            &format!("not following logind lock requests: {e}"),
+                        );
                         return;
                     }
                 }
-                Ok(output) => {
-                    log(
-                        Priority::Warning,
-                        &format!(
-                            "not following logind lock requests: {}",
-                            String::from_utf8_lossy(&output.stderr).trim()
-                        ),
-                    );
-                    return;
-                }
-                Err(e) => {
-                    log(
-                        Priority::Warning,
-                        &format!("not following logind lock requests: {e}"),
-                    );
-                    return;
-                }
             }
+        });
+        watch
+    }
+
+    /// Ends the watch and the `busctl` it is waiting in, so a session that
+    /// closes leaves no process behind.
+    fn stop(self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        if let Ok(mut child) = self.child.lock()
+            && let Some(mut child) = child.take()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
         }
-    });
+    }
+}
+
+/// Runs one `busctl wait`. Returns whether the signal arrived, or `false`
+/// when the watch was stopped.
+fn wait_for_lock(
+    argv: &[String],
+    slot: &Mutex<Option<Child>>,
+    stopping: &AtomicBool,
+) -> std::io::Result<bool> {
+    {
+        let mut slot = slot.lock().map_err(|_| std::io::Error::other("poisoned"))?;
+        if stopping.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        let (program, args) = argv.split_first().ok_or(std::io::ErrorKind::InvalidInput)?;
+        *slot = Some(
+            ProcessCommand::new(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()?,
+        );
+    }
+    // The child stays in the slot, where stop() can kill it; poll it rather
+    // than block in wait() while holding the lock.
+    loop {
+        let mut slot = slot.lock().map_err(|_| std::io::Error::other("poisoned"))?;
+        let Some(child) = slot.as_mut() else {
+            return Ok(false);
+        };
+        if let Some(status) = child.try_wait()? {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
+            }
+            *slot = None;
+            if stopping.load(Ordering::SeqCst) {
+                return Ok(false);
+            }
+            if status.success() {
+                return Ok(true);
+            }
+            return Err(std::io::Error::other(stderr.trim().to_owned()));
+        }
+        drop(slot);
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn log(priority: Priority, message: &str) {
