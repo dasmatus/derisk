@@ -20,8 +20,11 @@
 #![deny(missing_docs)]
 
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use mcsapi_ui::{App, Theme, egui};
@@ -86,17 +89,20 @@ impl Document {
 
     /// Saves to `path` atomically and makes it the document's file.
     pub fn save_as(&mut self, path: &Path) -> io::Result<()> {
-        let mut temporary = path.as_os_str().to_owned();
-        temporary.push(".derisk-save");
-        let temporary = PathBuf::from(temporary);
-        fs::write(&temporary, &self.text)?;
-        if let Ok(meta) = fs::metadata(path) {
-            // Keep the original file's permissions, such as an executable bit.
-            let _ = fs::set_permissions(&temporary, meta.permissions());
-        }
-        fs::rename(&temporary, path).inspect_err(|_| {
-            let _ = fs::remove_file(&temporary);
-        })?;
+        // Keep the original file's permissions, such as an executable bit,
+        // and give a new file what a plain create would under the umask.
+        let mode = fs::metadata(path).map_or(0o666 & !umask(), |m| m.permissions().mode() & 0o7777);
+        let (temporary, mut file) = create_beside(path)?;
+        let written = file
+            .set_permissions(fs::Permissions::from_mode(mode))
+            .and_then(|()| file.write_all(self.text.as_bytes()))
+            .and_then(|()| file.sync_all());
+        drop(file);
+        written
+            .and_then(|()| fs::rename(&temporary, path))
+            .inspect_err(|_| {
+                let _ = fs::remove_file(&temporary);
+            })?;
         self.path = Some(path.to_owned());
         self.saved.clone_from(&self.text);
         Ok(())
@@ -332,4 +338,59 @@ impl App for EditorApp {
             });
         });
     }
+}
+
+/// Creates a new, empty file next to `path` for an atomic save, readable only
+/// by its owner until the caller sets its mode.
+///
+/// The name is fresh each time and the file is created with `O_EXCL`, which
+/// never follows a symlink and never opens a file that is already there. A
+/// fixed name (`<file>.derisk-save`, as this used to be) could be planted in a
+/// directory another user can write, as a symlink to one of this user's files
+/// or as a file the other user owns, and the save would then write the
+/// document through it.
+fn create_beside(path: &Path) -> io::Result<(PathBuf, fs::File)> {
+    static SAVES: AtomicU32 = AtomicU32::new(0);
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a file name"))?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    for _ in 0..64 {
+        let mut temporary = std::ffi::OsString::from(".");
+        temporary.push(name);
+        temporary.push(format!(
+            ".derisk-save-{}-{}-{nanos:x}",
+            std::process::id(),
+            SAVES.fetch_add(1, Ordering::Relaxed)
+        ));
+        let temporary = path.with_file_name(temporary);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+        {
+            Ok(file) => return Ok((temporary, file)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "no free name to save through",
+    ))
+}
+
+/// The process umask, read from /proc so it is not changed to find out.
+fn umask() -> u32 {
+    fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("Umask:"))
+                .and_then(|v| u32::from_str_radix(v.trim(), 8).ok())
+        })
+        .unwrap_or(0o022)
 }

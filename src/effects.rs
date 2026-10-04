@@ -144,6 +144,7 @@ pub struct SettingsWatch {
     path: Option<PathBuf>,
     modified: Option<SystemTime>,
     loaded: bool,
+    current: Settings,
 }
 
 impl SettingsWatch {
@@ -153,6 +154,7 @@ impl SettingsWatch {
             path,
             modified: None,
             loaded: false,
+            current: Settings::default(),
         }
     }
 
@@ -161,10 +163,17 @@ impl SettingsWatch {
         self.path.as_deref()
     }
 
+    /// The settings from the last [`SettingsWatch::poll`] that returned
+    /// effects, or the defaults before that.
+    pub fn current(&self) -> &Settings {
+        &self.current
+    }
+
     /// New effects on the first call and whenever the file's modification
     /// time changes (including when it appears or goes away), else `None`.
     pub fn poll(&mut self) -> Option<Effects> {
         let Some(path) = &self.path else {
+            self.current = Settings::default();
             return (!std::mem::replace(&mut self.loaded, true)).then(Effects::default);
         };
         let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
@@ -174,6 +183,7 @@ impl SettingsWatch {
         let (settings, _) = Settings::load(path).ok()?;
         self.loaded = true;
         self.modified = modified;
+        self.current = settings;
         Some(Effects::from_settings(&settings))
     }
 }
