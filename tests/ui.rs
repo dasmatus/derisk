@@ -349,7 +349,16 @@ fn palette_hands_requests_to_the_assistant_and_shows_the_conversation() {
         vec![key(egui::Key::Enter)],
         5000,
     );
-    assert!(matches!(actions[0], Action::Session { .. }), "{actions:?}");
+    assert!(
+        matches!(
+            actions[0],
+            Action::Session {
+                op: derisk::systemd::SessionOp::Lock,
+                ..
+            }
+        ),
+        "{actions:?}"
+    );
 }
 
 #[test]

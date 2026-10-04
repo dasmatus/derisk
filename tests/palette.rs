@@ -105,6 +105,50 @@ fn search_spans_apps_windows_commands_and_workspaces() {
 }
 
 #[test]
+fn workspaces_are_listed_by_position_after_one_closes() {
+    let mut shell = shell();
+    // Workspaces 1 (kitty), 2 (foot) and 3 (htop).
+    let (foot, _) = shell.map_window("foot", "sh");
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(foot.get()),
+            workspace: 2,
+        })
+        .unwrap();
+    let (htop, _) = shell.map_window("htop", "htop");
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(htop.get()),
+            workspace: 3,
+        })
+        .unwrap();
+    shell.map_window("kitty", "~");
+    // Closing foot empties workspace 2, so htop's workspace becomes 2.
+    shell.unmap_window(foot).unwrap();
+    assert_eq!(shell.workspaces().len(), 2);
+
+    let entries = palette::entries(&shell, &[], &[]);
+    let go: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| e.title.starts_with("Go to Workspace"))
+        .collect();
+    assert_eq!(go.len(), 1);
+    assert_eq!(go[0].title, "Go to Workspace 2");
+    assert_eq!(go[0].actions, [Action::SwitchWorkspace { workspace: 2 }]);
+    assert_eq!(go[0].detail, "1 window");
+    let htop = entries.iter().find(|e| e.title == "htop").unwrap();
+    assert!(htop.detail.contains("workspace 2"), "{}", htop.detail);
+
+    // The entry takes you to htop.
+    shell.run(go[0].actions.clone()).into_result().unwrap();
+    assert_eq!(shell.active_workspace(), 2);
+    assert_eq!(
+        shell.window_label(shell.focused().unwrap()).unwrap().0,
+        "htop"
+    );
+}
+
+#[test]
 fn window_entries_focus_across_workspaces() {
     let mut shell = shell();
     let (editor, _) = shell.map_window("editor", "notes.txt");
