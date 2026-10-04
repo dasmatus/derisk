@@ -473,7 +473,23 @@ impl Shell {
             },
         );
         self.stack.push(id);
+        let effects = self.apply_pending(app_id);
+        (id, effects)
+    }
 
+    /// Updates a window's app ID, for toolkits that set it after mapping
+    /// (GPUI), and applies actions an agent queued for that app.
+    pub fn set_app_id(&mut self, window: WindowId, app_id: &str) -> Result<Vec<Effect>, Error> {
+        let info = self.info_mut(window)?;
+        if info.app_id == app_id {
+            return Ok(Vec::new());
+        }
+        info.app_id = app_id.to_owned();
+        Ok(self.apply_pending(app_id))
+    }
+
+    /// Applies the actions an agent queued after launching `app_id`.
+    fn apply_pending(&mut self, app_id: &str) -> Vec<Effect> {
         let key = app_id.to_lowercase();
         let mut effects = Vec::new();
         if let Some(i) = self
@@ -496,7 +512,7 @@ impl Shell {
                 }
             }
         }
-        (id, effects)
+        effects
     }
 
     /// Stops managing a destroyed toplevel.
