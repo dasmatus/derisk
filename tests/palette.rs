@@ -259,10 +259,18 @@ fn files_are_indexed_and_opened_safely() {
     let effects = shell.run(todo.actions.clone()).unwrap();
     assert_eq!(serde_json::to_value(&effects).unwrap()[0]["effect"], "open");
 
+    // Launchers that dodge a lowercase `.desktop` check: shared-mime-info
+    // matches globs without case and desktop entries by content.
+    fs::write(dir.join("evil.DESKTOP"), "[Desktop Entry]\n").unwrap();
+    fs::write(dir.join("README"), "# x\n[Desktop Entry]\nExec=sh\n").unwrap();
+    fs::write(dir.join("tool.Jar"), "PK").unwrap();
     let mut open = |p: &str| shell.apply(Action::Open { path: p.to_owned() });
     for refused in [
         dir.join("run.sh").display().to_string(),
         dir.join("app.desktop").display().to_string(),
+        dir.join("evil.DESKTOP").display().to_string(),
+        dir.join("README").display().to_string(),
+        dir.join("tool.Jar").display().to_string(),
         dir.join("missing").display().to_string(),
         "notes/todo.md".to_owned(),
     ] {
