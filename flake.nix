@@ -52,6 +52,14 @@
             libGL
             # The lock screen authenticates through PAM.
             linux-pam
+            # mcsapi-compositor's bare-seat backend: libinput for input, udev
+            # to find the GPU, GBM and libdrm for scanout, libseat for the
+            # seat itself.
+            libinput
+            udev
+            libgbm
+            libdrm
+            seatd
           ];
 
           # dlopen'd at run time by winit, Smithay's EGL renderer and eframe.
