@@ -1,4 +1,10 @@
-use derisk::{action::Action, geom::rect, shell::Shell, ui::ShellUi};
+use derisk::{
+    action::Action,
+    geom::rect,
+    overview::{OverviewLayout, fit, grid, row},
+    shell::Shell,
+    ui::{ShellUi, to_rect},
+};
 use derisk_settings::LowPower;
 use mcsapi::toolkit::egui;
 
@@ -123,4 +129,169 @@ fn translucent_panels_report_blur_areas_unless_low_power() {
     shell.effects.blur = 0;
     frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5200);
     assert!(ui.blur_regions().is_empty());
+}
+
+/// Drags the first exposé window onto workspace strip slot `slot` (0-based).
+fn drag_to_slot(shell: &mut Shell, slot: usize, slots: usize) -> Vec<Action> {
+    drag_to_slot_with(shell, slot, slots, |_| {}, vec![])
+}
+
+/// Like [`drag_to_slot`], but once the drag is under way `mid_drag` changes
+/// the shell and `extra` events are sent with the move onto the slot.
+fn drag_to_slot_with(
+    shell: &mut Shell,
+    slot: usize,
+    slots: usize,
+    mid_drag: impl FnOnce(&mut Shell),
+    extra: Vec<egui::Event>,
+) -> Vec<Action> {
+    let size = (1920.0, 1080.0);
+    let mut ui = ShellUi::new(shell, false);
+    let ctx = egui::Context::default();
+    let layout = OverviewLayout::new(shell.work_area(), shell.profile().form_factor);
+    let active = shell.workspaces()[shell.active_workspace() as usize - 1];
+    let windows = shell.windows_on(active);
+    let cell = grid(windows.len(), layout.windows, 24)[0];
+    let frame0 = shell
+        .placements()
+        .into_iter()
+        .find(|p| p.window == windows[0])
+        .unwrap()
+        .frame;
+    let from = to_rect(fit(frame0, cell)).center();
+    let to = to_rect(row(slots, layout.workspaces, 10)[slot]).center();
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let mut steps = [
+        vec![egui::Event::PointerMoved(from)],
+        vec![button(from, true)],
+        vec![egui::Event::PointerMoved(from + egui::vec2(30.0, -30.0))],
+        vec![egui::Event::PointerMoved(to)],
+        vec![button(to, false)],
+    ];
+    steps[3].extend(extra);
+    let mut mid_drag = Some(mid_drag);
+    let mut actions = Vec::new();
+    for (i, events) in steps.into_iter().enumerate() {
+        if i == 3 {
+            (mid_drag.take().expect("runs once"))(shell);
+        }
+        actions.extend(frame(
+            &ctx,
+            &mut ui,
+            shell,
+            size,
+            events,
+            5000 + i as u32 * 16,
+        ));
+    }
+    actions
+}
+
+fn overview_with_two_windows() -> (Shell, u64) {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let (a, _) = shell.map_window("editor", "notes.md");
+    shell.map_window("terminal", "sh");
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    (shell, a.get())
+}
+
+#[test]
+fn dragging_a_window_onto_plus_opens_a_new_workspace() {
+    let (mut shell, a) = overview_with_two_windows();
+    // Strip: workspace 1, then "+".
+    let actions = drag_to_slot(&mut shell, 1, 2);
+    assert_eq!(
+        actions,
+        vec![Action::MoveToWorkspace {
+            window: Some(a),
+            workspace: 2
+        }]
+    );
+    shell.run(actions).unwrap();
+    assert_eq!(shell.workspaces().len(), 2);
+    assert!(shell.overview_visible());
+}
+
+#[test]
+fn dragging_a_window_onto_a_workspace_moves_it_there() {
+    let (mut shell, a) = overview_with_two_windows();
+    let (c, _) = shell.map_window("browser", "web");
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(c.get()),
+            workspace: 2,
+        })
+        .unwrap();
+    // Strip: workspaces 1 and 2, then "+".
+    let actions = drag_to_slot(&mut shell, 1, 3);
+    assert_eq!(
+        actions,
+        vec![Action::MoveToWorkspace {
+            window: Some(a),
+            workspace: 2
+        }]
+    );
+    // Dropping back on the current workspace does nothing.
+    assert!(drag_to_slot(&mut shell, 0, 3).is_empty());
+}
+
+#[test]
+fn other_buttons_do_not_drop_a_dragged_window() {
+    let (mut shell, a) = overview_with_two_windows();
+    let secondary = |pressed| egui::Event::PointerButton {
+        pos: egui::pos2(500.0, 60.0),
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    // A right click mid-drag leaves the drag alive; the primary release drops it.
+    let actions = drag_to_slot_with(
+        &mut shell,
+        1,
+        2,
+        |_| {},
+        vec![secondary(true), secondary(false)],
+    );
+    assert_eq!(
+        actions,
+        vec![Action::MoveToWorkspace {
+            window: Some(a),
+            workspace: 2
+        }]
+    );
+}
+
+#[test]
+fn switching_workspaces_mid_drag_cancels_it() {
+    let (mut shell, _) = overview_with_two_windows();
+    let (c, _) = shell.map_window("browser", "web");
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(c.get()),
+            workspace: 2,
+        })
+        .unwrap();
+    // Super+2 during the drag: the dragged window is no longer on screen,
+    // so releasing over the "+" slot must not move it.
+    let actions = drag_to_slot_with(
+        &mut shell,
+        2,
+        3,
+        |shell| {
+            shell
+                .apply(Action::SwitchWorkspace { workspace: 2 })
+                .unwrap();
+        },
+        vec![],
+    );
+    assert!(actions.is_empty(), "{actions:?}");
 }
