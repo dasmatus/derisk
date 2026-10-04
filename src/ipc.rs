@@ -242,23 +242,66 @@ pub fn read_request(reader: &mut impl std::io::BufRead) -> std::io::Result<Optio
 /// writable by nobody else. In a directory another user can write, they could
 /// replace the socket between its creation and its chmod, or put their own
 /// in its place for this user's tools to talk to.
+///
+/// The directory itself must not be a symlink, and no directory above it, on
+/// the path as given or once resolved, may be one another user can rename
+/// entries in: otherwise they could swap the checked directory, or a link
+/// leading to it, for one of their own after the check.
 pub fn check_socket_dir(dir: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::MetadataExt;
 
-    // /proc/self belongs to the process's effective user, which saves
-    // calling geteuid from a crate that forbids unsafe code.
-    let me = std::fs::metadata("/proc/self")?.uid();
-    let meta = std::fs::metadata(dir)?;
-    if meta.uid() != me || meta.mode() & 0o022 != 0 {
-        return Err(std::io::Error::new(
+    let refuse = |why: String| {
+        Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            format!(
-                "{} must belong to this user and be writable by nobody else",
-                dir.display()
-            ),
+            why,
+        ))
+    };
+    let me = effective_uid()?;
+    // Inside a user namespace, files owned by an unmapped user (the real
+    // root among them, as in the Nix build sandbox) show as the overflow
+    // UID. Nobody inside the namespace can act as it, so it stands for root.
+    let overflow = std::fs::read_to_string("/proc/sys/kernel/overflowuid")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(65534);
+    let trusted = |uid: u32| uid == 0 || uid == me || uid == overflow;
+
+    let meta = std::fs::symlink_metadata(dir)?;
+    if !meta.is_dir() || meta.uid() != me || meta.mode() & 0o022 != 0 {
+        return refuse(format!(
+            "{} must be a directory, not a symlink, belong to this user and be writable by nobody else",
+            dir.display()
         ));
     }
+    let given = std::path::absolute(dir)?;
+    let resolved = std::fs::canonicalize(dir)?;
+    for ancestor in given.ancestors().chain(resolved.ancestors()).skip(1) {
+        let meta = std::fs::symlink_metadata(ancestor)?;
+        // A sticky directory (/tmp) lets others add entries but not rename
+        // or remove this user's; a symlink's own mode means nothing.
+        let shared =
+            !meta.file_type().is_symlink() && meta.mode() & 0o022 != 0 && meta.mode() & 0o1000 == 0;
+        if !trusted(meta.uid()) || shared {
+            return refuse(format!(
+                "{} is above {} and another user could replace what is in it",
+                ancestor.display(),
+                dir.display()
+            ));
+        }
+    }
     Ok(())
+}
+
+/// The effective UID, from /proc/self/status, whose numbers are those of the
+/// reader's user namespace. This crate forbids unsafe code, so geteuid is out.
+fn effective_uid() -> std::io::Result<u32> {
+    let status = std::fs::read_to_string("/proc/self/status")?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|ids| ids.split_whitespace().nth(1))
+        .and_then(|id| id.parse().ok())
+        .ok_or_else(|| std::io::Error::other("no effective UID in /proc/self/status"))
 }
 
 /// Handles one request line; returns the response line and host effects.

@@ -226,3 +226,32 @@ fn socket_requests_are_capped() {
     let endless = vec![b'a'; derisk::ipc::MAX_REQUEST as usize + 10];
     assert!(derisk::ipc::read_request(&mut Cursor::new(endless)).is_err());
 }
+
+#[test]
+fn socket_dirs_others_could_swap_are_refused() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let root = std::env::temp_dir().join(format!("derisk-sockdir-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let dir = |path: &str, mode: u32| {
+        let path = root.join(path);
+        fs::create_dir_all(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+        path
+    };
+    dir("", 0o700);
+
+    assert!(ipc::check_socket_dir(&dir("private", 0o700)).is_ok());
+    assert!(ipc::check_socket_dir(&dir("open", 0o777)).is_err());
+    // The check must not follow a link it cannot trust to stay put.
+    std::os::unix::fs::symlink(root.join("private"), root.join("link")).unwrap();
+    assert!(ipc::check_socket_dir(&root.join("link")).is_err());
+    // Another user could rename `shared/private` away and put theirs there.
+    dir("shared", 0o777);
+    assert!(ipc::check_socket_dir(&dir("shared/private", 0o700)).is_err());
+    // A sticky directory, like /tmp, does not let them.
+    dir("sticky", 0o1777);
+    assert!(ipc::check_socket_dir(&dir("sticky/private", 0o700)).is_ok());
+
+    fs::set_permissions(root.join("shared"), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+}
