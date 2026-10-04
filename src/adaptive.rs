@@ -30,6 +30,9 @@ pub struct Profile {
     pub gap: i32,
     /// Height of the top bar (global menu, tray, clock).
     pub top_bar: i32,
+    /// Height of the touch navigation bar along the bottom edge (see
+    /// [`crate::mobile`]); 0 where there is none.
+    pub nav_bar: i32,
     /// Window title bar metrics.
     pub title_bar: TitleBar,
     /// Snap trigger distances.
@@ -55,11 +58,14 @@ impl Profile {
                 layout: Layout::Monocle,
                 gap: 0,
                 top_bar: 32,
+                nav_bar: 56,
+                // Buttons 48 apart: the hit target spans a button plus the
+                // spacing, so this makes each one a full touch target.
                 title_bar: TitleBar {
-                    height: 44,
+                    height: 48,
                     button: 22,
-                    spacing: 14,
-                    padding: 14,
+                    spacing: 26,
+                    padding: 13,
                 },
                 snap: SnapConfig {
                     edge: 24,
@@ -72,6 +78,7 @@ impl Profile {
                 layout: Layout::Tall,
                 gap: 10,
                 top_bar: 32,
+                nav_bar: 0,
                 title_bar: TitleBar {
                     height: 40,
                     button: 18,
@@ -89,6 +96,7 @@ impl Profile {
                 layout: Layout::Tall,
                 gap: 8,
                 top_bar: 28,
+                nav_bar: 0,
                 title_bar: TitleBar::default(),
                 snap: SnapConfig::default(),
                 touch,

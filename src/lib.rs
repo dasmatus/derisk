@@ -8,6 +8,7 @@
 //!   Windows-style dragging with edge/corner snapping and Snap Assist.
 //! - [`decorations`]: server-side title bars with the buttons on the left.
 //! - [`adaptive`]: phone/tablet/desktop profiles and learned app suggestions.
+//! - [`mobile`]: the touch navigation bar and edge swipes on phones.
 //! - [`overview`]: the overview grid and its widgets.
 //! - [`desktop`]: installed apps and their actions from `.desktop` files.
 //! - [`menu`]: the global menu.
@@ -50,6 +51,7 @@ pub mod geom;
 pub mod ipc;
 pub mod keys;
 pub mod menu;
+pub mod mobile;
 pub mod overview;
 pub mod palette;
 pub mod shell;

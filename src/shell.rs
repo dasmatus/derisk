@@ -18,6 +18,7 @@ use crate::{
     effects::{Effects, Look},
     geom::{Point, Rect, centered, contains, inset, rect},
     menu::{self, GlobalMenu},
+    mobile::NavBar,
     overview::Battery,
     snap::{Nudge, SnapZone, zone_at},
     systemd::{self, SessionOp},
@@ -319,15 +320,27 @@ impl Shell {
         self.output
     }
 
-    /// The output minus the top bar.
+    /// The output minus the top bar and, on phones, the navigation bar.
     pub fn work_area(&self) -> Geometry {
         let bar = self.profile.top_bar.min(self.output.size.h - 1);
+        let nav = self
+            .profile
+            .nav_bar
+            .min(self.output.size.h - bar - 1)
+            .max(0);
         rect(
             self.output.loc.x,
             self.output.loc.y + bar,
             self.output.size.w,
-            self.output.size.h - bar,
+            self.output.size.h - bar - nav,
         )
+    }
+
+    /// The touch navigation bar (zero height except on phones).
+    pub fn nav_bar(&self) -> NavBar {
+        NavBar {
+            height: self.profile.nav_bar,
+        }
     }
 
     /// The underlying mcsapi policy (workspaces, focus, layout).

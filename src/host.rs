@@ -371,6 +371,7 @@ impl compositor::Shell for Session {
         self.shell.overview_visible()
             || self.shell.palette_visible()
             || y < self.shell.profile().top_bar
+            || self.shell.nav_bar().contains(self.shell.output(), (x, y))
             || self.shell.snap_assist().is_some_and(|a| inside(a.frame))
             || !self.startup_done()
     }

@@ -6,7 +6,9 @@
 //! 2. Client surfaces, at [`crate::shell::WindowPlacement::client`].
 //! 3. [`ShellUi::show`] above them: top bar with global menu and tray, snap
 //!    preview and Snap Assist, the overview with widgets, the command
-//!    palette, and the startup animation.
+//!    palette, and the startup animation. On phones the top bar becomes a
+//!    status bar and a navigation bar runs along the bottom edge (see
+//!    [`crate::mobile`]).
 //!
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
@@ -28,6 +30,7 @@ use crate::{
     effects::{BlurArea, Look},
     geom::inset,
     menu::{Menu, MenuEntry},
+    mobile::{self, NavState},
     overview::{OverviewLayout, Widget, fit, grid, row},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
@@ -90,6 +93,10 @@ pub struct ShellUi {
     reduced_motion: bool,
     look: Look,
     blurs: Vec<BlurArea>,
+    /// Whether the touch-sized style is applied to the egui context.
+    touch_style: bool,
+    /// Where a drag on the navigation bar started.
+    swipe_from: Option<Pos2>,
 }
 
 /// Command palette state. The host fills [`PaletteUi::extra`] and
@@ -121,6 +128,29 @@ pub struct PaletteUi {
 /// Rows the palette shows at once before scrolling.
 const PALETTE_ROWS: usize = 9;
 const PALETTE_ROW_HEIGHT: f32 = 40.0;
+
+/// Sizes egui's own widgets (buttons in the widgets, the tray menu, check
+/// boxes) for fingers on phones, and back to egui's defaults elsewhere.
+fn set_touch_style(ctx: &egui::Context, touch: bool) {
+    let default = egui::style::Spacing::default();
+    let target = mobile::TOUCH_TARGET as f32;
+    ctx.all_styles_mut(|style| {
+        let spacing = &mut style.spacing;
+        if touch {
+            spacing.interact_size = vec2(target, target);
+            spacing.button_padding = vec2(12.0, 8.0);
+            spacing.item_spacing = vec2(10.0, 8.0);
+            spacing.icon_width = 22.0;
+            spacing.icon_width_inner = 12.0;
+        } else {
+            spacing.interact_size = default.interact_size;
+            spacing.button_padding = default.button_padding;
+            spacing.item_spacing = default.item_spacing;
+            spacing.icon_width = default.icon_width;
+            spacing.icon_width_inner = default.icon_width_inner;
+        }
+    });
+}
 
 fn limit_palette_hits(entries: &[Entry], hits: &[usize], limit: usize) -> Vec<usize> {
     if hits.len() <= limit {
@@ -186,6 +216,8 @@ impl ShellUi {
             reduced_motion,
             look: shell.look(),
             blurs: Vec::new(),
+            touch_style: false,
+            swipe_from: None,
         }
     }
 
@@ -317,6 +349,11 @@ impl ShellUi {
         self.blurs.clear();
         self.startup.reduced_motion = self.reduced_motion || !self.look.animate;
         let frame = self.startup_frame(elapsed_ms);
+        let phone = shell.is_phone();
+        if phone != self.touch_style {
+            set_touch_style(ui.ctx(), phone);
+            self.touch_style = phone;
+        }
         self.drag_preview(ui, shell);
         self.snap_assist(ui, shell, &mut actions);
         if shell.overview_visible() {
@@ -326,7 +363,12 @@ impl ShellUi {
         if !self.overview_open {
             self.overview_drag = None;
         }
-        self.top_bar(ui, shell, frame, &mut actions);
+        if phone {
+            self.status_bar(ui, shell, frame, &mut actions);
+            self.nav_bar(ui, shell, frame, &mut actions);
+        } else {
+            self.top_bar(ui, shell, frame, &mut actions);
+        }
         if shell.palette_visible() {
             self.palette(ui, shell, &mut actions);
         }
@@ -477,56 +519,201 @@ impl ShellUi {
                             b.percent
                         ));
                     }
-                    if !shell.failed_units.is_empty()
-                        && ui
-                            .add(
-                                egui::Button::new(format!("⚠ {}", shell.failed_units.len()))
-                                    .frame(false),
-                            )
-                            .on_hover_text("Failed user services: restart or dismiss them")
-                            .clicked()
-                    {
-                        self.palette.preset = Some("> failed".to_owned());
-                        actions.push(Action::Palette {
-                            visible: Some(true),
-                        });
-                    }
-                    // Agent activity the person has not looked at yet.
-                    let unseen = shell
-                        .conversation
-                        .turns()
-                        .filter(|t| t.id > self.palette.seen && t.source == Source::Agent)
-                        .count();
-                    let working = shell.conversation.turns().any(|t| !t.is_settled());
-                    if (unseen > 0 || working)
-                        && ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(if unseen > 0 {
-                                        format!("✨ {unseen}")
-                                    } else {
-                                        "✨".to_owned()
-                                    })
-                                    .color(self.theme.accent),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text(if working {
-                                "derisk is working on a request"
-                            } else {
-                                "Agent activity: open the conversation"
-                            })
-                            .clicked()
-                    {
-                        self.palette.chat_next = true;
-                        actions.push(Action::Palette {
-                            visible: Some(true),
-                        });
-                    }
+                    self.indicators(ui, shell, actions);
                     self.tray_icons(ui, shell, height, actions);
                 });
             },
         );
+    }
+
+    /// The phone's top bar: a status bar with the time, the focused app and
+    /// the indicators. The overview button and search field move to the
+    /// navigation bar within reach of the thumb, and the global menus, which
+    /// have no room here, stay reachable as palette commands.
+    fn status_bar(
+        &mut self,
+        ui: &mut Ui,
+        shell: &Shell,
+        frame: StartupFrame,
+        actions: &mut Vec<Action>,
+    ) {
+        let output = to_rect(shell.output());
+        let height = shell.profile().top_bar as f32;
+        let bar = Rect::from_min_size(
+            output.min + vec2(0.0, frame.bar_offset),
+            vec2(output.width(), height),
+        );
+        let opacity = frame.shell_opacity.max(0.0);
+        self.frost(bar, 0, self.look.top_bar * opacity);
+        ui.painter().rect_filled(
+            bar,
+            0,
+            self.theme
+                .background
+                .gamma_multiply(self.look.top_bar * opacity),
+        );
+        ui.scope_builder(
+            UiBuilder::new()
+                .id_salt("derisk-status-bar")
+                .max_rect(bar.shrink2(vec2(12.0, 0.0)))
+                .layout(Layout::left_to_right(Align::Center)),
+            |ui| {
+                ui.visuals_mut().override_text_color = Some(self.theme.foreground);
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ui.label(RichText::new(shell.clock.time_label()).strong());
+                if let Some(w) = shell.focused() {
+                    let (app, title) = shell.window_label(w).unwrap_or_default();
+                    let name = if app.contains('.') && !title.is_empty() {
+                        title
+                    } else {
+                        app
+                    };
+                    ui.label(
+                        RichText::new(elide(name, bar.width() * 0.4, 14.0))
+                            .color(self.theme.border),
+                    );
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if let Some(b) = shell.battery {
+                        ui.label(format!(
+                            "{}{}%",
+                            if b.charging { "⚡" } else { "▮" },
+                            b.percent
+                        ));
+                    }
+                    self.indicators(ui, shell, actions);
+                    self.tray_icons(ui, shell, height, actions);
+                });
+            },
+        );
+    }
+
+    /// The phone's navigation bar along the bottom edge: Back, Home and
+    /// Apps, each a third of the width, plus swipes that start on it (up for
+    /// home, sideways to switch apps). See [`crate::mobile`].
+    fn nav_bar(
+        &mut self,
+        ui: &mut Ui,
+        shell: &Shell,
+        frame: StartupFrame,
+        actions: &mut Vec<Action>,
+    ) {
+        let nav = shell.nav_bar();
+        let output = shell.output();
+        let area = to_rect(nav.area(output));
+        if area.height() <= 0.0 {
+            return;
+        }
+        // The bar slides in from below as the top bar slides in from above.
+        let area = area.translate(vec2(0.0, -frame.bar_offset));
+        let opacity = frame.shell_opacity.max(0.0);
+        self.frost(area, 0, self.look.top_bar * opacity);
+        ui.painter().rect_filled(
+            area,
+            0,
+            self.theme
+                .background
+                .gamma_multiply(self.look.top_bar * opacity),
+        );
+        let state = NavState {
+            overview: shell.overview_visible(),
+            palette: shell.palette_visible(),
+        };
+        // Added first, so the buttons on top keep their taps and this only
+        // gets the drags they don't sense.
+        let swipe = ui.interact(area, Id::new("derisk-nav-swipe"), Sense::drag());
+        if swipe.drag_started() {
+            self.swipe_from = ui.input(|i| i.pointer.press_origin());
+        }
+        if swipe.drag_stopped() {
+            let end = ui.input(|i| i.pointer.latest_pos());
+            if let (Some(from), Some(to)) = (self.swipe_from.take(), end) {
+                let d = to - from;
+                if let Some(s) = mobile::swipe(d.x, d.y) {
+                    actions.extend(mobile::swiped(s, state));
+                }
+            }
+        }
+        for (button, cell) in nav.buttons(output) {
+            let r = to_rect(cell).translate(vec2(0.0, -frame.bar_offset));
+            // Named for screen readers, but no hover tooltip: a finger lifted
+            // off the button would leave one hanging over the bar.
+            let response = ui.interact(r, Id::new(("derisk-nav", button.label())), Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, button.label())
+            });
+            let active = match button {
+                mobile::NavButton::Back => false,
+                mobile::NavButton::Home => state.overview,
+                mobile::NavButton::Apps => state.palette,
+            };
+            if response.is_pointer_button_down_on() {
+                ui.painter()
+                    .rect_filled(r.shrink(4.0), 12, self.theme.accent.gamma_multiply(0.18));
+            }
+            ui.painter().text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                button.icon(),
+                FontId::proportional(22.0),
+                if active {
+                    self.theme.accent
+                } else {
+                    self.theme.foreground
+                },
+            );
+            if response.clicked() {
+                actions.extend(mobile::tap(button, state));
+            }
+        }
+    }
+
+    /// Failed units and agent activity, as buttons that open the palette on
+    /// them. Shared by the desktop top bar and the phone status bar.
+    fn indicators(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        if !shell.failed_units.is_empty()
+            && ui
+                .add(egui::Button::new(format!("⚠ {}", shell.failed_units.len())).frame(false))
+                .on_hover_text("Failed user services: restart or dismiss them")
+                .clicked()
+        {
+            self.palette.preset = Some("> failed".to_owned());
+            actions.push(Action::Palette {
+                visible: Some(true),
+            });
+        }
+        // Agent activity the person has not looked at yet.
+        let unseen = shell
+            .conversation
+            .turns()
+            .filter(|t| t.id > self.palette.seen && t.source == Source::Agent)
+            .count();
+        let working = shell.conversation.turns().any(|t| !t.is_settled());
+        if (unseen > 0 || working)
+            && ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(if unseen > 0 {
+                            format!("✨ {unseen}")
+                        } else {
+                            "✨".to_owned()
+                        })
+                        .color(self.theme.accent),
+                    )
+                    .frame(false),
+                )
+                .on_hover_text(if working {
+                    "derisk is working on a request"
+                } else {
+                    "Agent activity: open the conversation"
+                })
+                .clicked()
+        {
+            self.palette.chat_next = true;
+            actions.push(Action::Palette {
+                visible: Some(true),
+            });
+        }
     }
 
     fn tray_icons(&mut self, ui: &mut Ui, shell: &Shell, bar: f32, actions: &mut Vec<Action>) {
@@ -1019,13 +1206,18 @@ impl ShellUi {
             return;
         }
 
+        let phone = shell.is_phone();
+        // The navigation bar stays above the backdrop on phones, so Back and
+        // Home keep working with the palette open.
+        let nav = shell.profile().nav_bar as f32;
         let screen = to_rect(shell.output());
+        let dimmed = Rect::from_min_max(screen.min, screen.max - vec2(0.0, nav));
         // Dim the desktop; clicking it closes the palette.
         let backdrop = egui::Area::new(Id::new("derisk-palette-backdrop"))
             .order(Order::Middle)
-            .fixed_pos(screen.min)
+            .fixed_pos(dimmed.min)
             .show(ui.ctx(), |ui| {
-                let (r, response) = ui.allocate_exact_size(screen.size(), Sense::click());
+                let (r, response) = ui.allocate_exact_size(dimmed.size(), Sense::click());
                 ui.painter()
                     .rect_filled(r, 0, Color32::from_black_alpha(110));
                 response.clicked()
@@ -1038,9 +1230,25 @@ impl ShellUi {
             return;
         }
 
-        let width = (screen.width() - 32.0).clamp(240.0, 680.0);
-        let top =
-            screen.top() + (screen.height() * 0.14).max(shell.profile().top_bar as f32 + 16.0);
+        let width = (screen.width() - if phone { 16.0 } else { 32.0 }).clamp(240.0, 680.0);
+        let bar = shell.profile().top_bar as f32;
+        // A phone has no height to spare: the palette starts under the status
+        // bar and its list runs down to just above the navigation bar.
+        let top = if phone {
+            screen.top() + bar + 8.0
+        } else {
+            screen.top() + (screen.height() * 0.14).max(bar + 16.0)
+        };
+        let row_height = if phone {
+            mobile::TOUCH_TARGET as f32
+        } else {
+            PALETTE_ROW_HEIGHT
+        };
+        let list_height = if phone {
+            (dimmed.bottom() - top - 96.0).max(row_height * 3.0)
+        } else {
+            PALETTE_ROWS as f32 * PALETTE_ROW_HEIGHT + 40.0
+        };
         let mut chosen = (enter && !state.chat).then_some(state.selected);
         let mut new_conversation = false;
         egui::Area::new(Id::new("derisk-palette"))
@@ -1109,7 +1317,7 @@ impl ShellUi {
                             }
                             let selected = state.selected;
                             egui::ScrollArea::vertical()
-                                .max_height(PALETTE_ROWS as f32 * PALETTE_ROW_HEIGHT + 40.0)
+                                .max_height(list_height)
                                 .auto_shrink([false, true])
                                 .show(ui, |ui| {
                                     let mut heading = None;
@@ -1122,8 +1330,13 @@ impl ShellUi {
                                                     .color(theme.border),
                                             );
                                         }
-                                        let response =
-                                            palette_row(ui, &theme, entry, i == selected);
+                                        let response = palette_row(
+                                            ui,
+                                            &theme,
+                                            entry,
+                                            i == selected,
+                                            row_height,
+                                        );
                                         if i == selected && (up || down) {
                                             response.scroll_to_me(None);
                                         }
@@ -1136,6 +1349,10 @@ impl ShellUi {
                         if let Some(message) = &state.message {
                             ui.add_space(6.0);
                             ui.label(RichText::new(message).color(theme.accent));
+                        }
+                        // Keyboard hints mean nothing without a keyboard.
+                        if phone {
+                            return;
                         }
                         ui.add_space(4.0);
                         ui.label(
@@ -1337,11 +1554,14 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
 }
 
 /// One palette row: icon, title, detail and shortcut hint.
-fn palette_row(ui: &mut Ui, theme: &Theme, entry: &Entry, selected: bool) -> egui::Response {
-    let (r, response) = ui.allocate_exact_size(
-        vec2(ui.available_width(), PALETTE_ROW_HEIGHT),
-        Sense::click(),
-    );
+fn palette_row(
+    ui: &mut Ui,
+    theme: &Theme,
+    entry: &Entry,
+    selected: bool,
+    height: f32,
+) -> egui::Response {
+    let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
     let painter = ui.painter_at(r);
     if selected || response.hovered() {
         painter.rect_filled(

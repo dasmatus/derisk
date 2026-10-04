@@ -664,3 +664,126 @@ fn switching_workspaces_mid_drag_cancels_it() {
     );
     assert!(actions.is_empty(), "{actions:?}");
 }
+
+/// Presses at `from`, moves through `path`, and releases at the last point,
+/// one frame per event, returning the actions of every frame.
+fn touch(
+    ctx: &egui::Context,
+    ui: &mut ShellUi,
+    shell: &Shell,
+    size: (f32, f32),
+    from: egui::Pos2,
+    path: &[egui::Pos2],
+) -> Vec<Action> {
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let mut actions = Vec::new();
+    let mut ms = 5000;
+    let mut step = |events| {
+        ms += 16;
+        actions.extend(frame(ctx, ui, shell, size, events, ms));
+    };
+    step(vec![egui::Event::PointerMoved(from)]);
+    step(vec![button(from, true)]);
+    for p in path {
+        step(vec![egui::Event::PointerMoved(*p)]);
+    }
+    let end = path.last().copied().unwrap_or(from);
+    step(vec![button(end, false)]);
+    step(vec![]);
+    actions
+}
+
+#[test]
+fn phones_get_a_navigation_bar_below_the_work_area() {
+    let phone = Shell::new(rect(0, 0, 392, 872), true);
+    let nav = phone.nav_bar().area(phone.output());
+    assert!(nav.size.h >= derisk::mobile::TOUCH_TARGET);
+    let area = phone.work_area();
+    assert_eq!(area.loc.y + area.size.h, nav.loc.y);
+
+    // The desktop layout is unchanged above the breakpoint.
+    let desktop = Shell::new(rect(0, 0, 1920, 1080), false);
+    assert_eq!(desktop.nav_bar().height, 0);
+    let area = desktop.work_area();
+    assert_eq!(area.loc.y + area.size.h, 1080);
+}
+
+#[test]
+fn navigation_bar_buttons_and_swipes() {
+    let size = (392.0, 872.0);
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.map_window("editor", "notes.md");
+    shell.map_window("terminal", "sh");
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, size, vec![], 5000);
+    let buttons = shell.nav_bar().buttons(shell.output());
+    let center = |i: usize| to_rect(buttons[i].1).center();
+
+    // Back with nothing open switches to the previous app.
+    let actions = touch(&ctx, &mut ui, &shell, size, center(0), &[]);
+    assert_eq!(actions, vec![Action::FocusPrevious]);
+    // Home opens the overview, Apps the palette.
+    let actions = touch(&ctx, &mut ui, &shell, size, center(1), &[]);
+    assert_eq!(actions, vec![Action::Overview { visible: None }]);
+    let actions = touch(&ctx, &mut ui, &shell, size, center(2), &[]);
+    assert_eq!(actions, vec![Action::Palette { visible: None }]);
+
+    // A swipe up that starts on a button goes home and is not a tap.
+    let from = center(0);
+    let path: Vec<_> = (1..=6)
+        .map(|i| from - egui::vec2(0.0, 30.0 * i as f32))
+        .collect();
+    let actions = touch(&ctx, &mut ui, &shell, size, from, &path);
+    assert_eq!(
+        actions,
+        vec![Action::Overview {
+            visible: Some(true)
+        }]
+    );
+    // Sideways along the bar switches apps.
+    let from = center(1);
+    let path: Vec<_> = (1..=5)
+        .map(|i| from + egui::vec2(25.0 * i as f32, 0.0))
+        .collect();
+    let actions = touch(&ctx, &mut ui, &shell, size, from, &path);
+    assert_eq!(actions, vec![Action::FocusNext]);
+}
+
+#[test]
+fn navigation_bar_stays_usable_over_the_palette() {
+    let size = (392.0, 872.0);
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.map_window("editor", "notes.md");
+    shell.apply(Action::Palette { visible: None }).unwrap();
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, size, vec![], 5000);
+    let home = to_rect(shell.nav_bar().buttons(shell.output())[1].1).center();
+    let actions = touch(&ctx, &mut ui, &shell, size, home, &[]);
+    assert_eq!(
+        actions,
+        vec![
+            Action::Palette {
+                visible: Some(false)
+            },
+            Action::Overview {
+                visible: Some(true)
+            }
+        ]
+    );
+}
+
+#[test]
+fn phone_title_bar_buttons_are_touch_sized() {
+    let phone = Shell::new(rect(0, 0, 392, 872), true);
+    let bar = phone.profile().title_bar;
+    assert!(bar.height >= derisk::mobile::TOUCH_TARGET);
+    // A button's target spans the button and the spacing beside it.
+    assert!(bar.button + bar.spacing >= derisk::mobile::TOUCH_TARGET);
+}
