@@ -178,6 +178,21 @@ shuffled), or a looping video. Videos play silently through an `ffmpeg`
 child process (`$DERISK_FFMPEG`, else `ffmpeg` on `PATH`) at 30 fps, at most
 1080p, and pause while a window fills the screen and in low power mode.
 Anything that fails to load falls back to the gradient and is logged.
+The page previews the choice and shows thumbnails of what it finds in
+Pictures, Videos and the system backgrounds.
+
+### Privacy
+
+Settings → Privacy turns location, camera and microphone off for every
+Flatpak app (it denies them in the portal permission store on Save; turning
+one back on lets apps ask again), stops the recently used files list, and
+empties trash older than 1 to 365 days. Under it, each installed Flatpak
+app's network, display, sound, device, folder and session-bus access can be
+switched; derisk writes these as `flatpak override --user` does, to
+`$XDG_DATA_HOME/flatpak/overrides/<app>`, so they apply the next time the
+app starts. Its portal answers (camera, microphone, location, background,
+notifications, screenshots) are set to Ask, Allow or Deny through
+`flatpak permission-set` (`$DERISK_FLATPAK`, else `flatpak` on `PATH`).
 
 ### Headless commands
 
