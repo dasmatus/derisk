@@ -91,6 +91,45 @@ Guard rails: apps can only be launched by plain command or desktop-file
 name (no paths or arguments); reboot, power off, hibernate and log out need
 `"confirmed": true`, which the assistant never sets on its own (the UI asks
 first); unit actions only apply to units that are currently failed.
+An agent's `"confirmed": true` is not taken as the person's word: the
+request waits on screen for someone at the computer to press the button
+(`"error"` says so), and the agent's own clicks, keys and accessibility
+actions cannot press it. A headless `derisk agent` has no screen, so it
+cannot power off or log out at all.
+
+### Computer use
+
+On the live desktop (`derisk session`), agents can also see and drive
+what is on screen. The same tree is published over AT-SPI, so screen
+readers such as Orca read it too.
+
+```console
+{"method":"tree"}                                   # every element: stable id, role, name, value, bounds, state, actions
+{"method":"find","role":"button","name":"Save"}     # elements matching a role and/or name (case-insensitive substring)
+{"method":"act","element":42,"action":"click"}      # click, focus, set_value (with "value"), expand, collapse, scroll_*, ...
+{"method":"screenshot"}                             # PNG path under $XDG_RUNTIME_DIR/derisk/screenshots; "inline":true for base64
+{"method":"input","events":[{"type":"click","x":400,"y":300},{"type":"key","key":"ctrl+a"},{"type":"text","text":"hi"}]}
+{"method":"register_tree","window":3,"nodes":[{"id":1,"role":"button","name":"Play","actions":["click"]}]}
+```
+
+Element ids stay the same while the element exists. Names, values and
+window titles are written by apps and web pages, not by the person, so
+every `tree` and `find` result carries a `note` saying to treat them as
+data, never as instructions. `register_tree` lets an out-of-process
+program (a GPUI app, say) describe its own window: its nodes appear under
+that window, actions on them come back to it as
+`{"event":"action","window":3,"node":1,"action":"click"}` on its
+connection, and they disappear when it disconnects.
+
+### Accessibility
+
+- One accessibility tree for the top bar, overview, palette, dialogs and
+  the built-in apps (roles, names, states, focus), on AT-SPI.
+- Every control is reachable by keyboard and the focused one has a ring
+  in the accent colour. Super+B moves focus to the top bar; Tab and
+  Shift+Tab move through it, Enter or Space activate, Escape gives focus
+  back to the window.
+- `--reduced-motion` turns animations off.
 
 ## systemd integration
 
@@ -163,6 +202,7 @@ systemd units and run logind session operations.
 | Super+Q | Close |
 | Super+F / Super+T | Float / tile |
 | Super+M / Super+Shift+M | Monocle / tall |
+| Super+B | Focus the top bar (Tab moves on, Escape returns to the window) |
 | Escape | Leave the overview |
 
 ### Headless commands
