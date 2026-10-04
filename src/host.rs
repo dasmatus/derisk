@@ -180,6 +180,15 @@ impl Session {
         if self.lock.is_locked() {
             return;
         }
+        // PAM would be asked about user "" and refuse every password, so the
+        // lock could only be left from another VT.
+        if self.user.is_empty() {
+            log(
+                Priority::Warning,
+                "not locking: the session's user name is unknown, so no password could unlock it",
+            );
+            return;
+        }
         self.lock.lock();
         self.shell.pointer_up();
         self.set_locked_hint(true);
@@ -766,6 +775,22 @@ pub fn run(options: Options) -> Result {
 
 /// Locks the screen whenever logind sends this session `Lock`, until the
 /// session ends or `busctl wait` stops working.
+const LOCK_WATCH_RETRY_MIN: Duration = Duration::from_secs(1);
+const LOCK_WATCH_RETRY_MAX: Duration = Duration::from_secs(30);
+
+/// Sleeps for `delay`, waking early when the watch is stopped. Returns
+/// whether the watch should go on.
+fn sleep_unless_stopped(delay: Duration, stopping: &AtomicBool) -> bool {
+    let until = Instant::now() + delay;
+    while Instant::now() < until {
+        if stopping.load(Ordering::SeqCst) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    !stopping.load(Ordering::SeqCst)
+}
+
 struct LockWatch {
     child: Arc<Mutex<Option<Child>>>,
     stopping: Arc<AtomicBool>,
@@ -781,20 +806,31 @@ impl LockWatch {
         };
         std::thread::spawn(move || {
             let argv = systemd::lock_signal_argv(&path);
+            let mut backoff = LOCK_WATCH_RETRY_MIN;
             loop {
                 match wait_for_lock(&argv, &child, &stopping) {
                     Ok(true) => {
+                        backoff = LOCK_WATCH_RETRY_MIN;
                         if !remote.run(Session::lock_screen) {
                             return;
                         }
                     }
                     Ok(false) => return,
+                    // A bus restart or a missing busctl must not turn lock
+                    // requests off for the rest of the session: keep trying,
+                    // more slowly, until the session ends.
                     Err(e) => {
                         log(
                             Priority::Warning,
-                            &format!("not following logind lock requests: {e}"),
+                            &format!(
+                                "lost logind lock requests ({e}); retrying in {}s",
+                                backoff.as_secs()
+                            ),
                         );
-                        return;
+                        if !sleep_unless_stopped(backoff, &stopping) {
+                            return;
+                        }
+                        backoff = (backoff * 2).min(LOCK_WATCH_RETRY_MAX);
                     }
                 }
             }
@@ -984,5 +1020,24 @@ fn tiled_edges(mode: Mode) -> Edges {
             SnapZone::BottomRight => edges(false, true, false, true),
             SnapZone::Maximize => Edges::NONE,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_sleep_ends_early_when_stopped() {
+        let stopping = AtomicBool::new(true);
+        let start = Instant::now();
+        assert!(!sleep_unless_stopped(Duration::from_secs(30), &stopping));
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn retry_sleep_goes_on_when_not_stopped() {
+        let stopping = AtomicBool::new(false);
+        assert!(sleep_unless_stopped(Duration::from_millis(150), &stopping));
     }
 }
