@@ -339,10 +339,10 @@ pub fn is_action_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
-/// `applications` directories in XDG precedence order: `$XDG_DATA_HOME`
-/// (default `~/.local/share`), then `$XDG_DATA_DIRS` (default
+/// XDG data directories in precedence order: `$XDG_DATA_HOME` (default
+/// `~/.local/share`), then `$XDG_DATA_DIRS` (default
 /// `/usr/local/share:/usr/share`).
-pub fn application_dirs() -> Vec<PathBuf> {
+pub fn data_dirs() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
@@ -360,6 +360,13 @@ pub fn application_dirs() -> Vec<PathBuf> {
                 .filter(|d| !d.is_empty())
                 .map(PathBuf::from),
         )
+        .collect()
+}
+
+/// `applications` directories in XDG precedence order (see [`data_dirs`]).
+pub fn application_dirs() -> Vec<PathBuf> {
+    data_dirs()
+        .into_iter()
         .map(|d| d.join("applications"))
         .collect()
 }

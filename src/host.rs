@@ -387,6 +387,7 @@ impl compositor::Shell for Session {
     }
 
     fn pointer_motion(&mut self, at: (i32, i32)) {
+        self.ui.pointer = Some(egui::pos2(at.0 as f32, at.1 as f32));
         self.shell.pointer_motion(at);
     }
 

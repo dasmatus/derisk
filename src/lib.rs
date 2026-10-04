@@ -15,6 +15,8 @@
 //!   workflow: apps, windows, commands, settings and files in one search,
 //!   with the assistant as the fallback.
 //! - [`tray`]: monochrome system tray icons.
+//! - [`icons`]: monochrome theme icons, Papirus then hicolor then Nerd Font
+//!   glyphs.
 //! - [`animation`]: the startup animation.
 //! - [`effects`]: translucent, blurred panels and low power mode.
 //! - [`assistant`] and [`ipc`]: natural-language and agent control.
@@ -47,6 +49,7 @@ pub mod decorations;
 pub mod desktop;
 pub mod effects;
 pub mod geom;
+pub mod icons;
 pub mod ipc;
 pub mod keys;
 pub mod menu;

@@ -114,8 +114,11 @@ pub struct Entry {
     pub detail: String,
     /// Extra search terms, not shown.
     pub keywords: String,
-    /// An emoji icon from egui's built-in font.
+    /// Text icon (a glyph or monochrome emoji), drawn when `icon_name` is
+    /// empty.
     pub icon: String,
+    /// Theme icon name or path, resolved by [`crate::icons::lookup`].
+    pub icon_name: String,
     /// Keyboard shortcut hint, if the command has one.
     pub shortcut: Option<String>,
     /// What choosing the entry does.
@@ -138,6 +141,7 @@ impl Entry {
             detail: String::new(),
             keywords: String::new(),
             icon: icon.to_owned(),
+            icon_name: String::new(),
             shortcut: None,
             actions,
             confirm: false,
@@ -153,6 +157,12 @@ impl Entry {
     /// Sets extra search terms.
     pub fn keywords(mut self, keywords: impl Into<String>) -> Self {
         self.keywords = keywords.into();
+        self
+    }
+
+    /// Sets the theme icon name (or path) to look up.
+    pub fn icon_name(mut self, name: impl Into<String>) -> Self {
+        self.icon_name = name.into();
         self
     }
 
@@ -198,7 +208,8 @@ pub fn desktop_app(app: &DesktopEntry, icon: &str) -> Vec<Entry> {
             }],
         )
         .detail(summary.clone())
-        .keywords(app.search_terms()),
+        .keywords(app.search_terms())
+        .icon_name(app.icon.clone()),
     ];
     out.extend(app.actions.iter().map(|action| {
         Entry::new(
@@ -212,6 +223,7 @@ pub fn desktop_app(app: &DesktopEntry, icon: &str) -> Vec<Entry> {
         )
         .detail(app.name.clone())
         .keywords(format!("{} {}", app.name, action.id).to_lowercase())
+        .icon_name(app.icon.clone())
     }));
     out
 }

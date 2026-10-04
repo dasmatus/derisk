@@ -276,6 +276,7 @@ fn demo() -> Result {
         visible: Some(true),
     })?;
     let ctx = egui::Context::default();
+    mcsapi_ui::fonts::install(&ctx);
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,

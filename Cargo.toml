@@ -9,13 +9,14 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#23 (frame pacing by refresh rate and VRR) merges, every
-# mcsapi crate comes from its branch so the apps and the compositor share one
-# mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
+# Until the mcsapi branch with the Nerd Font typefaces, touch form controls,
+# top toasts and workspace previews merges, every mcsapi crate comes from it
+# so the apps and the compositor share one mcsapi-ui. Then drop the `branch`
+# keys and run `cargo update -p mcsapi`.
+mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/derisk-design-handoff" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/derisk-design-handoff" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/derisk-design-handoff" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/derisk-design-handoff" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
@@ -36,6 +37,7 @@ repository.workspace = true
 [dependencies]
 derisk-settings.workspace = true
 mcsapi.workspace = true
+mcsapi-ui.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
@@ -44,6 +46,7 @@ serde_json = "1.0.145"
 derisk-apps = { workspace = true, optional = true }
 mcsapi-compositor = { workspace = true, optional = true }
 mcsapi-runtime = { workspace = true, optional = true }
+resvg = { version = "0.48.1", default-features = false }
 
 [features]
 host = ["dep:derisk-apps", "dep:mcsapi-compositor", "dep:mcsapi-runtime"]

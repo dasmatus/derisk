@@ -11,7 +11,7 @@
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
@@ -19,6 +19,7 @@ use egui::{
     vec2,
 };
 use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
+use mcsapi_ui::fonts;
 
 use crate::{
     action::Action,
@@ -27,10 +28,12 @@ use crate::{
     decorations::Button,
     effects::{BlurArea, Look},
     geom::inset,
+    icons::{self, Source as IconSource},
     menu::{Menu, MenuEntry},
     overview::{OverviewLayout, Widget, fit, grid, row},
     palette::{self, Category, Entry, History},
-    shell::{DropTarget, Shell, WindowPlacement},
+    shell::{DropTarget, Mode, Shell, WindowPlacement},
+    snap::SnapZone,
 };
 
 /// Converts a logical geometry to an egui rectangle.
@@ -41,12 +44,23 @@ pub fn to_rect(g: Geometry) -> Rect {
     )
 }
 
-fn button_color(button: Button) -> Color32 {
+/// Failures: failed units and failed assistant steps.
+const DESTRUCTIVE: Color32 = Color32::from_rgb(239, 68, 68);
+
+/// A title bar button's Nerd Font (codicon) glyph; maximize turns into
+/// restore on a maximized window.
+fn button_glyph(button: Button, maximized: bool) -> &'static str {
     match button {
-        Button::Close => Color32::from_rgb(239, 68, 68),
-        Button::Minimize => Color32::from_rgb(245, 158, 11),
-        Button::Maximize => Color32::from_rgb(34, 197, 94),
+        Button::Close => fonts::icon::CLOSE,
+        Button::Minimize => fonts::icon::MINIMIZE,
+        Button::Maximize if maximized => fonts::icon::RESTORE,
+        Button::Maximize => fonts::icon::MAXIMIZE,
     }
+}
+
+/// Medium-weight text at `size`, for headings and emphasis.
+fn strong(ctx: &egui::Context, text: impl Into<String>, size: f32) -> RichText {
+    RichText::new(text).font(fonts::strong(ctx, size))
 }
 
 fn elide(text: &str, width: f32, size: f32) -> String {
@@ -90,6 +104,55 @@ pub struct ShellUi {
     reduced_motion: bool,
     look: Look,
     blurs: Vec<BlurArea>,
+    /// Last pointer position, for hovering title bar buttons (decorations
+    /// are painted without egui input). The host keeps it up to date.
+    pub pointer: Option<Pos2>,
+    icons: IconCache,
+}
+
+/// A resolved icon: a recolored texture, or a glyph to draw as text.
+#[derive(Clone)]
+enum Icon {
+    Texture(TextureHandle),
+    Glyph(&'static str),
+}
+
+/// Theme icons rasterized in the text color, by name and color.
+#[derive(Default)]
+struct IconCache {
+    dirs: Option<Vec<PathBuf>>,
+    icons: HashMap<(String, Color32), Icon>,
+}
+
+impl IconCache {
+    /// Pixel size icons are rasterized at: 16 pt on up to 2× outputs.
+    const SIZE: u32 = 32;
+
+    fn get(&mut self, ctx: &egui::Context, name: &str, color: Color32) -> Icon {
+        let key = (name.to_owned(), color);
+        if let Some(icon) = self.icons.get(&key) {
+            return icon.clone();
+        }
+        let dirs = self.dirs.get_or_insert_with(icons::icon_dirs);
+        let source = icons::lookup(name, dirs);
+        let rgb = [color.r(), color.g(), color.b()];
+        let icon = match icons::rasterize(&source, Self::SIZE, rgb) {
+            Some(pixmap) => Icon::Texture(ctx.load_texture(
+                format!("derisk-icon-{name}"),
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [pixmap.width as usize, pixmap.height as usize],
+                    &pixmap.rgba,
+                ),
+                TextureOptions::LINEAR,
+            )),
+            None => Icon::Glyph(match source {
+                IconSource::Glyph(glyph) => glyph,
+                _ => icons::glyph(name),
+            }),
+        };
+        self.icons.insert(key, icon.clone());
+        icon
+    }
 }
 
 /// Command palette state. The host fills [`PaletteUi::extra`] and
@@ -186,6 +249,8 @@ impl ShellUi {
             reduced_motion,
             look: shell.look(),
             blurs: Vec::new(),
+            pointer: None,
+            icons: IconCache::default(),
         }
     }
 
@@ -283,14 +348,47 @@ impl ShellUi {
             ),
             StrokeKind::Inside,
         );
+        // Neutral outlined circles with their icons always showing; hover
+        // fills the circle and brightens the ring and icon.
+        let maximized = matches!(
+            p.mode,
+            Mode::Snapped {
+                zone: SnapZone::Maximize
+            }
+        );
+        let hover_fill = theme.surface.lerp_to_gamma(theme.border, 0.35);
         for (button, area) in bar.buttons(p.frame) {
-            let color = if p.focused {
-                button_color(button)
-            } else {
-                theme.border
-            };
             let r = to_rect(area);
-            painter.circle_filled(r.center(), r.width() / 2.0, color);
+            let radius = r.width() / 2.0;
+            let hovered = self
+                .pointer
+                .is_some_and(|at| at.distance(r.center()) <= radius + 1.0);
+            if hovered {
+                painter.circle_filled(r.center(), radius, hover_fill);
+            }
+            painter.circle_stroke(
+                r.center(),
+                radius - 0.5,
+                Stroke::new(
+                    1.0,
+                    if hovered {
+                        theme.foreground
+                    } else {
+                        theme.border
+                    },
+                ),
+            );
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                button_glyph(button, maximized),
+                fonts::body((r.width() * 0.62).round()),
+                if hovered || p.focused {
+                    theme.foreground
+                } else {
+                    theme.border
+                },
+            );
         }
         let title_area = to_rect(bar.title(p.frame));
         let label = shell
@@ -459,7 +557,7 @@ impl ShellUi {
                     } else {
                         app
                     };
-                    ui.label(RichText::new(name).strong());
+                    ui.label(strong(ui.ctx(), name, 14.0));
                 }
                 for menu in shell.menus.bar(focused.map(|w| w.get())) {
                     menu_button(ui, &menu, focused.map(|w| w.get()), actions);
@@ -851,7 +949,7 @@ impl ShellUi {
         let theme = self.theme;
         match widget {
             Widget::Clock => card(ui, &theme, |ui| {
-                ui.label(RichText::new(shell.clock.time_label()).size(44.0).strong());
+                ui.label(strong(ui.ctx(), shell.clock.time_label(), 44.0));
                 ui.label(shell.clock.date_label());
             }),
             Widget::Calendar => card(ui, &theme, |ui| calendar(ui, shell, &theme)),
@@ -870,7 +968,7 @@ impl ShellUi {
                 });
             }
             Widget::Suggestions => card(ui, &theme, |ui| {
-                ui.label(RichText::new("Suggested").strong());
+                ui.label(strong(ui.ctx(), "Suggested", 14.0));
                 let suggestions = shell.habits.suggestions(shell.clock.hour, 5);
                 if suggestions.is_empty() {
                     ui.label(RichText::new("Apps you use will appear here.").color(theme.border));
@@ -887,13 +985,13 @@ impl ShellUi {
                 });
             }),
             Widget::Units => card(ui, &theme, |ui| {
-                ui.label(RichText::new("Services").strong());
+                ui.label(strong(ui.ctx(), "Services", 14.0));
                 if shell.failed_units.is_empty() {
                     ui.label(RichText::new("All user services running ✓").color(theme.border));
                 }
                 for unit in &shell.failed_units {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(unit).color(button_color(Button::Close)));
+                        ui.label(RichText::new(unit).color(DESTRUCTIVE));
                         if ui.small_button("Restart").clicked() {
                             actions.push(Action::RestartUnit { unit: unit.clone() });
                         }
@@ -904,7 +1002,7 @@ impl ShellUi {
                 }
             }),
             Widget::Notes => card(ui, &theme, |ui| {
-                ui.label(RichText::new("Notes").strong());
+                ui.label(strong(ui.ctx(), "Notes", 14.0));
                 ui.add(
                     egui::TextEdit::multiline(&mut self.notes)
                         .desired_rows(4)
@@ -920,6 +1018,7 @@ impl ShellUi {
     fn palette(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
         let theme = self.theme;
         let state = &mut self.palette;
+        let icon_cache = &mut self.icons;
         let mut cursor_to_end = false;
         if !state.open {
             state.query = state.preset.take().unwrap_or_default();
@@ -1072,7 +1171,7 @@ impl ShellUi {
                                     } else {
                                         "Search apps, windows, commands, files… or ask derisk"
                                     })
-                                    .font(FontId::proportional(18.0))
+                                    .font(fonts::mono(17.0))
                                     .frame(egui::Frame::NONE)
                                     .margin(vec2(6.0, 8.0))
                                     .desired_width(f32::INFINITY),
@@ -1122,8 +1221,20 @@ impl ShellUi {
                                                     .color(theme.border),
                                             );
                                         }
-                                        let response =
-                                            palette_row(ui, &theme, entry, i == selected);
+                                        let icon = (!entry.icon_name.is_empty()).then(|| {
+                                            icon_cache.get(
+                                                ui.ctx(),
+                                                &entry.icon_name,
+                                                theme.foreground,
+                                            )
+                                        });
+                                        let response = palette_row(
+                                            ui,
+                                            &theme,
+                                            entry,
+                                            icon,
+                                            i == selected,
+                                        );
                                         if i == selected && (up || down) {
                                             response.scroll_to_me(None);
                                         }
@@ -1297,13 +1408,13 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
                         Source::Agent => "Agent",
                     };
                     ui.label(RichText::new(who).size(11.0).color(theme.accent));
-                    ui.label(RichText::new(&turn.request).strong());
+                    ui.label(strong(ui.ctx(), &turn.request, 14.0));
                 });
                 for step in &turn.steps {
                     let (icon, color) = match &step.status {
                         StepStatus::Done => ("✔", theme.accent),
                         StepStatus::Waiting => ("⟳", theme.border),
-                        StepStatus::Failed(_) => ("✖", button_color(Button::Close)),
+                        StepStatus::Failed(_) => ("✖", DESTRUCTIVE),
                         StepStatus::Skipped => ("·", theme.border),
                     };
                     ui.horizontal(|ui| {
@@ -1326,7 +1437,7 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
                             .iter()
                             .any(|s| matches!(s.status, StepStatus::Failed(_)));
                     ui.label(RichText::new(turn.reply()).color(if failed {
-                        button_color(Button::Close)
+                        DESTRUCTIVE
                     } else {
                         theme.border
                     }));
@@ -1336,8 +1447,15 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
     clear
 }
 
-/// One palette row: icon, title, detail and shortcut hint.
-fn palette_row(ui: &mut Ui, theme: &Theme, entry: &Entry, selected: bool) -> egui::Response {
+/// One palette row: icon, title, detail and shortcut hint. `icon` is the
+/// entry's resolved theme icon; without one the row draws `entry.icon`.
+fn palette_row(
+    ui: &mut Ui,
+    theme: &Theme,
+    entry: &Entry,
+    icon: Option<Icon>,
+    selected: bool,
+) -> egui::Response {
     let (r, response) = ui.allocate_exact_size(
         vec2(ui.available_width(), PALETTE_ROW_HEIGHT),
         Sense::click(),
@@ -1353,13 +1471,30 @@ fn palette_row(ui: &mut Ui, theme: &Theme, entry: &Entry, selected: bool) -> egu
         );
     }
     let mid = r.center().y;
-    painter.text(
-        pos2(r.left() + 18.0, mid),
-        Align2::CENTER_CENTER,
-        &entry.icon,
-        FontId::proportional(16.0),
-        theme.foreground,
-    );
+    let icon_center = pos2(r.left() + 18.0, mid);
+    match icon {
+        Some(Icon::Texture(texture)) => {
+            painter.image(
+                texture.id(),
+                Rect::from_center_size(icon_center, vec2(16.0, 16.0)),
+                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+        icon => {
+            let text = match icon {
+                Some(Icon::Glyph(glyph)) => glyph,
+                _ => entry.icon.as_str(),
+            };
+            painter.text(
+                icon_center,
+                Align2::CENTER_CENTER,
+                text,
+                FontId::proportional(16.0),
+                theme.foreground,
+            );
+        }
+    }
     let shortcut_width = entry
         .shortcut
         .as_ref()
@@ -1369,9 +1504,9 @@ fn palette_row(ui: &mut Ui, theme: &Theme, entry: &Entry, selected: bool) -> egu
         elide(
             &entry.title,
             (r.width() - 56.0 - shortcut_width) * 0.6,
-            15.0,
+            14.0,
         ),
-        FontId::proportional(15.0),
+        fonts::mono(14.0),
         theme.foreground,
     );
     let title_width = title_galley.size().x;
@@ -1404,7 +1539,7 @@ fn palette_row(ui: &mut Ui, theme: &Theme, entry: &Entry, selected: bool) -> egu
 
 fn calendar(ui: &mut Ui, shell: &Shell, theme: &Theme) {
     let clock = shell.clock;
-    ui.label(RichText::new(clock.date_label()).strong());
+    ui.label(strong(ui.ctx(), clock.date_label(), 14.0));
     egui::Grid::new("derisk-calendar")
         .spacing(vec2(6.0, 4.0))
         .show(ui, |ui| {
@@ -1419,7 +1554,7 @@ fn calendar(ui: &mut Ui, shell: &Shell, theme: &Theme) {
             for day in 1..=clock.days_in_month() {
                 let text = RichText::new(format!("{day:>2}"));
                 ui.label(if day == clock.day {
-                    text.color(theme.accent).strong()
+                    text.color(theme.accent).font(fonts::strong(ui.ctx(), 14.0))
                 } else {
                     text
                 });

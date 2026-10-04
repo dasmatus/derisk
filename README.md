@@ -9,10 +9,12 @@ derisk takes the good parts from many desktops:
 | --- | --- |
 | Automatic tiling (mcsapi `Tall`/`Monocle` layouts) with floating windows | tiling WMs |
 | Drag a title bar to an edge or corner to snap; top edge maximizes; Super+arrows; Snap Assist offers the other half | Windows |
-| Window buttons (close, minimize, maximize) on the **left** of the title bar | macOS |
+| Window buttons (close, minimize, maximize) on the **left** of the title bar, as neutral outlined circles with their icons always showing | macOS |
 | Global menu in the top bar (app menus + a Window menu) | macOS, KDE |
 | Overview with workspaces, an exposé grid and widgets (clock, suggestions, failed units, calendar, battery, notes) | GNOME, iPadOS |
 | Monochrome systray icons recolored to the theme | macOS, GNOME |
+| Monochrome app icons: Papirus symbolic, then hicolor recolored to the text color, then Nerd Font glyphs | freedesktop |
+| NotoSans Nerd Font Propo for text and Cousine Nerd Font for the palette prompt and shortcuts, with full Central European Latin | Nerd Fonts |
 | Adaptive profiles: phone (monocle, no gaps), tablet, desktop | mobile shells |
 | App suggestions learned from when you launch apps | Android, iOS |
 | Startup animation: logo pops in, ring sweeps, then blooms into the desktop (cross-fade with reduced motion) | — |
