@@ -280,6 +280,15 @@ pub fn format_number(value: f64) -> String {
     }
 }
 
+/// The keypad, row by row, shared by every toolkit's Calculator.
+pub const KEYS: [[&str; 5]; 5] = [
+    ["C", "(", ")", "%", "⬅"],
+    ["7", "8", "9", "÷", "√"],
+    ["4", "5", "6", "×", "^"],
+    ["1", "2", "3", "−", "pi"],
+    ["0", ".", "ans", "+", "="],
+];
+
 /// The Calculator app.
 #[derive(Debug, Default)]
 pub struct CalculatorApp {
@@ -316,7 +325,9 @@ impl CalculatorApp {
         }
     }
 
-    fn press(&mut self, key: &str) {
+    /// Applies one keypad key from [`KEYS`]: `C` clears, `⬅` deletes,
+    /// `=` submits, `√` opens `sqrt(`, anything else is typed.
+    pub fn press(&mut self, key: &str) {
         match key {
             "C" => {
                 self.input.clear();
@@ -386,13 +397,6 @@ impl App for CalculatorApp {
             };
             ui.label(preview.size(18.0));
             ui.add_space(8.0);
-            const KEYS: [[&str; 5]; 5] = [
-                ["C", "(", ")", "%", "⬅"],
-                ["7", "8", "9", "÷", "√"],
-                ["4", "5", "6", "×", "^"],
-                ["1", "2", "3", "−", "pi"],
-                ["0", ".", "ans", "+", "="],
-            ];
             let size = egui::vec2(
                 ((ui.available_width() - 4.0 * 6.0) / 5.0).max(40.0),
                 ((ui.available_height() - 4.0 * 6.0) / 5.0).clamp(32.0, 72.0),

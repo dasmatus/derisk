@@ -9,20 +9,23 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#24 (a lock cancels the held press; it builds on #23's
-# frame pacing by refresh rate and VRR) merges, every mcsapi crate comes from
-# its branch so the apps and the compositor share one mcsapi-ui. Then drop the
-# `branch` keys and run `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
+# Until dasmatus/mcsapi#25 (the mcsapi-theme theming engine) merges, every
+# mcsapi crate comes from its branch so the apps and the compositor share one
+# mcsapi-ui. That branch must carry main's #24 too (a lock cancels the held
+# press). Then drop the `branch` keys and run `cargo update -p mcsapi`.
+mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
 derisk-monitor = { path = "crates/derisk-monitor", version = "0.1.0" }
 derisk-calculator = { path = "crates/derisk-calculator", version = "0.1.0" }
 derisk-apps = { path = "crates/derisk-apps", version = "0.1.0" }
+derisk-gpui = { path = "crates/derisk-gpui", version = "0.1.0" }
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 
 [package]
@@ -37,6 +40,7 @@ repository.workspace = true
 [dependencies]
 derisk-settings.workspace = true
 mcsapi.workspace = true
+mcsapi-theme.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
@@ -47,10 +51,13 @@ mcsapi-compositor = { workspace = true, optional = true }
 mcsapi-runtime = { workspace = true, optional = true }
 # The lock screen's PAM conversation allocates with libc, which PAM frees.
 libc = { version = "0.2", optional = true }
+# Only its list of ported apps; the GPUI build is its own binary.
+derisk-gpui = { workspace = true, optional = true }
 
 [features]
 host = [
     "dep:derisk-apps",
+    "dep:derisk-gpui",
     "dep:libc",
     "dep:mcsapi-compositor",
     "dep:mcsapi-runtime",
