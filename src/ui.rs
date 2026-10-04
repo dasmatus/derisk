@@ -27,7 +27,7 @@ use crate::{
     decorations::Button,
     geom::inset,
     menu::{Menu, MenuEntry},
-    overview::{OverviewLayout, Widget, fit, grid},
+    overview::{OverviewLayout, Widget, fit, grid, row},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
 };

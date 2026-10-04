@@ -28,8 +28,8 @@ use crate::{
 /// conversation step it reports to.
 type Deferred = (Action, Option<StepRef>);
 
-/// Number of workspaces created by [`Shell::new`].
-pub const WORKSPACES: u64 = 9;
+/// Maximum number of workspaces.
+pub const MAX_WORKSPACES: u64 = 9;
 
 /// Pointer travel, in logical pixels, before a title bar press becomes a drag.
 pub const DRAG_THRESHOLD: i32 = 6;
@@ -203,6 +203,7 @@ pub enum PointerOutcome {
 #[derive(Debug)]
 pub struct Shell {
     desktop: Desktop,
+    open: Vec<WorkspaceId>,
     windows: BTreeMap<WindowId, WindowInfo>,
     stack: Vec<WindowId>,
     next_id: u64,
@@ -247,10 +248,6 @@ fn openable(path: &Path) -> bool {
                 && path.extension().is_none_or(|e| e != "desktop")))
 }
 
-fn workspace(id: u64) -> Result<WorkspaceId, Error> {
-    WorkspaceId::new(id).ok_or(Error::UnknownWorkspace(id))
-}
-
 impl Shell {
     /// Creates a shell for an output with one open workspace.
     pub fn new(output: Geometry, touch: bool) -> Self {
@@ -259,6 +256,7 @@ impl Shell {
         let first = desktop.active().id();
         let mut shell = Self {
             desktop,
+            open: vec![first],
             windows: BTreeMap::new(),
             stack: Vec::new(),
             next_id: 1,

@@ -31,13 +31,14 @@
         let
           craneLib = crane.mkLib pkgs;
 
-          # Cargo sources plus data/, which the systemd tests read.
+          # Cargo sources plus runtime and test data.
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
               ./data
+              ./crates/derisk-apps/data
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./src)
               (lib.fileset.fileFilter (f: f.hasExt "rs") ./tests)
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./crates)
