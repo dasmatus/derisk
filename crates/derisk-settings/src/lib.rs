@@ -17,20 +17,24 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod flatpak;
 mod model;
 mod pages;
+mod privacy;
 mod shortcuts;
+mod thumbs;
 
 use std::path::PathBuf;
 
 use mcsapi_ui::{App, Theme, egui};
 pub use model::{
     Accent, Appearance, BarPosition, ColorScheme, DesktopPrefs, Fit, Input, Layout, LowPower,
-    Notifications, PanelOpacity, Power, Profile, Rgb, Settings, TopBar, Vrr, Wallpaper,
+    Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings, TopBar, Vrr, Wallpaper,
     WallpaperKind, Warning, WindowStyle, default_path,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
 pub use shortcuts::{Chord, KeyName, Shortcut, Shortcuts};
+pub use thumbs::thumbnail;
 
 /// A page of the Settings app.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -48,6 +52,8 @@ pub enum Page {
     Input,
     /// Rebindable keyboard shortcuts.
     Shortcuts,
+    /// Device access, history, trash, and Flatpak app permissions.
+    Privacy,
     /// Banners and sounds.
     Notifications,
     /// Dimming, locking, suspend, and low power mode.
@@ -58,13 +64,14 @@ pub enum Page {
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Appearance,
         Self::Wallpaper,
         Self::TopBar,
         Self::Desktop,
         Self::Input,
         Self::Shortcuts,
+        Self::Privacy,
         Self::Notifications,
         Self::Power,
         Self::About,
@@ -77,6 +84,7 @@ impl Page {
             Self::Wallpaper => "Wallpaper",
             Self::TopBar => "Top bar",
             Self::Shortcuts => "Shortcuts",
+            Self::Privacy => "Privacy",
             Self::Desktop => "Desktop",
             Self::Input => "Keyboard & pointer",
             Self::Notifications => "Notifications",
@@ -97,6 +105,8 @@ pub struct SettingsApp {
     pub page: Page,
     status: Option<String>,
     drafts: pages::Drafts,
+    thumbs: thumbs::Thumbnails,
+    privacy: privacy::PrivacyUi,
 }
 
 impl Default for SettingsApp {
@@ -107,6 +117,18 @@ impl Default for SettingsApp {
 }
 
 impl SettingsApp {
+    /// Reads Flatpak apps from `dirs` instead of the standard places.
+    pub fn with_flatpak_dirs(mut self, dirs: flatpak::Dirs) -> Self {
+        self.privacy = privacy::PrivacyUi::with_dirs(dirs);
+        self
+    }
+
+    /// Opens the Privacy page on one Flatpak app's permissions.
+    pub fn show_flatpak_app(&mut self, id: &str) {
+        self.page = Page::Privacy;
+        self.privacy.select(id);
+    }
+
     /// Opens the settings file at `path`, or edits in memory when `None`.
     ///
     /// A missing file starts from defaults; an unreadable or partly invalid
@@ -135,6 +157,8 @@ impl SettingsApp {
             path,
             settings: saved.clone(),
             drafts: pages::Drafts::new(&saved),
+            thumbs: thumbs::Thumbnails::default(),
+            privacy: privacy::PrivacyUi::default(),
             saved,
             page: Page::default(),
             status,
@@ -164,8 +188,10 @@ impl SettingsApp {
         };
         self.status = Some(match self.settings.save(path) {
             Ok(()) => {
-                self.saved = self.settings.clone();
-                "Saved".into()
+                let before = std::mem::replace(&mut self.saved, self.settings.clone());
+                self.privacy
+                    .apply_masters(&before.privacy, &self.settings.privacy)
+                    .unwrap_or_else(|| "Saved".into())
             }
             Err(error) => format!("Could not save: {error}"),
         });
@@ -182,6 +208,9 @@ impl SettingsApp {
         let s = &mut self.settings;
         ui.heading(egui::RichText::new(self.page.label()).color(theme.foreground));
         ui.add_space(8.0);
+        if self.page == Page::Privacy {
+            return privacy::page(ui, &mut s.privacy, &mut self.privacy, theme);
+        }
         egui::Grid::new("settings-page")
             .num_columns(2)
             .spacing([24.0, 10.0])
@@ -241,8 +270,15 @@ impl SettingsApp {
                     ui.checkbox(&mut w.shadows, "Soft shadow under windows");
                     ui.end_row();
                 }
-                Page::Wallpaper => pages::wallpaper(ui, &mut s.wallpaper, &mut self.drafts, theme),
+                Page::Wallpaper => pages::wallpaper(
+                    ui,
+                    &mut s.wallpaper,
+                    &mut self.drafts,
+                    &mut self.thumbs,
+                    theme,
+                ),
                 Page::TopBar => pages::top_bar(ui, &mut s.top_bar, theme),
+                Page::Privacy => {}
                 Page::Shortcuts => pages::shortcuts(ui, &mut s.shortcuts, &mut self.drafts, theme),
                 Page::Desktop => {
                     let d = &mut s.desktop;

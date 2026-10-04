@@ -27,6 +27,7 @@ use derisk::{
     keys::{self, Key, Mods, SuperTap},
     overview::Battery,
     palette::{self, Entry},
+    privacy,
     shell::{Mode, PointerOutcome, Shell},
     snap::{Direction, SnapZone},
     systemd::{self, Priority},
@@ -34,7 +35,7 @@ use derisk::{
     ui::ShellUi,
     wallpaper::{self, Visibility, WallpaperPainter},
 };
-use derisk_settings::Shortcuts;
+use derisk_settings::{Privacy, Shortcuts};
 use mcsapi::WindowId;
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, InstanceId,
@@ -77,6 +78,8 @@ pub struct Session {
     settings: SettingsWatch,
     shortcuts: Shortcuts,
     wallpaper: WallpaperPainter,
+    privacy: Privacy,
+    last_sweep: Option<Instant>,
 }
 
 /// Core-app actions waiting for the compositor to launch their app, shared
@@ -141,6 +144,8 @@ impl Session {
             settings: SettingsWatch::new(derisk_settings::default_path()),
             shortcuts: Shortcuts::default(),
             wallpaper: WallpaperPainter::default(),
+            privacy: derisk_settings::Settings::default().privacy,
+            last_sweep: None,
         }
     }
 
@@ -283,6 +288,33 @@ impl Session {
         }
     }
 
+    /// Applies Settings → Privacy to files on disk: right after it changes
+    /// and then every few minutes, so a recent-files list an app writes
+    /// again goes away soon after.
+    fn sweep(&mut self) {
+        if self
+            .last_sweep
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
+        {
+            return;
+        }
+        self.last_sweep = Some(Instant::now());
+        let Some(data) = privacy::data_home() else {
+            return;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        match privacy::sweep(&self.privacy, &data, now) {
+            Ok(swept) if swept.trashed > 0 => log(
+                Priority::Info,
+                &format!("emptied {} old item(s) from the trash", swept.trashed),
+            ),
+            Ok(_) => {}
+            Err(e) => log(Priority::Warning, &format!("privacy sweep: {e}")),
+        }
+    }
+
     fn startup_done(&self) -> bool {
         let elapsed = self.start.elapsed().as_millis() as u32;
         self.ui.startup_frame(elapsed).done
@@ -366,7 +398,15 @@ impl compositor::Shell for Session {
             self.shell.effects = Effects::from_settings(&settings);
             self.shortcuts = settings.shortcuts;
             self.wallpaper.configure(&settings.wallpaper);
+            if settings.privacy != self.privacy {
+                self.privacy = settings.privacy;
+                self.last_sweep = None;
+            }
         }
+        if !self.privacy.remember_recent {
+            self.ui.palette.history = Default::default();
+        }
+        self.sweep();
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
         }

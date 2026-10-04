@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use mcsapi_ui::{Theme, egui::Color32};
+use mcsapi_ui::{
+    Theme,
+    egui::{Color32, Rect, pos2, vec2},
+};
 
 use crate::shortcuts::Shortcuts;
 
@@ -271,6 +274,44 @@ impl Fit {
         Self::Tile,
     ];
 
+    /// Where a `size` picture lands on `screen`, as the rectangle to draw and
+    /// the part of the texture to sample (in 0–1 texture coordinates; above 1
+    /// repeats, for tiling).
+    pub fn place(self, size: [usize; 2], screen: Rect) -> (Rect, Rect) {
+        let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
+        match self {
+            Fit::Stretch => (screen, full),
+            Fit::Fill => {
+                // Sample the centered part of the picture with the screen's shape.
+                let scale = (screen.width() / w).max(screen.height() / h);
+                let (uw, uh) = (screen.width() / (w * scale), screen.height() / (h * scale));
+                let uv = Rect::from_center_size(pos2(0.5, 0.5), vec2(uw, uh));
+                (screen, uv)
+            }
+            Fit::Fit => {
+                let scale = (screen.width() / w).min(screen.height() / h);
+                (
+                    Rect::from_center_size(screen.center(), vec2(w * scale, h * scale)),
+                    full,
+                )
+            }
+            Fit::Center => {
+                // Actual size, cropped to the screen when larger.
+                let shown = vec2(w.min(screen.width()), h.min(screen.height()));
+                let uv = Rect::from_center_size(pos2(0.5, 0.5), vec2(shown.x / w, shown.y / h));
+                (Rect::from_center_size(screen.center(), shown), uv)
+            }
+            Fit::Tile => (
+                screen,
+                Rect::from_min_size(
+                    pos2(0.0, 0.0),
+                    vec2(screen.width() / w, screen.height() / h),
+                ),
+            ),
+        }
+    }
+
     /// The mode's label in the Settings app.
     pub const fn label(self) -> &'static str {
         match self {
@@ -320,6 +361,21 @@ impl Default for Wallpaper {
             pause_in_low_power: true,
         }
     }
+}
+
+/// Privacy preferences.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Privacy {
+    /// Apps may ask for the location. Off denies it to every Flatpak app.
+    pub location: bool,
+    /// Apps may ask for the camera. Off denies it to every Flatpak app.
+    pub camera: bool,
+    /// Apps may ask for the microphone. Off denies it to every Flatpak app.
+    pub microphone: bool,
+    /// Keep a list of recently used files and palette picks.
+    pub remember_recent: bool,
+    /// Days after which trashed files are deleted for good; 0 keeps them.
+    pub empty_trash_days: u16,
 }
 
 /// Whether the display has variable refresh rate (VRR, Adaptive-Sync), which
@@ -424,6 +480,8 @@ pub struct Settings {
     pub wallpaper: Wallpaper,
     /// Rebindable keyboard shortcuts.
     pub shortcuts: Shortcuts,
+    /// Device access, history and trash.
+    pub privacy: Privacy,
     /// Window management.
     pub desktop: DesktopPrefs,
     /// Keyboard and pointer.
@@ -464,6 +522,13 @@ impl Default for Settings {
             },
             wallpaper: Wallpaper::default(),
             shortcuts: Shortcuts::default(),
+            privacy: Privacy {
+                location: true,
+                camera: true,
+                microphone: true,
+                remember_recent: true,
+                empty_trash_days: 30,
+            },
             desktop: DesktopPrefs {
                 layout: Layout::Tall,
                 gaps: 8,
@@ -606,6 +671,7 @@ impl Settings {
             &mut self.power,
         );
         let (b, win, w) = (&mut self.top_bar, &mut self.windows, &mut self.wallpaper);
+        let pv = &mut self.privacy;
         if let Some(id) = key.strip_prefix("shortcut.") {
             return self.shortcuts.set_text(id, value);
         }
@@ -661,6 +727,11 @@ impl Settings {
             "wallpaper.shuffle" => put(&mut w.shuffle, parse_bool(value)),
             "wallpaper.pause_when_covered" => put(&mut w.pause_when_covered, parse_bool(value)),
             "wallpaper.pause_in_low_power" => put(&mut w.pause_in_low_power, parse_bool(value)),
+            "privacy.location" => put(&mut pv.location, parse_bool(value)),
+            "privacy.camera" => put(&mut pv.camera, parse_bool(value)),
+            "privacy.microphone" => put(&mut pv.microphone, parse_bool(value)),
+            "privacy.remember_recent" => put(&mut pv.remember_recent, parse_bool(value)),
+            "privacy.empty_trash_days" => put(&mut pv.empty_trash_days, parse_in(value, 0, 365)),
             _ => false,
         }
     }
@@ -719,6 +790,11 @@ impl Settings {
              wallpaper.shuffle = {}\n\
              wallpaper.pause_when_covered = {}\n\
              wallpaper.pause_in_low_power = {}\n\
+             privacy.location = {}\n\
+             privacy.camera = {}\n\
+             privacy.microphone = {}\n\
+             privacy.remember_recent = {}\n\
+             privacy.empty_trash_days = {}\n\
              {}",
             a.scheme.as_str(),
             a.accent.as_str(),
@@ -762,6 +838,11 @@ impl Settings {
             w.shuffle,
             w.pause_when_covered,
             w.pause_in_low_power,
+            self.privacy.location,
+            self.privacy.camera,
+            self.privacy.microphone,
+            self.privacy.remember_recent,
+            self.privacy.empty_trash_days,
             self.shortcuts.to_text(),
         )
     }

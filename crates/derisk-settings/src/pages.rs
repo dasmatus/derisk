@@ -8,7 +8,12 @@ use mcsapi_ui::{Theme, egui};
 use crate::{
     model::{BarPosition, Fit, Rgb, Settings, TopBar, Wallpaper, WallpaperKind},
     shortcuts::{Chord, Shortcut, Shortcuts},
+    thumbs::Thumbnails,
 };
+
+/// The screen width the preview stands for, so Center and Tile show
+/// pictures at about the size they will have.
+const PREVIEW_SCREEN_WIDTH: f32 = 1920.0;
 
 /// Picture extensions the session can decode.
 pub const IMAGE_EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
@@ -122,7 +127,16 @@ fn hint(ui: &mut egui::Ui, theme: &Theme, text: &str) {
     ui.end_row();
 }
 
-pub(crate) fn wallpaper(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, theme: &Theme) {
+pub(crate) fn wallpaper(
+    ui: &mut egui::Ui,
+    w: &mut Wallpaper,
+    drafts: &mut Drafts,
+    thumbs: &mut Thumbnails,
+    theme: &Theme,
+) {
+    ui.label("Preview");
+    preview(ui, w, thumbs, theme, egui::vec2(320.0, 200.0));
+    ui.end_row();
     ui.label("Background");
     ui.horizontal_wrapped(|ui| {
         for kind in WallpaperKind::ALL {
@@ -144,7 +158,7 @@ pub(crate) fn wallpaper(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Draft
             color_row(ui, "Bottom", &mut w.color2);
         }
         WallpaperKind::Image | WallpaperKind::Slideshow | WallpaperKind::Video => {
-            file_rows(ui, w, drafts, theme);
+            file_rows(ui, w, drafts, thumbs, theme);
             ui.label("Fit");
             ui.horizontal_wrapped(|ui| {
                 for fit in Fit::ALL {
@@ -184,7 +198,13 @@ pub(crate) fn wallpaper(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Draft
     }
 }
 
-fn file_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, theme: &Theme) {
+fn file_rows(
+    ui: &mut egui::Ui,
+    w: &mut Wallpaper,
+    drafts: &mut Drafts,
+    thumbs: &mut Thumbnails,
+    theme: &Theme,
+) {
     ui.label(if w.kind == WallpaperKind::Slideshow {
         "Folder"
     } else {
@@ -225,28 +245,161 @@ fn file_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, theme: &
         return;
     }
     ui.label("Found");
-    ui.vertical(|ui| {
-        egui::ScrollArea::vertical()
-            .id_salt("wallpaper-candidates")
-            .max_height(160.0)
-            .show(ui, |ui| {
-                for path in found {
-                    let name = path.file_name().map_or_else(
-                        || path.display().to_string(),
-                        |n| n.to_string_lossy().into_owned(),
-                    );
-                    if ui
-                        .selectable_label(w.path == *path, name)
-                        .on_hover_text(path.display().to_string())
-                        .clicked()
-                    {
-                        w.path = path.clone();
-                        drafts.path = path.display().to_string();
+    ui.horizontal_wrapped(|ui| {
+        ui.set_max_width(520.0);
+        for path in found {
+            let name = path.file_name().map_or_else(
+                || path.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            let tile = Wallpaper {
+                path: path.clone(),
+                fit: Fit::Fill,
+                ..w.clone()
+            };
+            let selected = w.path == *path;
+            let response = ui
+                .vertical(|ui| {
+                    ui.set_width(156.0);
+                    let r = preview(ui, &tile, thumbs, theme, egui::vec2(156.0, 98.0));
+                    if selected {
+                        ui.painter().rect_stroke(
+                            r.rect.expand(2.0),
+                            6,
+                            egui::Stroke::new(2.0, theme.accent),
+                            egui::StrokeKind::Outside,
+                        );
                     }
-                }
-            });
+                    ui.label(egui::RichText::new(elide(&name, 24)).small());
+                    r
+                })
+                .inner;
+            if response.on_hover_text(path.display().to_string()).clicked() {
+                w.path = path.clone();
+                drafts.path = path.display().to_string();
+            }
+        }
     });
     ui.end_row();
+}
+
+fn elide(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut short: String = text.chars().take(max - 1).collect();
+    short.push('…');
+    short
+}
+
+/// A miniature screen showing `w`, clickable. Pictures, videos and
+/// slideshows show their thumbnail as the session would fit it.
+fn preview(
+    ui: &mut egui::Ui,
+    w: &Wallpaper,
+    thumbs: &mut Thumbnails,
+    theme: &Theme,
+    size: egui::Vec2,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let painter = ui.painter_at(rect);
+    let gradient = |top: egui::Color32, bottom: egui::Color32| {
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(rect.left_top(), top);
+        mesh.colored_vertex(rect.right_top(), top);
+        mesh.colored_vertex(rect.left_bottom(), bottom);
+        mesh.colored_vertex(rect.right_bottom(), bottom);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(1, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
+    };
+    let default = || {
+        gradient(Rgb(17, 24, 39).color(), Rgb(30, 27, 75).color());
+        painter.circle_filled(
+            rect.right_bottom() - egui::vec2(size.x * 0.05, size.y * 0.07),
+            size.y * 0.04,
+            theme.accent.gamma_multiply(0.35),
+        );
+    };
+    let badge = match w.kind {
+        WallpaperKind::Default => {
+            default();
+            None
+        }
+        WallpaperKind::Color => {
+            painter.rect_filled(rect, 0, w.color.color());
+            None
+        }
+        WallpaperKind::Gradient => {
+            gradient(w.color.color(), w.color2.color());
+            None
+        }
+        WallpaperKind::Image | WallpaperKind::Slideshow | WallpaperKind::Video => {
+            match thumbs.get(ui.ctx(), &w.path) {
+                Some((texture, source)) => {
+                    painter.rect_filled(rect, 0, w.color.color());
+                    // Videos always fill (see the session's ffmpeg filter).
+                    let fit = if w.kind == WallpaperKind::Video && w.fit != Fit::Fit {
+                        Fit::Fill
+                    } else {
+                        w.fit
+                    };
+                    // Center and Tile work at actual size: scale the source
+                    // as a 1920-wide screen would show it in this preview.
+                    let k = size.x / PREVIEW_SCREEN_WIDTH;
+                    let shown = [
+                        (source[0] as f32 * k).max(1.0) as usize,
+                        (source[1] as f32 * k).max(1.0) as usize,
+                    ];
+                    let (to, uv) = fit.place(shown, rect);
+                    painter.image(texture.id(), to, uv, egui::Color32::WHITE);
+                }
+                None => {
+                    default();
+                    let text = if w.path.as_os_str().is_empty() {
+                        "Choose a file"
+                    } else if thumbs.failed(&w.path) {
+                        "No preview"
+                    } else {
+                        "Loading…"
+                    };
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        egui::FontId::proportional(12.0),
+                        theme.foreground,
+                    );
+                }
+            }
+            match w.kind {
+                WallpaperKind::Video => Some("▶ Video"),
+                WallpaperKind::Slideshow => Some("Slideshow"),
+                _ => None,
+            }
+        }
+    };
+    if let Some(badge) = badge {
+        let galley = painter.layout_no_wrap(
+            badge.to_owned(),
+            egui::FontId::proportional(11.0),
+            egui::Color32::WHITE,
+        );
+        let at = rect.left_bottom() + egui::vec2(6.0, -6.0 - galley.size().y);
+        painter.rect_filled(
+            egui::Rect::from_min_size(at, galley.size()).expand(3.0),
+            4,
+            egui::Color32::from_black_alpha(160),
+        );
+        painter.galley(at, galley, egui::Color32::WHITE);
+    }
+    painter.rect_stroke(
+        rect,
+        6,
+        egui::Stroke::new(1.0, theme.border),
+        egui::StrokeKind::Inside,
+    );
+    response
 }
 
 pub(crate) fn top_bar(ui: &mut egui::Ui, b: &mut TopBar, theme: &Theme) {

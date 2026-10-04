@@ -23,7 +23,7 @@ use std::{
 };
 
 use derisk_settings::{Fit, IMAGE_EXTENSIONS, Rgb, Wallpaper, WallpaperKind};
-use egui::{Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2, vec2};
+use egui::{Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2};
 use mcsapi::{Geometry, toolkit::egui, widgets::Theme};
 
 use crate::ui::paint_wallpaper;
@@ -61,42 +61,9 @@ pub fn covered(area: Geometry, frames: impl IntoIterator<Item = Geometry>) -> bo
     })
 }
 
-/// Where a `size` picture lands on `screen`, as the rectangle to draw and
-/// the part of the texture to sample (in 0–1 texture coordinates; above 1
-/// repeats, for tiling).
+/// Where a `size` picture lands on `screen`; see [`Fit::place`].
 pub fn placement(fit: Fit, size: [usize; 2], screen: Rect) -> (Rect, Rect) {
-    let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
-    match fit {
-        Fit::Stretch => (screen, full),
-        Fit::Fill => {
-            // Sample the centered part of the picture with the screen's shape.
-            let scale = (screen.width() / w).max(screen.height() / h);
-            let (uw, uh) = (screen.width() / (w * scale), screen.height() / (h * scale));
-            let uv = Rect::from_center_size(pos2(0.5, 0.5), vec2(uw, uh));
-            (screen, uv)
-        }
-        Fit::Fit => {
-            let scale = (screen.width() / w).min(screen.height() / h);
-            (
-                Rect::from_center_size(screen.center(), vec2(w * scale, h * scale)),
-                full,
-            )
-        }
-        Fit::Center => {
-            // Actual size, cropped to the screen when larger.
-            let shown = vec2(w.min(screen.width()), h.min(screen.height()));
-            let uv = Rect::from_center_size(pos2(0.5, 0.5), vec2(shown.x / w, shown.y / h));
-            (Rect::from_center_size(screen.center(), shown), uv)
-        }
-        Fit::Tile => (
-            screen,
-            Rect::from_min_size(
-                pos2(0.0, 0.0),
-                vec2(screen.width() / w, screen.height() / h),
-            ),
-        ),
-    }
+    fit.place(size, screen)
 }
 
 /// The size to decode a `size` picture at for `fit` on a `screen`-pixel
