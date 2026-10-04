@@ -87,7 +87,7 @@ pub struct State {
     pub form_factor: FormFactor,
     /// Active workspace number.
     pub active_workspace: u64,
-    /// Workspace numbers.
+    /// Open workspace numbers, `1..=n`.
     pub workspaces: Vec<u64>,
     /// All managed windows.
     pub windows: Vec<WindowState>,
@@ -112,16 +112,17 @@ pub fn state(shell: &Shell) -> State {
     let placements = shell.placements();
     let focused = shell.focused();
     let windows = shell
-        .desktop()
         .workspaces()
-        .flat_map(|ws| ws.windows().map(move |w| (ws.id(), w)))
+        .iter()
+        .zip(1..)
+        .flat_map(|(ws, n)| shell.windows_on(*ws).into_iter().map(move |w| (n, w)))
         .map(|(ws, w)| {
             let (app_id, title) = shell.window_label(w).unwrap_or_default();
             WindowState {
                 id: w.get(),
                 app_id: app_id.to_owned(),
                 title: title.to_owned(),
-                workspace: ws.get(),
+                workspace: ws,
                 mode: shell.mode(w).unwrap_or(Mode::Tiled),
                 frame: placements
                     .iter()
@@ -135,8 +136,8 @@ pub fn state(shell: &Shell) -> State {
     State {
         output: shell.output().into(),
         form_factor: shell.profile().form_factor,
-        active_workspace: shell.desktop().active().id().get(),
-        workspaces: shell.desktop().workspaces().map(|w| w.id().get()).collect(),
+        active_workspace: shell.active_workspace(),
+        workspaces: (1..=shell.workspaces().len() as u64).collect(),
         windows,
         overview: shell.overview_visible(),
         menus: shell.menus.bar(focused.map(|w| w.get())),
@@ -152,6 +153,7 @@ pub fn state(shell: &Shell) -> State {
 pub fn tools() -> Value {
     let window =
         json!({"type": "integer", "description": "Window ID; omit for the focused window"});
+    let workspace = json!({"type": "integer", "minimum": 1, "description": "Workspace number; one past the last opens a new workspace. Empty workspaces close and the rest renumber"});
     let zone = json!({"enum": ["left", "right", "top_left", "top_right", "bottom_left", "bottom_right", "maximize"]});
     let action = json!({
         "oneOf": [
@@ -161,8 +163,8 @@ pub fn tools() -> Value {
             {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["focus_next", "focus_previous", "promote"]}}},
             {"type": "object", "required": ["action", "zone"], "properties": {"action": {"const": "snap"}, "window": window, "zone": zone}},
             {"type": "object", "required": ["action", "direction"], "properties": {"action": {"const": "nudge"}, "window": window, "direction": {"enum": ["left", "right", "up", "down"]}}},
-            {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "switch_workspace"}, "workspace": {"type": "integer", "minimum": 1}}},
-            {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "move_to_workspace"}, "window": window, "workspace": {"type": "integer", "minimum": 1}}},
+            {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "switch_workspace"}, "workspace": workspace}},
+            {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "move_to_workspace"}, "window": window, "workspace": workspace}},
             {"type": "object", "required": ["action", "layout"], "properties": {"action": {"const": "set_layout"}, "layout": {"enum": ["tall", "monocle"]}}},
             {"type": "object", "required": ["action"], "properties": {"action": {"const": "overview"}, "visible": {"type": "boolean"}}},
             {"type": "object", "required": ["action", "item"], "properties": {"action": {"const": "activate_menu"}, "window": window, "item": {"type": "string"}}},

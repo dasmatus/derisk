@@ -19,8 +19,12 @@ use crate::{
     tray::Tray,
 };
 
-/// Number of workspaces created by [`Shell::new`].
-pub const WORKSPACES: u64 = 9;
+/// Most workspaces open at once (macOS allows 16 desktops too).
+///
+/// Workspaces are dynamic: the shell starts with one, a number one past the
+/// last opens a new one, and workspaces left empty are closed, renumbering
+/// the rest like macOS Spaces.
+pub const MAX_WORKSPACES: u64 = 16;
 
 /// Pointer travel, in logical pixels, before a title bar press becomes a drag.
 pub const DRAG_THRESHOLD: i32 = 6;
@@ -192,6 +196,9 @@ pub struct Shell {
     drag: Option<Drag>,
     clicks: ClickTracker,
     overview: bool,
+    /// Open workspaces in display order; workspace number `n` is `open[n - 1]`.
+    /// The other policy workspaces are empty and unused.
+    open: Vec<WorkspaceId>,
     snap_assist: Option<SnapAssist>,
     pending: Vec<(String, Vec<Action>)>,
     /// Global menus registered by apps.
@@ -208,15 +215,12 @@ pub struct Shell {
     pub failed_units: Vec<String>,
 }
 
-fn workspace(id: u64) -> Result<WorkspaceId, Error> {
-    WorkspaceId::new(id).ok_or(Error::UnknownWorkspace(id))
-}
-
 impl Shell {
-    /// Creates a shell for an output with [`WORKSPACES`] workspaces.
+    /// Creates a shell for an output with one open workspace.
     pub fn new(output: Geometry, touch: bool) -> Self {
-        let desktop = Desktop::new((1..=WORKSPACES).filter_map(WorkspaceId::new))
+        let desktop = Desktop::new((1..=MAX_WORKSPACES).filter_map(WorkspaceId::new))
             .expect("workspace IDs are unique and nonzero");
+        let first = desktop.active().id();
         let mut shell = Self {
             desktop,
             windows: BTreeMap::new(),
@@ -227,6 +231,7 @@ impl Shell {
             drag: None,
             clicks: ClickTracker::default(),
             overview: false,
+            open: vec![first],
             snap_assist: None,
             pending: Vec::new(),
             menus: GlobalMenu::default(),
@@ -284,6 +289,68 @@ impl Shell {
     /// The underlying mcsapi policy (workspaces, focus, layout).
     pub fn desktop(&self) -> &Desktop {
         &self.desktop
+    }
+
+    /// Open workspaces in display order. Workspace number `n` (as used by
+    /// actions, keys and IPC) is the `n`th entry.
+    pub fn workspaces(&self) -> &[WorkspaceId] {
+        &self.open
+    }
+
+    /// The 1-based number of an open workspace.
+    pub fn workspace_number(&self, workspace: WorkspaceId) -> Option<u64> {
+        self.open
+            .iter()
+            .position(|w| *w == workspace)
+            .map(|i| i as u64 + 1)
+    }
+
+    /// The active workspace's number.
+    pub fn active_workspace(&self) -> u64 {
+        self.workspace_number(self.desktop.active().id())
+            .expect("the active workspace is open")
+    }
+
+    /// Whether another workspace can be opened.
+    pub fn can_add_workspace(&self) -> bool {
+        (self.open.len() as u64) < MAX_WORKSPACES
+    }
+
+    /// The open workspace numbered `n`, opening a new empty one at the end
+    /// when `n` is one past the last.
+    fn workspace(&mut self, n: u64) -> Result<WorkspaceId, Error> {
+        let count = self.open.len() as u64;
+        if (1..=count).contains(&n) {
+            return Ok(self.open[n as usize - 1]);
+        }
+        if n != count + 1 || !self.can_add_workspace() {
+            return Err(Error::UnknownWorkspace(n));
+        }
+        let id = self
+            .desktop
+            .workspaces()
+            .map(|w| w.id())
+            .find(|id| !self.open.contains(id))
+            .expect("fewer than MAX_WORKSPACES are open");
+        // A reused workspace starts fresh, with the profile's layout.
+        let active = self.desktop.active().id();
+        self.desktop.switch_to(id).expect("existing workspace");
+        self.desktop.set_layout(self.profile.layout);
+        self.desktop.switch_to(active).expect("existing workspace");
+        self.open.push(id);
+        Ok(id)
+    }
+
+    /// Closes empty workspaces other than the active one.
+    fn prune_workspaces(&mut self) {
+        let active = self.desktop.active().id();
+        let desktop = &self.desktop;
+        self.open.retain(|id| {
+            *id == active
+                || desktop
+                    .workspaces()
+                    .any(|ws| ws.id() == *id && ws.windows().len() > 0)
+        });
     }
 
     /// Whether the overview is showing.
@@ -378,6 +445,7 @@ impl Shell {
         self.windows.remove(&window);
         self.stack.retain(|w| *w != window);
         self.menus.unregister(window.get());
+        self.prune_workspaces();
         if self.drag.is_some_and(|d| d.window == window) {
             self.drag = None;
         }
@@ -534,7 +602,15 @@ impl Shell {
     }
 
     /// Applies one action, returning work for the host.
+    ///
+    /// Workspaces the action leaves empty are closed, unless active.
     pub fn apply(&mut self, action: Action) -> Result<Vec<Effect>, Error> {
+        let result = self.apply_action(action);
+        self.prune_workspaces();
+        result
+    }
+
+    fn apply_action(&mut self, action: Action) -> Result<Vec<Effect>, Error> {
         if !matches!(action, Action::Snap { .. }) {
             self.snap_assist = None;
         }
@@ -624,22 +700,16 @@ impl Shell {
                 self.focus(w)?;
             }
             Action::SwitchWorkspace { workspace: n } => {
-                self.desktop.switch_to(workspace(n)?).map_err(|e| match e {
-                    mcsapi::Error::UnknownWorkspace(_) => Error::UnknownWorkspace(n),
-                    other => other.into(),
-                })?;
+                let ws = self.workspace(n)?;
+                self.desktop.switch_to(ws)?;
             }
             Action::MoveToWorkspace {
                 window,
                 workspace: n,
             } => {
                 let w = self.target(window)?;
-                self.desktop
-                    .move_window(w, workspace(n)?)
-                    .map_err(|e| match e {
-                        mcsapi::Error::UnknownWorkspace(_) => Error::UnknownWorkspace(n),
-                        other => other.into(),
-                    })?;
+                let ws = self.workspace(n)?;
+                self.desktop.move_window(w, ws)?;
             }
             Action::SetLayout { layout } => self.desktop.set_layout(match layout {
                 LayoutKind::Tall => Layout::Tall,
