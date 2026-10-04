@@ -117,6 +117,51 @@ pub struct PaletteUi {
 const PALETTE_ROWS: usize = 9;
 const PALETTE_ROW_HEIGHT: f32 = 40.0;
 
+fn limit_palette_hits(entries: &[Entry], hits: &[usize], limit: usize) -> Vec<usize> {
+    if hits.len() <= limit {
+        return hits.to_vec();
+    }
+
+    let mut categories: Vec<(Category, Vec<usize>)> = Vec::new();
+    for &hit in hits {
+        let category = entries[hit].category;
+        if let Some((_, category_hits)) = categories
+            .iter_mut()
+            .find(|(existing, _)| *existing == category)
+        {
+            category_hits.push(hit);
+        } else {
+            categories.push((category, vec![hit]));
+        }
+    }
+
+    let base_quota = limit / categories.len();
+    let extra_quota = limit % categories.len();
+    let mut included = vec![false; entries.len()];
+    let mut included_count = 0;
+    for (index, (_, category_hits)) in categories.iter().enumerate() {
+        let quota = base_quota + usize::from(index < extra_quota);
+        for &hit in category_hits.iter().take(quota) {
+            included[hit] = true;
+            included_count += 1;
+        }
+    }
+    for &hit in hits {
+        if included_count == limit {
+            break;
+        }
+        if !included[hit] {
+            included[hit] = true;
+            included_count += 1;
+        }
+    }
+
+    categories
+        .into_iter()
+        .flat_map(|(_, category_hits)| category_hits.into_iter().filter(|&hit| included[hit]))
+        .collect()
+}
+
 impl ShellUi {
     /// Creates UI state; `reduced_motion` shortens the startup animation.
     pub fn new(shell: &Shell, reduced_motion: bool) -> Self {
@@ -857,7 +902,10 @@ impl ShellUi {
                 .filter(|ask| !ask.actions.is_empty() || hits.is_empty());
             (entries, hits, ask)
         };
-        let mut rows: Vec<&Entry> = hits.iter().take(60).map(|&i| &entries[i]).collect();
+        let mut rows: Vec<&Entry> = limit_palette_hits(&entries, &hits, 60)
+            .iter()
+            .map(|&i| &entries[i])
+            .collect();
         if let Some(ask) = &ask {
             if palette::prefer_assistant(&entries, &hits, &state.query) {
                 rows.insert(0, ask);
@@ -1418,5 +1466,30 @@ pub fn paint_startup(painter: &Painter, screen: Rect, frame: StartupFrame, theme
             })
             .collect();
         painter.line(points, Stroke::new(4.0, accent));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn palette_result_limit_keeps_each_matching_category() {
+        let mut entries: Vec<_> = (0..61)
+            .map(|n| Entry::new(Category::App, "", format!("App {n}"), vec![]))
+            .collect();
+        entries.push(Entry::new(Category::Window, "", "Window", vec![]));
+        entries.push(Entry::new(Category::Command, "", "Command", vec![]));
+
+        let hits: Vec<_> = (0..entries.len()).collect();
+        let limited = limit_palette_hits(&entries, &hits, 60);
+
+        assert_eq!(limited.len(), 60);
+        for category in [Category::App, Category::Window, Category::Command] {
+            assert!(
+                limited.iter().any(|&hit| entries[hit].category == category),
+                "{category:?} results should remain available"
+            );
+        }
     }
 }
