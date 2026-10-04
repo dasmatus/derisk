@@ -21,6 +21,7 @@ use derisk::{
     action::{Action, Effect},
     conversation::Source,
     desktop::{self, DesktopEntry},
+    effects::SettingsWatch,
     geom::rect,
     ipc,
     keys::{self, Key, Mods, SuperTap},
@@ -34,7 +35,7 @@ use derisk::{
 };
 use mcsapi::WindowId;
 use mcsapi_compositor::{
-    self as compositor, AppId, Apps, ClientRequest, Command, Compositor, Edges, InstanceId,
+    self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, InstanceId,
     KeyInput, KeyRoute, Keysym, Placement, Press, Remote, Theme, egui,
 };
 
@@ -71,6 +72,7 @@ pub struct Session {
     core_apps: Vec<DesktopEntry>,
     installed: Vec<DesktopEntry>,
     pending_actions: PendingActions,
+    settings: SettingsWatch,
 }
 
 /// Core-app actions waiting for the compositor to launch their app, shared
@@ -132,6 +134,7 @@ impl Session {
             core_apps,
             installed,
             pending_actions,
+            settings: SettingsWatch::new(derisk_settings::default_path()),
         }
     }
 
@@ -341,7 +344,8 @@ impl compositor::Shell for Session {
         systemd::notify_ready("derisk session running");
     }
 
-    /// Refreshes the clock, battery and failed units about once a second.
+    /// Refreshes the clock, battery, effect settings and failed units about
+    /// once a second.
     fn tick(&mut self) {
         if self
             .last_tick
@@ -352,6 +356,9 @@ impl compositor::Shell for Session {
         self.last_tick = Some(Instant::now());
         self.shell.clock = Clock::now_utc();
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
+        if let Some(effects) = self.settings.poll() {
+            self.shell.effects = effects;
+        }
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
         }
@@ -468,6 +475,22 @@ impl compositor::Shell for Session {
             }
         }
         self.palette_opened();
+    }
+
+    fn blur_regions(&self) -> Vec<Blur> {
+        self.ui
+            .blur_regions()
+            .iter()
+            .map(|b| Blur {
+                area: b.area,
+                corner_radius: b.corner_radius,
+                strength: b.strength,
+            })
+            .collect()
+    }
+
+    fn frame_interval(&self) -> Duration {
+        self.shell.look().frame_interval
     }
 
     fn spawn_argv(&mut self, app: &str) -> Vec<String> {

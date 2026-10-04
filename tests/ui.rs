@@ -5,6 +5,7 @@ use derisk::{
     shell::Shell,
     ui::{ShellUi, to_rect},
 };
+use derisk_settings::LowPower;
 use mcsapi::toolkit::egui;
 
 fn frame(
@@ -439,6 +440,34 @@ fn failed_units_open_the_palette_on_their_actions() {
             unit: "foo.service".into()
         }
     );
+}
+
+#[test]
+fn translucent_panels_report_blur_areas_unless_low_power() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.map_window("editor", "notes.md");
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5000);
+    let bar = shell.profile().top_bar;
+    let areas: Vec<_> = ui.blur_regions().iter().map(|b| b.area).collect();
+    assert!(areas.contains(&rect(0, 0, 1920, bar)), "{areas:?}");
+    assert!(areas.contains(&shell.work_area()), "{areas:?}");
+    assert!(ui.blur_regions().iter().all(|b| b.strength > 0));
+
+    shell.effects.low_power = LowPower::On;
+    frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5100);
+    assert!(ui.blur_regions().is_empty());
+
+    shell.effects.low_power = LowPower::Off;
+    shell.effects.blur = 0;
+    frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5200);
+    assert!(ui.blur_regions().is_empty());
 }
 /// Drags the first exposé window onto workspace strip slot `slot` (0-based).
 fn drag_to_slot(shell: &mut Shell, slot: usize, slots: usize) -> Vec<Action> {

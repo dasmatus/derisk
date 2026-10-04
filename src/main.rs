@@ -25,6 +25,7 @@ use std::{
 use derisk::{
     action::{Action, Effect},
     assistant,
+    effects::SettingsWatch,
     geom::rect,
     ipc,
     menu::{Menu, MenuEntry},
@@ -177,6 +178,9 @@ fn send(line: &str) -> Result {
 fn refresh(shell: &mut Shell) {
     shell.clock = Clock::now_utc();
     shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
+    if let Some(effects) = SettingsWatch::new(derisk_settings::default_path()).poll() {
+        shell.effects = effects;
+    }
 }
 
 fn demo() -> Result {

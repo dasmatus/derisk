@@ -16,6 +16,7 @@
 //!   with the assistant as the fallback.
 //! - [`tray`]: monochrome system tray icons.
 //! - [`animation`]: the startup animation.
+//! - [`effects`]: translucent, blurred panels and low power mode.
 //! - [`assistant`] and [`ipc`]: natural-language and agent control.
 //! - [`conversation`]: requests and their progress, shown in the palette.
 //! - [`keys`]: keyboard shortcuts.
@@ -44,6 +45,7 @@ pub mod assistant;
 pub mod conversation;
 pub mod decorations;
 pub mod desktop;
+pub mod effects;
 pub mod geom;
 pub mod ipc;
 pub mod keys;

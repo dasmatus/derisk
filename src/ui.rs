@@ -25,6 +25,7 @@ use crate::{
     animation::{StartupAnimation, StartupFrame},
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
+    effects::{BlurArea, Look},
     geom::inset,
     menu::{Menu, MenuEntry},
     overview::{OverviewLayout, Widget, fit, grid, row},
@@ -85,6 +86,10 @@ pub struct ShellUi {
     tray: Option<(u64, Vec<TextureHandle>)>,
     /// The command palette.
     pub palette: PaletteUi,
+    reply: Option<String>,
+    reduced_motion: bool,
+    look: Look,
+    blurs: Vec<BlurArea>,
 }
 
 /// Command palette state. The host fills [`PaletteUi::extra`] and
@@ -163,7 +168,8 @@ fn limit_palette_hits(entries: &[Entry], hits: &[usize], limit: usize) -> Vec<us
 }
 
 impl ShellUi {
-    /// Creates UI state; `reduced_motion` shortens the startup animation.
+    /// Creates UI state; `reduced_motion` shortens the startup animation, as
+    /// do the reduce motion setting and low power mode.
     pub fn new(shell: &Shell, reduced_motion: bool) -> Self {
         Self {
             theme: Theme::default(),
@@ -176,7 +182,38 @@ impl ShellUi {
             overview_drag: None,
             tray: None,
             palette: PaletteUi::default(),
+            reply: None,
+            reduced_motion,
+            look: shell.look(),
+            blurs: Vec::new(),
         }
+    }
+
+    /// Areas to blur under the translucent panels shown by the last
+    /// [`ShellUi::show`], bottom to top. Empty when blur is off.
+    pub fn blur_regions(&self) -> &[BlurArea] {
+        &self.blurs
+    }
+
+    /// Records a translucent panel so the compositor blurs behind it.
+    fn frost(&mut self, area: Rect, corner_radius: u8) {
+        if self.look.blur == 0 {
+            return;
+        }
+        let area = Geometry::new(
+            (area.min.x.round() as i32, area.min.y.round() as i32).into(),
+            (area.width().round() as i32, area.height().round() as i32).into(),
+        );
+        self.blurs.push(BlurArea {
+            area,
+            corner_radius,
+            strength: self.look.blur,
+        });
+    }
+
+    /// The assistant's last reply, if any.
+    pub fn assistant_reply(&self) -> Option<&str> {
+        self.reply.as_deref()
     }
 
     /// Paints server-side title bars, buttons on the left, bottom to top.
@@ -200,15 +237,17 @@ impl ShellUi {
             se: 0,
         };
         // A soft shadow separates overlapping windows.
-        painter.add(
-            egui::epaint::Shadow {
-                offset: [0, 6],
-                blur: if p.focused { 28 } else { 16 },
-                spread: 0,
-                color: Color32::from_black_alpha(if p.focused { 150 } else { 90 }),
-            }
-            .as_shape(to_rect(p.frame), radius),
-        );
+        if shell.look().shadows {
+            painter.add(
+                egui::epaint::Shadow {
+                    offset: [0, 6],
+                    blur: if p.focused { 28 } else { 16 },
+                    spread: 0,
+                    color: Color32::from_black_alpha(if p.focused { 150 } else { 90 }),
+                }
+                .as_shape(to_rect(p.frame), radius),
+            );
+        }
         painter.rect_filled(
             to_rect(bar.bar(p.frame)),
             radius,
@@ -261,6 +300,9 @@ impl ShellUi {
     /// animation). Pass the root `Ui` from `Context::run_ui`.
     pub fn show(&mut self, ui: &mut Ui, shell: &Shell, elapsed_ms: u32) -> Vec<Action> {
         let mut actions = Vec::new();
+        self.look = shell.look();
+        self.blurs.clear();
+        self.startup.reduced_motion = self.reduced_motion || !self.look.animate;
         let frame = self.startup.frame(elapsed_ms);
         self.drag_preview(ui, shell);
         self.snap_assist(ui, shell, &mut actions);
@@ -303,14 +345,15 @@ impl ShellUi {
         );
     }
 
-    fn snap_assist(&self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+    fn snap_assist(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
         let Some(assist) = shell.snap_assist() else {
             return;
         };
+        self.frost(to_rect(assist.frame), 12);
         ui.painter().rect_filled(
             to_rect(assist.frame),
             12,
-            self.theme.background.gamma_multiply(0.85),
+            self.theme.background.gamma_multiply(self.look.snap_assist),
         );
         let cells = grid(assist.candidates.len(), assist.frame, 16);
         for (window, cell) in assist.candidates.iter().zip(cells) {
@@ -354,12 +397,16 @@ impl ShellUi {
             output.min + vec2(0.0, frame.bar_offset),
             vec2(output.width(), height),
         );
+        let opacity = frame.shell_opacity.max(0.0);
+        if opacity > 0.0 {
+            self.frost(bar, 0);
+        }
         ui.painter().rect_filled(
             bar,
             0,
             self.theme
                 .background
-                .gamma_multiply(frame.shell_opacity.max(0.0)),
+                .gamma_multiply(self.look.top_bar * opacity),
         );
         let focused = shell.focused();
         ui.scope_builder(
@@ -548,8 +595,12 @@ impl ShellUi {
             }
         }
         let area = shell.work_area();
-        ui.painter()
-            .rect_filled(to_rect(area), 0, self.theme.background.gamma_multiply(0.92));
+        self.frost(to_rect(area), 0);
+        ui.painter().rect_filled(
+            to_rect(area),
+            0,
+            self.theme.background.gamma_multiply(self.look.overview),
+        );
         let layout = OverviewLayout::new(area, shell.profile().form_factor);
 
         // Workspace strip, Mission Control style: one cell per open workspace,
