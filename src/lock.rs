@@ -90,6 +90,12 @@ impl LockScreen {
 mod tests {
     use super::*;
 
+    const TEST_PASSWORD: &str = "secret";
+    const WRONG_PASSWORD: &str = "wrong";
+    const FIRST_PASSWORD: &str = "first";
+    const SECOND_PASSWORD: &str = "second";
+    const PARTIAL_PASSWORD: &str = "sec";
+
     fn locked(password: &str) -> LockScreen {
         let mut lock = LockScreen::default();
         lock.lock();
@@ -100,7 +106,7 @@ mod tests {
     #[test]
     fn starts_unlocked_and_cannot_submit() {
         let mut lock = LockScreen {
-            password: "secret".into(),
+            password: TEST_PASSWORD.into(),
             ..Default::default()
         };
         assert!(!lock.is_locked());
@@ -109,8 +115,8 @@ mod tests {
 
     #[test]
     fn correct_password_unlocks() {
-        let mut lock = locked("secret");
-        assert_eq!(lock.submit().as_deref(), Some("secret"));
+        let mut lock = locked(TEST_PASSWORD);
+        assert_eq!(lock.submit().as_deref(), Some(TEST_PASSWORD));
         assert!(lock.is_checking());
         assert!(lock.password.is_empty());
         lock.finish(true);
@@ -120,7 +126,7 @@ mod tests {
 
     #[test]
     fn wrong_password_stays_locked() {
-        let mut lock = locked("wrong");
+        let mut lock = locked(WRONG_PASSWORD);
         lock.submit();
         lock.finish(false);
         assert!(lock.is_locked());
@@ -137,32 +143,32 @@ mod tests {
 
     #[test]
     fn one_check_at_a_time() {
-        let mut lock = locked("first");
+        let mut lock = locked(FIRST_PASSWORD);
         lock.submit();
-        lock.password = "second".into();
+        lock.password = SECOND_PASSWORD.into();
         assert_eq!(lock.submit(), None);
     }
 
     #[test]
     fn a_result_without_a_check_does_not_unlock() {
-        let mut lock = locked("secret");
+        let mut lock = locked(TEST_PASSWORD);
         lock.finish(true);
         assert!(lock.is_locked());
     }
 
     #[test]
     fn locking_again_keeps_what_was_typed() {
-        let mut lock = locked("sec");
+        let mut lock = locked(PARTIAL_PASSWORD);
         lock.lock();
-        assert_eq!(lock.password, "sec");
+        assert_eq!(lock.password, PARTIAL_PASSWORD);
     }
 
     #[test]
     fn relocking_resets_failures() {
-        let mut lock = locked("wrong");
+        let mut lock = locked(WRONG_PASSWORD);
         lock.submit();
         lock.finish(false);
-        lock.password = "secret".into();
+        lock.password = TEST_PASSWORD.into();
         lock.submit();
         lock.finish(true);
         lock.lock();
