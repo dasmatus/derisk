@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::{
     action::{Action, Effect, LayoutKind},
     adaptive::{FormFactor, Habits, Profile},
+    apps::Apps,
     assistant,
     conversation::{Conversation, Source, StepRef, StepStatus},
     decorations::{Button, ClickTracker, Hit},
@@ -233,6 +234,8 @@ pub struct Shell {
     pub failed_units: Vec<String>,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
+    /// Names and icons for app IDs, set by the host from `.desktop` files.
+    pub apps: Apps,
 }
 
 /// Whether `path` is safe to hand to `xdg-open`: absolute, existing, and
@@ -279,6 +282,7 @@ impl Shell {
             battery: None,
             failed_units: Vec::new(),
             effects: Effects::default(),
+            apps: Apps::default(),
         };
         shell.apply_profile_layout();
         shell

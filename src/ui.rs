@@ -11,7 +11,7 @@
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
 
-use std::path::PathBuf;
+use std::{cell::RefCell, collections::HashMap, path::PathBuf, sync::Arc};
 
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
@@ -23,10 +23,12 @@ use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 use crate::{
     action::Action,
     animation::{StartupAnimation, StartupFrame},
+    apps::AppLook,
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
     effects::{BlurArea, Look},
     geom::inset,
+    icons,
     menu::{Menu, MenuEntry},
     overview::{OverviewLayout, Widget, fit, grid, row},
     palette::{self, Category, Entry, History},
@@ -90,7 +92,14 @@ pub struct ShellUi {
     reduced_motion: bool,
     look: Look,
     blurs: Vec<BlurArea>,
+    /// Decoded app icons by theme name or path, `None` when the theme has
+    /// none. Behind a `RefCell` because title bars paint through `&self`.
+    icons: RefCell<HashMap<String, Option<Arc<egui::ColorImage>>>>,
 }
+
+/// Pixels app icons are decoded at: crisp up to 32 points at 2x, the largest
+/// the shell draws them on a HiDPI screen.
+const ICON_PX: u32 = 64;
 
 /// Command palette state. The host fills [`PaletteUi::extra`] and
 /// [`PaletteUi::files`]; the rest is kept between openings.
@@ -186,6 +195,133 @@ impl ShellUi {
             reduced_motion,
             look: shell.look(),
             blurs: Vec::new(),
+            icons: RefCell::default(),
+        }
+    }
+
+    /// Paints an app's icon into `r`: the icon theme's, else the app's
+    /// glyph, else its initial on an accent tile, so every window has one.
+    fn paint_app_icon(&self, painter: &Painter, r: Rect, look: &AppLook) {
+        let image = self
+            .icons
+            .borrow_mut()
+            .entry(look.icon.to_owned())
+            .or_insert_with(|| {
+                icons::load(&icons::find(look.icon, ICON_PX)?, ICON_PX).map(Arc::new)
+            })
+            .clone();
+        // Title bars and the chrome are separate egui contexts with their own
+        // textures, so each context uploads the icon once and keeps it.
+        let texture = image.map(|image| {
+            let ctx = painter.ctx();
+            let id = Id::new(("derisk-app-icon", look.icon));
+            ctx.data(|d| d.get_temp::<TextureHandle>(id))
+                .unwrap_or_else(|| {
+                    let texture = ctx.load_texture(
+                        format!("derisk-app-icon:{}", look.icon),
+                        image,
+                        TextureOptions::LINEAR,
+                    );
+                    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+                    texture
+                })
+        });
+        if let Some(texture) = texture {
+            let [w, h] = texture.size().map(|n| n.max(1) as f32);
+            let scale = r.width().min(r.height()) / w.max(h);
+            painter.image(
+                texture.id(),
+                Rect::from_center_size(r.center(), vec2(w, h) * scale),
+                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        } else if !look.glyph.is_empty() {
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                look.glyph,
+                FontId::proportional(r.height() * 0.8),
+                self.theme.foreground,
+            );
+        } else {
+            painter.rect_filled(r, r.height() * 0.25, self.theme.accent);
+            let initial: String = look
+                .name
+                .chars()
+                .take(1)
+                .flat_map(char::to_uppercase)
+                .collect();
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                initial,
+                FontId::proportional(r.height() * 0.6),
+                self.theme.background,
+            );
+        }
+    }
+
+    /// Paints an app icon and `text` on one line, the pair centered on
+    /// `center` and elided to `width`.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_icon_label(
+        &self,
+        painter: &Painter,
+        center: Pos2,
+        width: f32,
+        look: &AppLook,
+        text: &str,
+        size: f32,
+        color: Color32,
+    ) {
+        let icon = (size * 1.3).round();
+        let gap = (size * 0.45).round();
+        let galley = painter.layout_no_wrap(
+            elide(text, width - icon - gap, size),
+            FontId::proportional(size),
+            color,
+        );
+        let left = center.x - (icon + gap + galley.size().x) / 2.0;
+        self.paint_app_icon(
+            painter,
+            Rect::from_min_size(pos2(left, center.y - icon / 2.0), vec2(icon, icon)),
+            look,
+        );
+        painter.galley(
+            pos2(left + icon + gap, center.y - galley.size().y / 2.0),
+            galley,
+            color,
+        );
+    }
+
+    /// A window card's label (overview, Snap Assist): the app icon, the app
+    /// name under it, and the window title under that when there is one.
+    fn paint_window_card(&self, painter: &Painter, r: Rect, look: &AppLook, title: &str) {
+        let icon = (r.height() * 0.3).clamp(16.0, 48.0);
+        let name = (icon * 0.4).clamp(12.0, 18.0);
+        let top = r.center().y - (icon + 6.0 + name + 4.0 + name * 0.75) / 2.0;
+        self.paint_app_icon(
+            painter,
+            Rect::from_center_size(pos2(r.center().x, top + icon / 2.0), vec2(icon, icon)),
+            look,
+        );
+        let name_y = top + icon + 6.0 + name / 2.0;
+        painter.text(
+            pos2(r.center().x, name_y),
+            Align2::CENTER_CENTER,
+            elide(&look.name, r.width() - 16.0, name),
+            FontId::proportional(name),
+            self.theme.foreground,
+        );
+        // The title only adds something when it is not just the name again.
+        if !title.is_empty() && !title.eq_ignore_ascii_case(&look.name) {
+            painter.text(
+                pos2(r.center().x, name_y + name / 2.0 + 4.0 + name * 0.375),
+                Align2::CENTER_CENTER,
+                elide(title, r.width() - 16.0, name * 0.75),
+                FontId::proportional(name * 0.75),
+                self.theme.border,
+            );
         }
     }
 
@@ -293,16 +429,16 @@ impl ShellUi {
             painter.circle_filled(r.center(), r.width() / 2.0, color);
         }
         let title_area = to_rect(bar.title(p.frame));
-        let label = shell
-            .window_label(p.window)
-            .map(|(app, title)| if title.is_empty() { app } else { title })
-            .unwrap_or_default();
+        let (app, title) = shell.window_label(p.window).unwrap_or_default();
+        let look = shell.apps.look(app);
         let size = (bar.height as f32 * 0.42).max(11.0);
-        painter.text(
+        self.paint_icon_label(
+            painter,
             title_area.center(),
-            Align2::CENTER_CENTER,
-            elide(label, title_area.width(), size),
-            FontId::proportional(size),
+            title_area.width(),
+            &look,
+            if title.is_empty() { &look.name } else { title },
+            size,
             theme.foreground,
         );
     }
@@ -381,13 +517,7 @@ impl ShellUi {
             ui.painter()
                 .rect_stroke(r, 10, Stroke::new(1.5, stroke), StrokeKind::Inside);
             let (app, title) = shell.window_label(*window).unwrap_or_default();
-            ui.painter().text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                elide(if title.is_empty() { app } else { title }, r.width(), 14.0),
-                FontId::proportional(14.0),
-                self.theme.foreground,
-            );
+            self.paint_window_card(ui.painter(), r, &shell.apps.look(app), title);
             if response.clicked() {
                 actions.push(Action::Snap {
                     window: Some(window.get()),
@@ -452,14 +582,14 @@ impl ShellUi {
                     actions.push(Action::Palette { visible: None });
                 }
                 if let Some(w) = focused {
-                    let (app, title) = shell.window_label(w).unwrap_or_default();
-                    // Reverse-DNS app IDs (org.derisk.files) read better as the title.
-                    let name = if app.contains('.') && !title.is_empty() {
-                        title
-                    } else {
-                        app
-                    };
-                    ui.label(RichText::new(name).strong());
+                    let (app, _) = shell.window_label(w).unwrap_or_default();
+                    let look = shell.apps.look(app);
+                    let side = (height * 0.6).round();
+                    let (r, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    self.paint_app_icon(ui.painter(), r, &look);
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    ui.label(RichText::new(look.name.as_ref()).strong());
                 }
                 for menu in shell.menus.bar(focused.map(|w| w.get())) {
                     menu_button(ui, &menu, focused.map(|w| w.get()), actions);
@@ -759,26 +889,7 @@ impl ShellUi {
                 StrokeKind::Inside,
             );
             let (app, title) = shell.window_label(*w).unwrap_or_default();
-            // Reverse-DNS app IDs (org.derisk.files) read better as the title.
-            let (app, title) = if app.contains('.') && !title.is_empty() {
-                (title, app)
-            } else {
-                (app, title)
-            };
-            ui.painter().text(
-                r.center() - vec2(0.0, 10.0),
-                Align2::CENTER_CENTER,
-                elide(app, r.width() - 16.0, 18.0),
-                FontId::proportional(18.0),
-                self.theme.foreground,
-            );
-            ui.painter().text(
-                r.center() + vec2(0.0, 14.0),
-                Align2::CENTER_CENTER,
-                elide(title, r.width() - 16.0, 13.0),
-                FontId::proportional(13.0),
-                self.theme.border,
-            );
+            self.paint_window_card(ui.painter(), r, &shell.apps.look(app), title);
             if response.clicked() {
                 actions.push(if minimized {
                     Action::Restore { window: w.get() }
@@ -807,11 +918,14 @@ impl ShellUi {
                 StrokeKind::Inside,
             );
             let (app, _) = shell.window_label(w).unwrap_or_default();
-            painter.text(
+            let look = shell.apps.look(app);
+            self.paint_icon_label(
+                &painter,
                 r.center(),
-                Align2::CENTER_CENTER,
-                elide(app, r.width() - 12.0, 14.0),
-                FontId::proportional(14.0),
+                r.width() - 12.0,
+                &look,
+                &look.name,
+                14.0,
                 self.theme.foreground,
             );
         }
