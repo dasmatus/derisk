@@ -133,6 +133,15 @@ pub fn unused_path(dir: &Path, name: &OsStr) -> PathBuf {
 
 /// Copies a file, symbolic link, or directory tree to `to`, which must not
 /// exist. Symbolic links are copied as links, not followed.
+///
+/// Nothing is written by path below `to` once `to` is made. A directory is
+/// created owner-only, opened without following links, and filled through
+/// `/proc/self/fd/<fd>/<name>`, which names the directory that was opened
+/// rather than whatever `to` names by then; files are created with
+/// `O_EXCL`. In a folder another user can write, they could otherwise swap a
+/// freshly made directory for a symlink to, say, `~/.config/autostart`
+/// between its creation and the files going in, and the copy would put their
+/// files there. Each directory gets its source's mode only once it is full.
 pub fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
     if to.starts_with(from) {
         return Err(io::Error::new(
@@ -140,21 +149,40 @@ pub fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
             "cannot copy a folder into itself",
         ));
     }
+    copy_into(from, to)
+}
+
+fn copy_into(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
     let meta = fs::symlink_metadata(from)?;
+    let mode = meta.permissions().mode() & 0o7777;
     if meta.file_type().is_symlink() {
         std::os::unix::fs::symlink(fs::read_link(from)?, to)
     } else if meta.is_dir() {
-        fs::create_dir(to)?;
+        fs::DirBuilder::new().mode(0o700).create(to)?;
+        let dir = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(to)?;
+        let held =
+            Path::new("/proc/self/fd").join(std::os::fd::AsRawFd::as_raw_fd(&dir).to_string());
         for item in fs::read_dir(from)? {
             let item = item?;
-            copy_recursive(&item.path(), &to.join(item.file_name()))?;
+            copy_into(&item.path(), &held.join(item.file_name()))?;
         }
-        Ok(())
+        dir.set_permissions(fs::Permissions::from_mode(mode))
     } else {
-        if fs::symlink_metadata(to).is_ok() {
-            return Err(io::ErrorKind::AlreadyExists.into());
-        }
-        fs::copy(from, to).map(drop)
+        let mut source = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(from)?;
+        let mut target = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(to)?;
+        io::copy(&mut source, &mut target)?;
+        target.set_permissions(fs::Permissions::from_mode(mode))
     }
 }
 
@@ -234,8 +262,13 @@ impl Trash {
             ));
         }
         let (files, info) = (self.files_dir(), self.info_dir());
-        fs::create_dir_all(&files)?;
-        fs::create_dir_all(&info)?;
+        // Owner-only, as the Trash specification asks: a trashed file has left
+        // whatever private folder kept it from other users, and its
+        // .trashinfo says where it came from.
+        for dir in [&self.root, &files, &info] {
+            std::os::unix::fs::DirBuilderExt::mode(fs::DirBuilder::new().recursive(true), 0o700)
+                .create(dir)?;
+        }
         // Reserve the info file first with create_new, as the spec requires,
         // so two trashers cannot pick the same name.
         let mut n = 0u32;
@@ -249,10 +282,11 @@ impl Trash {
             let info_path = info.join(info_name);
             let target = files.join(&candidate);
             if fs::symlink_metadata(&target).is_err() {
-                match fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&info_path)
+                match std::os::unix::fs::OpenOptionsExt::mode(
+                    fs::OpenOptions::new().write(true).create_new(true),
+                    0o600,
+                )
+                .open(&info_path)
                 {
                     Ok(_) => break (target, info_path),
                     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
