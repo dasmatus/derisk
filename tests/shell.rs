@@ -182,6 +182,7 @@ fn actions_after_a_launch_wait_for_the_new_window() {
                 zone: SnapZone::Right,
             },
         ])
+        .into_result()
         .unwrap();
     assert_eq!(
         effects,

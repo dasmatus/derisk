@@ -26,7 +26,7 @@ use crate::{
     geom::Rect,
     menu::Menu,
     overview::Battery,
-    shell::{Mode, Shell},
+    shell::{Mode, Outcome, Shell},
     time::Clock,
 };
 
@@ -225,30 +225,36 @@ pub fn handle_line(shell: &mut Shell, line: &str) -> (String, Vec<Effect>) {
                 1 => "1 action".to_owned(),
                 n => format!("{n} actions"),
             };
-            match shell.run_recorded(&request, Source::Agent, actions.clone()) {
-                Ok(effects) => (
+            // Effects of the actions before a failure are still carried out.
+            let Outcome { effects, result } =
+                shell.run_recorded(&request, Source::Agent, actions.clone());
+            match result {
+                Ok(()) => (
                     Ok(to_value(&Applied {
                         actions,
                         effects: effects.clone(),
                     })),
                     effects,
                 ),
-                Err(e) => (Err(e.to_string()), Vec::new()),
+                Err(e) => (Err(e.to_string()), effects),
             }
         }
         Request::Ask { text } => match assistant::interpret(&text) {
             // Interpreted twice so the response can list the actions; both
             // runs of the assistant are pure.
-            Ok(actions) => match shell.ask(&text, Source::Agent, false) {
-                Ok(effects) => (
-                    Ok(to_value(&Applied {
-                        actions,
-                        effects: effects.clone(),
-                    })),
-                    effects,
-                ),
-                Err(e) => (Err(e.to_string()), Vec::new()),
-            },
+            Ok(actions) => {
+                let Outcome { effects, result } = shell.ask(&text, Source::Agent, false);
+                match result {
+                    Ok(()) => (
+                        Ok(to_value(&Applied {
+                            actions,
+                            effects: effects.clone(),
+                        })),
+                        effects,
+                    ),
+                    Err(e) => (Err(e.to_string()), effects),
+                }
+            }
             Err(e) => {
                 shell
                     .conversation

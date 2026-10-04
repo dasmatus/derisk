@@ -116,7 +116,7 @@ fn window_entries_focus_across_workspaces() {
     let entry = &entries[hits[0]];
     assert_eq!(entry.category, Category::Window);
     assert!(entry.detail.contains("workspace 1"));
-    shell.run(entry.actions.clone()).unwrap();
+    shell.run(entry.actions.clone()).into_result().unwrap();
     assert_eq!(shell.focused(), Some(editor));
     assert_eq!(shell.desktop().active().id().get(), 1);
 }
@@ -155,7 +155,10 @@ fn app_menus_become_palette_commands() {
     assert_eq!(app[1].detail, "editor · File › Export › As PDF");
 
     let hits = palette::search(&entries, "> export pdf", &History::default());
-    let effects = shell.run(entries[hits[0]].actions.clone()).unwrap();
+    let effects = shell
+        .run(entries[hits[0]].actions.clone())
+        .into_result()
+        .unwrap();
     assert_eq!(
         serde_json::to_value(&effects).unwrap(),
         serde_json::json!([{"effect": "menu_activated", "window": w.get(), "item": "pdf"}])
@@ -273,7 +276,7 @@ fn files_are_indexed_and_opened_safely() {
     let hits = palette::search(&entries, "/todo", &History::default());
     let todo = &entries[hits[0]];
     assert_eq!(todo.title, "todo.md");
-    let effects = shell.run(todo.actions.clone()).unwrap();
+    let effects = shell.run(todo.actions.clone()).into_result().unwrap();
     assert_eq!(serde_json::to_value(&effects).unwrap()[0]["effect"], "open");
 
     let mut open = |p: &str| shell.apply(Action::Open { path: p.to_owned() });

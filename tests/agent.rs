@@ -137,6 +137,7 @@ fn requests_are_recorded_with_step_progress() {
     let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
     shell
         .ask("open kitty and snap it left", Source::User, false)
+        .into_result()
         .unwrap();
     let turn = shell.conversation.turns().last().unwrap().clone();
     assert_eq!(turn.source, Source::User);
@@ -157,6 +158,7 @@ fn requests_are_recorded_with_step_progress() {
     assert!(
         shell
             .ask("go to workspace 42 and close it", Source::User, false)
+            .into_result()
             .is_err()
     );
     let turn = shell.conversation.turns().last().unwrap();
@@ -171,17 +173,28 @@ fn requests_are_recorded_with_step_progress() {
     assert!(
         shell
             .ask("make me a sandwich", Source::User, false)
+            .into_result()
             .is_err()
     );
     assert!(shell.conversation.turns().last().unwrap().error.is_some());
 
     // Destructive operations need the person's confirmation.
     assert!(matches!(
-        shell.ask("reboot", Source::User, false),
+        shell.ask("reboot", Source::User, false).into_result(),
         Err(derisk::shell::Error::NeedsConfirmation(SessionOp::Reboot))
     ));
-    assert!(shell.ask("reboot", Source::User, true).is_ok());
-    assert!(shell.ask("lock the screen", Source::User, false).is_ok());
+    assert!(
+        shell
+            .ask("reboot", Source::User, true)
+            .into_result()
+            .is_ok()
+    );
+    assert!(
+        shell
+            .ask("lock the screen", Source::User, false)
+            .into_result()
+            .is_ok()
+    );
 }
 
 #[test]
@@ -205,4 +218,70 @@ fn agent_requests_show_in_the_conversation() {
     assert_eq!(turns[0].request, "go to workspace 2");
     assert_eq!(turns[1].request, "1 action");
     assert_eq!(turns[1].steps[0].label, "Go to workspace 3");
+}
+
+#[test]
+fn a_failed_step_keeps_the_effects_of_the_steps_before_it() {
+    use derisk::conversation::{Source, StepStatus};
+
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    // Launching kitty succeeds, then the workspace does not exist: the
+    // launch must still happen.
+    let outcome = shell.ask("open kitty then go to workspace 42", Source::User, false);
+    assert!(outcome.result.is_err());
+    assert_eq!(
+        outcome.effects,
+        [Effect::Launch {
+            app: "kitty".into()
+        }]
+    );
+    let turn = shell.conversation.turns().last().unwrap();
+    assert_eq!(turn.steps[0].status, StepStatus::Done);
+    assert!(matches!(turn.steps[1].status, StepStatus::Failed(_)));
+
+    // Over the agent protocol, the failed request still carries its effects.
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let request = json!({
+        "method": "dispatch",
+        "actions": [
+            {"action": "launch", "app": "kitty"},
+            {"action": "switch_workspace", "workspace": 42}
+        ]
+    });
+    let (reply, effects) = ipc::handle_line(&mut shell, &request.to_string());
+    assert!(reply.contains("\"ok\":false"), "{reply}");
+    assert_eq!(
+        effects,
+        [Effect::Launch {
+            app: "kitty".into()
+        }]
+    );
+}
+
+#[test]
+fn deferred_steps_stop_at_the_first_failure() {
+    use derisk::conversation::{Source, StepStatus};
+
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let outcome = shell.run_recorded(
+        "open kitty, move it to workspace 42 and close it",
+        Source::User,
+        vec![
+            Action::Launch {
+                app: "kitty".into(),
+            },
+            Action::MoveToWorkspace {
+                window: None,
+                workspace: 42,
+            },
+            Action::Close { window: None },
+        ],
+    );
+    assert!(outcome.result.is_ok());
+    let (kitty, effects) = shell.map_window("kitty", "~");
+    let turn = shell.conversation.turns().last().unwrap();
+    assert!(matches!(turn.steps[1].status, StepStatus::Failed(_)));
+    assert_eq!(turn.steps[2].status, StepStatus::Skipped);
+    assert!(effects.is_empty(), "the close was skipped: {effects:?}");
+    assert!(shell.window_label(kitty).is_some());
 }

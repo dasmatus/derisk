@@ -249,7 +249,7 @@ fn demo() -> Result {
     let request = "open firefox and snap it top left";
     println!("\nassistant: {request:?}");
     let actions = assistant::interpret(request).map_err(|e| format!("{e:?}"))?;
-    let effects = shell.run(actions)?;
+    let effects = shell.run(actions).into_result()?;
     for effect in &effects {
         println!("  effect: {}", serde_json::to_string(effect)?);
         if let Some(argv) = systemd::effect_argv(effect, 1, None) {

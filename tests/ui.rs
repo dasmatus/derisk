@@ -283,7 +283,10 @@ fn palette_hands_requests_to_the_assistant_and_shows_the_conversation() {
             confirmed: false
         }]
     );
-    shell.ask(&asks[0].text, Source::User, false).unwrap();
+    shell
+        .ask(&asks[0].text, Source::User, false)
+        .into_result()
+        .unwrap();
     frame(&ctx, &mut ui, &shell, (w, h), vec![], 5000);
 
     // Follow-ups go straight to the assistant, and shutting down needs a
@@ -402,7 +405,7 @@ fn typing_on_the_overview_opens_the_palette() {
             visible: Some(true)
         }]
     );
-    shell.run(actions).unwrap();
+    shell.run(actions).into_result().unwrap();
     frame(
         &ctx,
         &mut ui,
@@ -566,7 +569,7 @@ fn dragging_a_window_onto_plus_opens_a_new_workspace() {
             workspace: 2
         }]
     );
-    shell.run(actions).unwrap();
+    shell.run(actions).into_result().unwrap();
     assert_eq!(shell.workspaces().len(), 2);
     assert!(shell.overview_visible());
 }
