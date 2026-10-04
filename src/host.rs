@@ -477,13 +477,14 @@ impl compositor::Shell for Session {
         }
         // An installed app's desktop file ID runs its `Exec`; any other name
         // runs as a plain command.
-        let command = self
-            .installed
-            .iter()
-            .find(|e| e.id == app)
-            .map(DesktopEntry::argv)
-            .filter(|argv| !argv.is_empty())
-            .unwrap_or_else(|| vec![app.strip_suffix(".desktop").unwrap_or(app).to_owned()]);
+        let command = match self.installed.iter().find(|e| e.id == app) {
+            Some(entry) => entry.argv(),
+            None => vec![app.strip_suffix(".desktop").unwrap_or(app).to_owned()],
+        };
+        if command.is_empty() {
+            log(Priority::Warning, &format!("invalid Exec for {app:?}"));
+            return Vec::new();
+        }
         self.launches += 1;
         if self.execute
             && let Some(mut argv) = systemd::launch_command_argv(app, self.launches, &command)
