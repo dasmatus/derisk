@@ -18,14 +18,14 @@ use egui::{
     Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, pos2,
     vec2,
 };
-use mcsapi::{Geometry, toolkit::egui, widgets::Theme};
+use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 
 use crate::{
     action::Action,
     animation::{StartupAnimation, StartupFrame},
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
-    geom::{inset, rect},
+    geom::inset,
     menu::{Menu, MenuEntry},
     overview::{OverviewLayout, Widget, fit, grid},
     palette::{self, Category, Entry, History},
@@ -79,6 +79,9 @@ pub struct ShellUi {
     /// The startup animation.
     pub startup: StartupAnimation,
     notes: String,
+    overview_open: bool,
+    /// Window being dragged in the overview, toward a workspace.
+    overview_drag: Option<WindowId>,
     tray: Option<(u64, Vec<TextureHandle>)>,
     /// The command palette.
     pub palette: PaletteUi,
@@ -124,6 +127,8 @@ impl ShellUi {
                 bar_height: shell.profile().top_bar as f32,
             },
             notes: String::new(),
+            overview_open: false,
+            overview_drag: None,
             tray: None,
             palette: PaletteUi::default(),
         }
@@ -216,6 +221,10 @@ impl ShellUi {
         self.snap_assist(ui, shell, &mut actions);
         if shell.overview_visible() {
             self.overview(ui, shell, &mut actions);
+        }
+        self.overview_open = shell.overview_visible();
+        if !self.overview_open {
+            self.overview_drag = None;
         }
         self.top_bar(ui, shell, frame, &mut actions);
         if shell.palette_visible() {
@@ -498,21 +507,76 @@ impl ShellUi {
             .rect_filled(to_rect(area), 0, self.theme.background.gamma_multiply(0.92));
         let layout = OverviewLayout::new(area, shell.profile().form_factor);
 
-        // Workspace strip.
-        let ids: Vec<_> = shell.desktop().workspaces().map(|w| w.id()).collect();
-        let active = shell.desktop().active().id();
-        for (ws, cell) in ids.iter().zip(row(ids.len(), layout.workspaces, 10)) {
-            let r = to_rect(cell);
-            let response = ui.interact(r, Id::new(("derisk-ws", ws.get())), Sense::click());
-            let count = shell.windows_on(*ws).len();
-            let highlight = *ws == active || response.hovered();
+        // Workspace strip, Mission Control style: one cell per open workspace,
+        // then a "+" slot that opens a new one. Windows dragged from the grid
+        // drop onto either.
+        let open = shell.workspaces();
+        let active = shell.active_workspace();
+        let slots = open.len() + usize::from(shell.can_add_workspace());
+        let cells = row(slots, layout.workspaces, 10);
+        let pointer = ui.input(|i| i.pointer.latest_pos());
+        self.overview_drag = self
+            .overview_drag
+            .filter(|w| shell.workspace_of(*w) == Some(open[active as usize - 1]));
+        let dragging = self.overview_drag;
+        let drop_on = pointer.and_then(|p| cells.iter().position(|c| to_rect(*c).contains(p)));
+        for (i, cell) in cells.iter().enumerate() {
+            let n = i as u64 + 1;
+            let r = to_rect(*cell);
+            let response = ui.interact(r, Id::new(("derisk-ws", n)), Sense::click());
+            let hot = if dragging.is_some() {
+                drop_on == Some(i)
+            } else {
+                response.hovered()
+            };
+            let Some(&ws) = open.get(i) else {
+                // The "+" slot.
+                ui.painter().rect_filled(
+                    r,
+                    10,
+                    if hot {
+                        self.theme.surface
+                    } else {
+                        self.theme.background
+                    },
+                );
+                ui.painter().rect_stroke(
+                    r,
+                    10,
+                    Stroke::new(
+                        if hot { 2.0 } else { 1.0 },
+                        if hot {
+                            self.theme.accent
+                        } else {
+                            self.theme.border
+                        },
+                    ),
+                    StrokeKind::Inside,
+                );
+                ui.painter().text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    "+",
+                    FontId::proportional(24.0),
+                    if hot {
+                        self.theme.accent
+                    } else {
+                        self.theme.foreground
+                    },
+                );
+                if response.on_hover_text("New workspace").clicked() {
+                    actions.push(Action::SwitchWorkspace { workspace: n });
+                }
+                continue;
+            };
+            let windows = shell.windows_on(ws);
             ui.painter().rect_filled(r, 10, self.theme.surface);
             ui.painter().rect_stroke(
                 r,
                 10,
                 Stroke::new(
-                    if *ws == active { 2.0 } else { 1.0 },
-                    if highlight {
+                    if n == active || hot { 2.0 } else { 1.0 },
+                    if n == active || hot {
                         self.theme.accent
                     } else {
                         self.theme.border
@@ -520,43 +584,58 @@ impl ShellUi {
                 ),
                 StrokeKind::Inside,
             );
+            // A miniature of each window, so workspaces read as thumbnails.
+            let minis = grid(windows.len(), inset(*cell, 12), 4);
+            for mini in &minis {
+                ui.painter()
+                    .rect_filled(to_rect(*mini), 3, self.theme.border.gamma_multiply(0.35));
+            }
             ui.painter().text(
                 r.center(),
                 Align2::CENTER_CENTER,
-                if count == 0 {
-                    format!("{ws}")
-                } else {
-                    format!("{ws} · {count}")
-                },
+                format!("{n}"),
                 FontId::proportional(15.0),
                 self.theme.foreground,
             );
             if response.clicked() {
-                actions.push(Action::SwitchWorkspace {
-                    workspace: ws.get(),
-                });
+                actions.push(Action::SwitchWorkspace { workspace: n });
             }
         }
 
-        // Window grid (exposé), including minimized windows.
-        let windows = shell.windows_on(active);
+        // Window grid (exposé), including minimized windows. Drag a window
+        // onto a workspace to move it there.
+        let windows = shell.windows_on(open[active as usize - 1]);
         let placements = shell.placements();
+        let mut ghost = None;
         for (w, cell) in windows.iter().zip(grid(windows.len(), layout.windows, 24)) {
             let frame = placements
                 .iter()
                 .find(|p| p.window == *w)
                 .map_or(cell, |p| p.frame);
             let r = to_rect(fit(frame, cell));
-            let response = ui.interact(r, Id::new(("derisk-win", w.get())), Sense::click());
+            let response =
+                ui.interact(r, Id::new(("derisk-win", w.get())), Sense::click_and_drag());
+            if response.drag_started_by(egui::PointerButton::Primary) {
+                self.overview_drag = Some(*w);
+            }
+            let lifted = self.overview_drag == Some(*w);
+            if lifted {
+                ghost = Some((*w, r.size()));
+            }
             let minimized = shell.is_minimized(*w);
-            let hovered = response.hovered();
+            let hovered = response.hovered() && dragging.is_none();
+            let fill = if minimized {
+                self.theme.background
+            } else {
+                self.theme.surface
+            };
             ui.painter().rect_filled(
                 r,
                 12,
-                if minimized {
-                    self.theme.background
+                if lifted {
+                    fill.gamma_multiply(0.4)
                 } else {
-                    self.theme.surface
+                    fill
                 },
             );
             ui.painter().rect_stroke(
@@ -602,6 +681,45 @@ impl ShellUi {
                 actions.push(Action::Overview {
                     visible: Some(false),
                 });
+            }
+        }
+
+        // The lifted window follows the pointer, shrinking like a thumbnail.
+        if let (Some((w, size)), Some(p)) = (ghost, pointer) {
+            let scale = (180.0 / size.x.max(1.0)).min(1.0);
+            let r = Rect::from_center_size(p, size * scale);
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(
+                Order::Foreground,
+                Id::new("derisk-overview-drag"),
+            ));
+            painter.rect_filled(r, 8, self.theme.surface.gamma_multiply(0.9));
+            painter.rect_stroke(
+                r,
+                8,
+                Stroke::new(2.0, self.theme.accent),
+                StrokeKind::Inside,
+            );
+            let (app, _) = shell.window_label(w).unwrap_or_default();
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                elide(app, r.width() - 12.0, 14.0),
+                FontId::proportional(14.0),
+                self.theme.foreground,
+            );
+        }
+        if let Some(w) = self.overview_drag
+            && ui.input(|i| i.pointer.primary_released())
+        {
+            self.overview_drag = None;
+            if let Some(i) = drop_on {
+                let n = i as u64 + 1;
+                if n != active {
+                    actions.push(Action::MoveToWorkspace {
+                        window: Some(w.get()),
+                        workspace: n,
+                    });
+                }
             }
         }
 
@@ -1172,17 +1290,6 @@ fn palette_row(ui: &mut Ui, theme: &Theme, entry: &Entry, selected: bool) -> egu
         );
     }
     response
-}
-
-fn row(count: usize, area: Geometry, gap: i32) -> Vec<Geometry> {
-    if count == 0 {
-        return Vec::new();
-    }
-    let n = count as i32;
-    let w = ((area.size.w - gap * (n - 1)) / n).max(1);
-    (0..n)
-        .map(|i| rect(area.loc.x + i * (w + gap), area.loc.y, w, area.size.h))
-        .collect()
 }
 
 fn calendar(ui: &mut Ui, shell: &Shell, theme: &Theme) {

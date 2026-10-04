@@ -10,7 +10,7 @@
 //! | Super (tap), Super+A | Toggle the overview |
 //! | Super+←/→/↑/↓ | Snap, maximize, restore or minimize (Windows-style) |
 //! | Super+1…9 | Switch workspace |
-//! | Super+Shift+1…9 | Move the focused window to a workspace |
+//! | Super+Shift+1…9 | Move the focused window to a workspace (one past the last opens a new one) |
 //! | Super+J / Super+K, Alt+Tab | Focus next / previous |
 //! | Super+Enter | Promote to the main pane |
 //! | Super+Q | Close |

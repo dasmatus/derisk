@@ -85,6 +85,18 @@ impl OverviewLayout {
     }
 }
 
+/// `count` equal cells side by side across `area` (the workspace strip).
+pub fn row(count: usize, area: Geometry, gap: i32) -> Vec<Geometry> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let n = count as i32;
+    let w = ((area.size.w - gap * (n - 1)) / n).max(1);
+    (0..n)
+        .map(|i| rect(area.loc.x + i * (w + gap), area.loc.y, w, area.size.h))
+        .collect()
+}
+
 /// Grid cells for `count` windows inside `area`, filled row by row.
 ///
 /// Columns are chosen so cells stay close to the area's aspect ratio.

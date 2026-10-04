@@ -2,7 +2,7 @@ use derisk::{
     action::{Action, Effect},
     decorations::{Button, Hit, TitleBar},
     geom::rect,
-    shell::{DropTarget, Error, Mode, PointerOutcome, Shell},
+    shell::{DropTarget, Error, MAX_WORKSPACES, Mode, PointerOutcome, Shell},
     snap::SnapZone,
     systemd::SessionOp,
 };
@@ -275,22 +275,117 @@ fn phones_use_monocle_without_gaps() {
 #[test]
 fn workspaces_switch_and_move() {
     let mut shell = desktop();
+    assert_eq!(shell.workspaces().len(), 1);
     let (a, _) = shell.map_window("a", "A");
+    shell.map_window("b", "B");
+    // One past the last workspace opens a new one.
     shell
         .apply(Action::MoveToWorkspace {
-            window: None,
-            workspace: 3,
+            window: Some(a.get()),
+            workspace: 2,
         })
         .unwrap();
-    assert_eq!(shell.workspace_of(a).map(|w| w.get()), Some(3));
+    assert_eq!(shell.workspaces().len(), 2);
+    assert_eq!(
+        shell
+            .workspace_of(a)
+            .and_then(|w| shell.workspace_number(w)),
+        Some(2)
+    );
+    assert_eq!(shell.placements().len(), 1);
+    shell
+        .apply(Action::SwitchWorkspace { workspace: 2 })
+        .unwrap();
+    assert_eq!(shell.active_workspace(), 2);
+    assert_eq!(shell.placements().len(), 1);
+    assert_eq!(shell.placements()[0].window, a);
+    for workspace in [4, 42] {
+        assert_eq!(
+            shell.apply(Action::SwitchWorkspace { workspace }),
+            Err(Error::UnknownWorkspace(workspace))
+        );
+    }
+}
+
+#[test]
+fn empty_workspaces_close_and_the_rest_renumber() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    let (b, _) = shell.map_window("b", "B");
+    let (c, _) = shell.map_window("c", "C");
+    for (w, n) in [(b, 2), (c, 3)] {
+        shell
+            .apply(Action::MoveToWorkspace {
+                window: Some(w.get()),
+                workspace: n,
+            })
+            .unwrap();
+    }
+    assert_eq!(shell.workspaces().len(), 3);
+    let number = |shell: &Shell, w: WindowId| {
+        shell
+            .workspace_of(w)
+            .and_then(|ws| shell.workspace_number(ws))
+    };
+    // Emptying workspace 2 closes it; C's workspace becomes number 2.
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(b.get()),
+            workspace: 1,
+        })
+        .unwrap();
+    assert_eq!(shell.workspaces().len(), 2);
+    assert_eq!(number(&shell, c), Some(2));
+
+    // The active workspace stays open while empty, and closes once left.
+    for w in [a, b] {
+        shell
+            .apply(Action::MoveToWorkspace {
+                window: Some(w.get()),
+                workspace: 2,
+            })
+            .unwrap();
+    }
+    assert_eq!(shell.workspaces().len(), 2);
     assert!(shell.placements().is_empty());
     shell
-        .apply(Action::SwitchWorkspace { workspace: 3 })
+        .apply(Action::SwitchWorkspace { workspace: 2 })
         .unwrap();
-    assert_eq!(shell.placements().len(), 1);
-    assert!(
+    assert_eq!(shell.workspaces().len(), 1);
+    assert_eq!(shell.active_workspace(), 1);
+    assert_eq!(shell.placements().len(), 3);
+
+    // Closing a workspace's last window closes the workspace.
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(c.get()),
+            workspace: 2,
+        })
+        .unwrap();
+    assert_eq!(shell.workspaces().len(), 2);
+    shell.unmap_window(c).unwrap();
+    assert_eq!(shell.workspaces().len(), 1);
+}
+
+#[test]
+fn workspaces_are_capped() {
+    let mut shell = desktop();
+    for n in 2..=MAX_WORKSPACES {
+        let (w, _) = shell.map_window("app", "x");
         shell
-            .apply(Action::SwitchWorkspace { workspace: 42 })
-            .is_err()
+            .apply(Action::MoveToWorkspace {
+                window: Some(w.get()),
+                workspace: n,
+            })
+            .unwrap();
+    }
+    assert!(!shell.can_add_workspace());
+    shell.map_window("app", "x");
+    assert_eq!(
+        shell.apply(Action::MoveToWorkspace {
+            window: None,
+            workspace: MAX_WORKSPACES + 1,
+        }),
+        Err(Error::UnknownWorkspace(MAX_WORKSPACES + 1))
     );
 }
