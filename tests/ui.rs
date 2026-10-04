@@ -805,3 +805,76 @@ fn phones_show_one_window_without_a_title_bar() {
     phone.apply(Action::Focus { window: b.get() }).unwrap();
     assert_eq!(phone.placements()[0].window, b);
 }
+
+#[test]
+fn the_keyboard_types_into_the_palette_and_completes_words() {
+    use derisk::keyboard::{self, Key, Keyboard};
+    let size = (392.0, 872.0);
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.apply(Action::Palette { visible: None }).unwrap();
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, size, vec![], 5000);
+    // Opening the palette brings the keyboard up above the navigation bar.
+    assert!(ui.keyboard_visible(&shell));
+    let nav = shell.nav_bar().area(shell.output());
+    let area = rect(
+        nav.loc.x,
+        nav.loc.y - keyboard::HEIGHT,
+        nav.size.w,
+        keyboard::HEIGHT,
+    );
+    let keys = ui.keyboard.keys(area);
+    let at = |k: Key| to_rect(keys.iter().find(|(key, _)| *key == k).unwrap().1).center();
+    for c in "tom".chars() {
+        touch(&ctx, &mut ui, &shell, size, at(Key::Char(c)), &[]);
+    }
+    // The first letter was capitalized; tapping a suggestion finishes it.
+    assert_eq!(ui.keyboard.word(), "Tom");
+    let suggestions = ui.keyboard.suggestions();
+    let first = Keyboard::suggestion_cells(area)[0];
+    assert_eq!(suggestions[0], "Tomorrow");
+    touch(&ctx, &mut ui, &shell, size, to_rect(first).center(), &[]);
+    assert_eq!(ui.keyboard.word(), "");
+    // Everything went to the palette's field, none to a window.
+    assert!(ui.take_window_input().is_empty());
+}
+
+#[test]
+fn the_keyboard_button_types_into_the_focused_window() {
+    use derisk::keyboard::{self, Key, Output};
+    let size = (392.0, 872.0);
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.map_window("editor", "notes.md");
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, size, vec![], 5000);
+    assert!(!ui.keyboard_visible(&shell));
+    let button = to_rect(shell.nav_bar().buttons(shell.output())[3].1).center();
+    touch(&ctx, &mut ui, &shell, size, button, &[]);
+    assert!(ui.keyboard_visible(&shell));
+    // Windows make room for it.
+    let before = shell.work_area();
+    shell.keyboard = ui.keyboard_height(&shell);
+    assert_eq!(shell.work_area().size.h, before.size.h - keyboard::HEIGHT);
+    let nav = shell.nav_bar().area(shell.output());
+    let area = rect(
+        nav.loc.x,
+        nav.loc.y - keyboard::HEIGHT,
+        nav.size.w,
+        keyboard::HEIGHT,
+    );
+    let keys = ui.keyboard.keys(area);
+    let at = |k: Key| to_rect(keys.iter().find(|(key, _)| *key == k).unwrap().1).center();
+    touch(&ctx, &mut ui, &shell, size, at(Key::Char('h')), &[]);
+    touch(&ctx, &mut ui, &shell, size, at(Key::Char('i')), &[]);
+    touch(&ctx, &mut ui, &shell, size, at(Key::Backspace), &[]);
+    assert_eq!(
+        ui.take_window_input(),
+        vec![
+            Output::Text("H".into()),
+            Output::Text("i".into()),
+            Output::Backspace
+        ]
+    );
+}

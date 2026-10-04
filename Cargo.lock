@@ -1274,7 +1274,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#af3f7dbf000faa6d35af6234942d09a265057de7"
 dependencies = [
  "egui",
  "smithay",
@@ -1283,7 +1283,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#af3f7dbf000faa6d35af6234942d09a265057de7"
 dependencies = [
  "egui_glow",
  "glow",
@@ -1297,12 +1297,12 @@ dependencies = [
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#af3f7dbf000faa6d35af6234942d09a265057de7"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#af3f7dbf000faa6d35af6234942d09a265057de7"
 dependencies = [
  "egui",
  "mcsapi",

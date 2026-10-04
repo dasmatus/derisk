@@ -28,7 +28,8 @@ use crate::{
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
     effects::{BlurArea, Look},
-    geom::inset,
+    geom::{inset, rect},
+    keyboard::{self, Key as OskKey, Keyboard, Output as OskOutput, Shift},
     menu::{Menu, MenuEntry},
     mobile::{self, NavState},
     overview::{OverviewLayout, Widget, fit, grid, row},
@@ -97,6 +98,15 @@ pub struct ShellUi {
     touch_style: bool,
     /// Where a drag on the navigation bar started.
     swipe_from: Option<Pos2>,
+    /// The on-screen keyboard (phones only).
+    pub keyboard: Keyboard,
+    keyboard_open: bool,
+    /// Keyboard output for the chrome's own text fields, fed in next frame.
+    chrome_input: Vec<egui::Event>,
+    /// Keyboard output for the focused window, for the host to deliver.
+    window_input: Vec<OskOutput>,
+    /// When a held Backspace repeats next.
+    backspace_repeat: Option<f64>,
 }
 
 /// Command palette state. The host fills [`PaletteUi::extra`] and
@@ -123,6 +133,17 @@ pub struct PaletteUi {
     armed: Option<String>,
     message: Option<String>,
     open: bool,
+}
+
+/// A key press as a hardware keyboard would send it.
+fn key_event(key: Key) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }
 }
 
 /// Rows the palette shows at once before scrolling.
@@ -230,7 +251,33 @@ impl ShellUi {
             blurs: Vec::new(),
             touch_style: false,
             swipe_from: None,
+            keyboard: Keyboard::new(),
+            keyboard_open: false,
+            chrome_input: Vec::new(),
+            window_input: Vec::new(),
+            backspace_repeat: None,
         }
+    }
+
+    /// Whether the on-screen keyboard shows: on phones, while the palette
+    /// is open or after the navigation bar's keyboard button.
+    pub fn keyboard_visible(&self, shell: &Shell) -> bool {
+        shell.is_phone() && self.keyboard_open
+    }
+
+    /// The keyboard's height, for [`Shell::keyboard`]; 0 while hidden.
+    pub fn keyboard_height(&self, shell: &Shell) -> i32 {
+        if self.keyboard_visible(shell) {
+            keyboard::HEIGHT
+        } else {
+            0
+        }
+    }
+
+    /// What the on-screen keyboard typed for the focused window since the
+    /// last call (text for the chrome's own fields goes there directly).
+    pub fn take_window_input(&mut self) -> Vec<OskOutput> {
+        std::mem::take(&mut self.window_input)
     }
 
     /// Areas to blur under the translucent panels shown by the last
@@ -370,6 +417,18 @@ impl ShellUi {
             set_touch_style(ui.ctx(), phone);
             self.touch_style = phone;
         }
+        // What the on-screen keyboard typed last frame reaches the chrome's
+        // text fields as if typed on a hardware keyboard.
+        if !self.chrome_input.is_empty() {
+            let events = std::mem::take(&mut self.chrome_input);
+            ui.ctx().input_mut(|i| i.events.extend(events));
+        }
+        // The palette's search field is the one to type in: bring the
+        // keyboard up with it, and down again after.
+        if phone && shell.palette_visible() != self.palette.open {
+            self.keyboard_open = shell.palette_visible();
+            self.keyboard.reset();
+        }
         self.drag_preview(ui, shell);
         self.snap_assist(ui, shell, &mut actions);
         if shell.overview_visible() {
@@ -382,6 +441,7 @@ impl ShellUi {
         if phone {
             self.status_bar(ui, shell, frame, &mut actions);
             self.nav_bar(ui, shell, frame, &mut actions);
+            self.on_screen_keyboard(ui, shell);
         } else {
             self.top_bar(ui, shell, frame, &mut actions);
         }
@@ -669,6 +729,7 @@ impl ShellUi {
                 mobile::NavButton::Back => false,
                 mobile::NavButton::Home => state.overview,
                 mobile::NavButton::Apps => state.palette,
+                mobile::NavButton::Keyboard => self.keyboard_open,
             };
             if response.is_pointer_button_down_on() {
                 ui.painter()
@@ -686,8 +747,149 @@ impl ShellUi {
                 },
             );
             if response.clicked() {
+                if button == mobile::NavButton::Keyboard {
+                    self.keyboard_open = !self.keyboard_open;
+                    self.keyboard.reset();
+                }
                 actions.extend(mobile::tap(button, state));
             }
+        }
+    }
+
+    /// The on-screen keyboard above the navigation bar: a strip of word
+    /// suggestions and four rows of keys (see [`crate::keyboard`]). Output
+    /// goes to the chrome while the palette or overview is up, and to the
+    /// focused window otherwise.
+    fn on_screen_keyboard(&mut self, ui: &mut Ui, shell: &Shell) {
+        if !self.keyboard_visible(shell) {
+            self.backspace_repeat = None;
+            return;
+        }
+        let nav = shell.nav_bar().area(shell.output());
+        let area = rect(
+            nav.loc.x,
+            nav.loc.y - keyboard::HEIGHT,
+            nav.size.w,
+            keyboard::HEIGHT,
+        );
+        let theme = self.theme;
+        let r = to_rect(area);
+        // Opaque, so nothing reads through the keys.
+        ui.painter().rect_filled(r, 0, theme.surface);
+        ui.painter()
+            .hline(r.x_range(), r.top(), Stroke::new(1.0, theme.border));
+        let mut out = Vec::new();
+
+        let suggestions = self.keyboard.suggestions();
+        for (i, cell) in Keyboard::suggestion_cells(area).into_iter().enumerate() {
+            let cell = to_rect(cell);
+            if i > 0 {
+                ui.painter().vline(
+                    cell.left(),
+                    cell.y_range().shrink(10.0),
+                    Stroke::new(1.0, theme.border),
+                );
+            }
+            let Some(word) = suggestions.get(i) else {
+                continue;
+            };
+            let response = ui.interact(cell, Id::new(("derisk-osk-suggestion", i)), Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    format!("Suggestion: {word}"),
+                )
+            });
+            if response.is_pointer_button_down_on() {
+                ui.painter()
+                    .rect_filled(cell.shrink(3.0), 8, theme.accent.gamma_multiply(0.2));
+            }
+            ui.painter().text(
+                cell.center(),
+                Align2::CENTER_CENTER,
+                elide(word, cell.width() - 12.0, 16.0),
+                FontId::proportional(16.0),
+                theme.foreground,
+            );
+            if response.clicked() {
+                out.extend(self.keyboard.choose(word));
+            }
+        }
+
+        let now = ui.input(|i| i.time);
+        let mut backspace_down = false;
+        for (key, cell) in self.keyboard.keys(area) {
+            let cell = to_rect(cell).shrink2(vec2(2.5, 4.0));
+            let response = ui.interact(cell, Id::new(("derisk-osk-key", key)), Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, key.name())
+            });
+            let down = response.is_pointer_button_down_on();
+            let modifier = !matches!(key, OskKey::Char(_) | OskKey::Space);
+            let lit = matches!(key, OskKey::Shift) && self.keyboard.shift() != Shift::Off;
+            let fill = if down {
+                theme.accent.gamma_multiply(0.35)
+            } else if lit {
+                // Caps Lock reads stronger than a one-letter Shift.
+                theme
+                    .accent
+                    .gamma_multiply(if self.keyboard.shift() == Shift::Lock {
+                        0.55
+                    } else {
+                        0.25
+                    })
+            } else if modifier {
+                theme.border.gamma_multiply(0.45)
+            } else {
+                theme.background
+            };
+            ui.painter().rect_filled(cell, 6, fill);
+            let size = if matches!(key, OskKey::Char(_)) {
+                20.0
+            } else {
+                15.0
+            };
+            ui.painter().text(
+                cell.center(),
+                Align2::CENTER_CENTER,
+                key.label(&self.keyboard),
+                FontId::proportional(size),
+                if lit { theme.accent } else { theme.foreground },
+            );
+            // Holding Backspace repeats it, after a pause, like a hardware key.
+            if key == OskKey::Backspace && down {
+                backspace_down = true;
+                match self.backspace_repeat {
+                    None => self.backspace_repeat = Some(now + 0.45),
+                    Some(at) if now >= at => {
+                        out.extend(self.keyboard.press(key));
+                        self.backspace_repeat = Some(now + 0.06);
+                    }
+                    Some(_) => {}
+                }
+                ui.ctx().request_repaint();
+            }
+            if response.clicked() {
+                out.extend(self.keyboard.press(key));
+            }
+        }
+        if !backspace_down {
+            self.backspace_repeat = None;
+        }
+
+        if out.is_empty() {
+            return;
+        }
+        if shell.palette_visible() || shell.overview_visible() {
+            self.chrome_input.extend(out.into_iter().map(|o| match o {
+                OskOutput::Text(text) => egui::Event::Text(text),
+                OskOutput::Backspace => key_event(Key::Backspace),
+                OskOutput::Enter => key_event(Key::Enter),
+            }));
+            ui.ctx().request_repaint();
+        } else {
+            self.window_input.extend(out);
         }
     }
 
@@ -1172,6 +1374,7 @@ impl ShellUi {
     /// assistant as fallback, and the agent conversation (chat view).
     fn palette(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
         let theme = self.theme;
+        let keyboard = self.keyboard_height(shell) as f32;
         let state = &mut self.palette;
         let mut cursor_to_end = false;
         if !state.open {
@@ -1273,9 +1476,9 @@ impl ShellUi {
         }
 
         let phone = shell.is_phone();
-        // The navigation bar stays above the backdrop on phones, so Back and
-        // Home keep working with the palette open.
-        let nav = shell.profile().nav_bar as f32;
+        // The navigation bar and the keyboard stay above the backdrop on
+        // phones, so Back, Home and typing keep working with the palette open.
+        let nav = shell.profile().nav_bar as f32 + keyboard;
         let screen = to_rect(shell.output());
         let dimmed = Rect::from_min_max(screen.min, screen.max - vec2(0.0, nav));
         // Dim the desktop; clicking it closes the palette.

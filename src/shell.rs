@@ -234,6 +234,10 @@ pub struct Shell {
     pub failed_units: Vec<String>,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
+    /// Height of the on-screen keyboard above the navigation bar, updated by
+    /// the host from the chrome; 0 while it is hidden. Windows shrink to
+    /// stay above it, so the field being typed in stays visible.
+    pub keyboard: i32,
 }
 
 /// Whether `path` is safe to hand to `xdg-open`: absolute, existing, and
@@ -280,6 +284,7 @@ impl Shell {
             battery: None,
             failed_units: Vec::new(),
             effects: Effects::default(),
+            keyboard: 0,
         };
         shell.apply_profile_layout();
         shell
@@ -320,12 +325,11 @@ impl Shell {
         self.output
     }
 
-    /// The output minus the top bar and, on phones, the navigation bar.
+    /// The output minus the top bar and, on phones, the navigation bar and
+    /// the on-screen keyboard.
     pub fn work_area(&self) -> Geometry {
         let bar = self.profile.top_bar.min(self.output.size.h - 1);
-        let nav = self
-            .profile
-            .nav_bar
+        let nav = (self.profile.nav_bar + self.keyboard)
             .min(self.output.size.h - bar - 1)
             .max(0);
         rect(

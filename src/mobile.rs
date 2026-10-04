@@ -3,8 +3,9 @@
 //! A phone has no Super key and no pointer to hover with, and the top of a
 //! tall screen is out of reach of the hand holding it. So below the phone
 //! breakpoint (see [`crate::adaptive::Profile::detect`]) the shell adds a
-//! navigation bar along the bottom edge: Back, Home and Apps buttons that
-//! each fill a third of the width, and swipes that start on the bar.
+//! navigation bar along the bottom edge: Back, Home, Apps and Keyboard
+//! buttons that each fill a quarter of the width, and swipes that start on
+//! the bar.
 //!
 //! This module only does geometry and decides what a tap or swipe means, so
 //! it can be tested without a display and drawn by any toolkit; [`crate::ui`]
@@ -34,11 +35,13 @@ pub enum NavButton {
     Home,
     /// The command palette, which lists every app and also searches.
     Apps,
+    /// Shows or hides the on-screen keyboard (see [`crate::keyboard`]).
+    Keyboard,
 }
 
 impl NavButton {
     /// Left to right.
-    pub const ORDER: [Self; 3] = [Self::Back, Self::Home, Self::Apps];
+    pub const ORDER: [Self; 4] = [Self::Back, Self::Home, Self::Apps, Self::Keyboard];
 
     /// The glyph drawn on the button.
     pub fn icon(self) -> &'static str {
@@ -46,6 +49,7 @@ impl NavButton {
             Self::Back => "◀",
             Self::Home => "🏠",
             Self::Apps => "🔍",
+            Self::Keyboard => "⌨",
         }
     }
 
@@ -55,6 +59,7 @@ impl NavButton {
             Self::Back => "Back",
             Self::Home => "Home",
             Self::Apps => "Apps and search",
+            Self::Keyboard => "Keyboard",
         }
     }
 }
@@ -92,17 +97,22 @@ impl NavBar {
         self.height > 0 && contains(self.area(output), point)
     }
 
-    /// Each button's tap area: equal thirds of the bar, so every target is
+    /// Each button's tap area: equal shares of the bar, so every target is
     /// as wide as it can be and there are no dead gaps between them.
-    pub fn buttons(&self, output: Geometry) -> [(NavButton, Geometry); 3] {
+    pub fn buttons(&self, output: Geometry) -> [(NavButton, Geometry); 4] {
         let a = self.area(output);
-        let third = a.size.w / 3;
+        let n = NavButton::ORDER.len() as i32;
+        let share = a.size.w / n;
         let mut i = 0;
         NavButton::ORDER.map(|b| {
-            // The last third takes the remainder, so the bar is covered edge
+            // The last share takes the remainder, so the bar is covered edge
             // to edge whatever the width.
-            let w = if i == 2 { a.size.w - 2 * third } else { third };
-            let area = rect(a.loc.x + i * third, a.loc.y, w, a.size.h);
+            let w = if i == n - 1 {
+                a.size.w - (n - 1) * share
+            } else {
+                share
+            };
+            let area = rect(a.loc.x + i * share, a.loc.y, w, a.size.h);
             i += 1;
             (b, area)
         })
@@ -132,6 +142,9 @@ pub fn tap(button: NavButton, state: NavState) -> Vec<Action> {
         ],
         NavButton::Home => vec![Action::Overview { visible: None }],
         NavButton::Apps => vec![Action::Palette { visible: None }],
+        // The keyboard is the chrome's own state, not a shell action; the
+        // chrome toggles it.
+        NavButton::Keyboard => Vec::new(),
     }
 }
 
@@ -210,7 +223,7 @@ mod tests {
         for (_, g) in buttons {
             assert!(g.size.w >= TOUCH_TARGET && g.size.h >= TOUCH_TARGET);
         }
-        assert_eq!(buttons[2].1.loc.x + buttons[2].1.size.w, phone().size.w);
+        assert_eq!(buttons[3].1.loc.x + buttons[3].1.size.w, phone().size.w);
     }
 
     #[test]

@@ -28,6 +28,7 @@ use derisk::{
     effects::SettingsWatch,
     geom::rect,
     ipc,
+    keyboard::{Output as Typed, Predictor},
     keys::{self, Key, Mods, SuperTap},
     overview::Battery,
     palette::{self, Entry},
@@ -80,6 +81,10 @@ pub struct Session {
     /// Whether the output is phone-sized, shared with [`CoreApps`] so the
     /// apps get touch-sized widgets too.
     phone: Arc<AtomicBool>,
+    /// Where the on-screen keyboard keeps the words it learned, and when it
+    /// last wrote them.
+    words: Option<PathBuf>,
+    words_saved: Instant,
 }
 
 /// Core-app actions waiting for the compositor to launch their app, shared
@@ -126,6 +131,18 @@ impl Session {
         let mut ui = ShellUi::new(&shell, options.reduced_motion);
         let core_apps = core_desktop_entries();
         let installed = installed_apps();
+        // The keyboard predicts app names too, below words the person used.
+        let words = Predictor::default_path();
+        if let Some(path) = &words {
+            ui.keyboard.predictor.load(path);
+        }
+        ui.keyboard.predictor.add_vocabulary(
+            core_apps
+                .iter()
+                .chain(&installed)
+                .flat_map(|e| e.name.split_whitespace()),
+            200,
+        );
         ui.palette.extra = palette_entries(&core_apps, &installed);
         Self {
             shell,
@@ -144,6 +161,8 @@ impl Session {
             pending_actions,
             settings: SettingsWatch::new(derisk_settings::default_path()),
             phone,
+            words,
+            words_saved: Instant::now(),
         }
     }
 
@@ -372,6 +391,16 @@ impl compositor::Shell for Session {
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
         }
+        // Learned words reach the disk at most twice a minute.
+        if self.ui.keyboard.predictor.is_dirty()
+            && self.words_saved.elapsed() >= Duration::from_secs(30)
+            && let Some(path) = &self.words
+        {
+            self.words_saved = Instant::now();
+            if let Err(e) = self.ui.keyboard.predictor.save(path) {
+                log(Priority::Warning, &format!("{}: {e}", path.display()));
+            }
+        }
     }
 
     fn chrome_wants_pointer(&self, (x, y): (i32, i32)) -> bool {
@@ -381,7 +410,11 @@ impl compositor::Shell for Session {
         self.shell.overview_visible()
             || self.shell.palette_visible()
             || y < self.shell.profile().top_bar
-            || self.shell.nav_bar().contains(self.shell.output(), (x, y))
+            // Below the work area on a phone: the keyboard and navigation bar.
+            || (self.shell.is_phone() && {
+                let area = self.shell.work_area();
+                y >= area.loc.y + area.size.h
+            })
             || self.shell.snap_assist().is_some_and(|a| inside(a.frame))
             || !self.startup_done()
     }
@@ -480,6 +513,16 @@ impl compositor::Shell for Session {
     fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
+        // Windows make room for the on-screen keyboard, and what it typed
+        // for them goes to the focused one.
+        self.shell.keyboard = self.ui.keyboard_height(&self.shell);
+        for typed in self.ui.take_window_input() {
+            self.commands.push(match typed {
+                Typed::Text(text) => Command::TypeText(text),
+                Typed::Backspace => Command::Key(Keysym::BackSpace),
+                Typed::Enter => Command::Key(Keysym::Return),
+            });
+        }
         // Requests typed in the palette; their progress shows in its
         // conversation.
         for ask in self.ui.take_asks() {

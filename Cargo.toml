@@ -9,13 +9,14 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#23 (frame pacing by refresh rate and VRR) merges, every
-# mcsapi crate comes from its branch so the apps and the compositor share one
-# mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
+# Until dasmatus/mcsapi#28 (touchscreen input and typing from the on-screen
+# keyboard, on top of #23's frame pacing) merges, every mcsapi crate comes
+# from its branch so the apps and the compositor share one mcsapi-ui. Then
+# drop the `branch` keys and run `cargo update -p mcsapi`.
+mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }

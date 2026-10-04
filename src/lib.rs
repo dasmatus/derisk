@@ -9,6 +9,7 @@
 //! - [`decorations`]: server-side title bars with the buttons on the left.
 //! - [`adaptive`]: phone/tablet/desktop profiles and learned app suggestions.
 //! - [`mobile`]: the touch navigation bar and edge swipes on phones.
+//! - [`keyboard`]: the on-screen keyboard and its word prediction.
 //! - [`overview`]: the overview grid and its widgets.
 //! - [`desktop`]: installed apps and their actions from `.desktop` files.
 //! - [`menu`]: the global menu.
@@ -49,6 +50,7 @@ pub mod desktop;
 pub mod effects;
 pub mod geom;
 pub mod ipc;
+pub mod keyboard;
 pub mod keys;
 pub mod menu;
 pub mod mobile;
