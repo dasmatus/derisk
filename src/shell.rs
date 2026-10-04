@@ -13,6 +13,7 @@ use serde::Serialize;
 use crate::{
     action::{Action, Effect, LayoutKind},
     adaptive::{FormFactor, Habits, Profile},
+    apps::Apps,
     assistant,
     conversation::{Conversation, Source, StepRef, StepStatus},
     decorations::{Button, ClickTracker, Hit},
@@ -234,22 +235,68 @@ pub struct Shell {
     pub failed_units: Vec<String>,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
+    /// Names and icons for app IDs, set by the host from `.desktop` files.
+    pub apps: Apps,
 }
 
+/// File types whose default handler runs the file as a program rather than
+/// showing it: desktop launchers, Java archives, Windows programs (through
+/// Wine), Flatpak references, AppImages and Android packages (through the
+/// Android Translation Layer). Compared without case, as shared-mime-info
+/// matches globs.
+const LAUNCHER_EXTENSIONS: &[&str] = &[
+    "desktop",
+    "jar",
+    "exe",
+    "msi",
+    "bat",
+    "cmd",
+    "com",
+    "lnk",
+    "flatpakref",
+    "flatpakrepo",
+    "appimage",
+    "apk",
+];
+
 /// Whether `path` is safe to hand to `xdg-open`: absolute, existing, and
-/// neither executable nor a `.desktop` launcher, so opening it cannot run a
-/// program.
+/// neither executable nor a launcher, so opening it cannot run a program.
+///
+/// A launcher is recognised by its extension in any case, and by content
+/// too, because shared-mime-info sniffs a file whose name matches no glob:
+/// `[Desktop Entry]` anywhere in the first 4 KiB, an ELF (AppImages are
+/// ELF) or Windows `MZ` executable whatever its name, and a zip (a jar or
+/// apk) only without an extension, since documents like .docx are zips too
+/// and their glob decides their type first.
 fn openable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
+    use std::{io::Read, os::unix::fs::PermissionsExt};
 
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
     };
-    path.is_absolute()
-        && (meta.is_dir()
-            || (meta.is_file()
-                && meta.permissions().mode() & 0o111 == 0
-                && path.extension().is_none_or(|e| e != "desktop")))
+    if !path.is_absolute() {
+        return false;
+    }
+    if meta.is_dir() {
+        return true;
+    }
+    if !meta.is_file() || meta.permissions().mode() & 0o111 != 0 {
+        return false;
+    }
+    let launcher = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        LAUNCHER_EXTENSIONS
+            .iter()
+            .any(|l| e.eq_ignore_ascii_case(l))
+    });
+    if launcher {
+        return false;
+    }
+    let mut head = Vec::with_capacity(4096);
+    let read = std::fs::File::open(path).and_then(|f| f.take(4096).read_to_end(&mut head));
+    let program = head.starts_with(b"\x7fELF")
+        || head.starts_with(b"MZ")
+        || (path.extension().is_none() && head.starts_with(b"PK\x03\x04"));
+    read.is_ok() && !program && !head.windows(15).any(|w| w == b"[Desktop Entry]")
 }
 
 impl Shell {
@@ -280,6 +327,7 @@ impl Shell {
             battery: None,
             failed_units: Vec::new(),
             effects: Effects::default(),
+            apps: Apps::default(),
         };
         shell.apply_profile_layout();
         shell
