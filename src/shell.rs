@@ -10,6 +10,7 @@ use crate::{
     action::{Action, Effect, LayoutKind},
     adaptive::{FormFactor, Habits, Profile},
     decorations::{Button, ClickTracker, Hit},
+    effects::{Effects, Look},
     geom::{Point, Rect, centered, contains, inset, rect},
     menu::{self, GlobalMenu},
     overview::Battery,
@@ -213,6 +214,8 @@ pub struct Shell {
     pub battery: Option<Battery>,
     /// Failed user units, updated by the host (see [`systemd::failed_units`]).
     pub failed_units: Vec<String>,
+    /// Effect preferences, updated by the host from the settings file.
+    pub effects: Effects,
 }
 
 impl Shell {
@@ -240,9 +243,15 @@ impl Shell {
             clock: Clock::default(),
             battery: None,
             failed_units: Vec::new(),
+            effects: Effects::default(),
         };
         shell.apply_profile_layout();
         shell
+    }
+
+    /// The effects in force now, from [`Shell::effects`] and the battery.
+    pub fn look(&self) -> Look {
+        self.effects.resolve(self.battery)
     }
 
     /// Updates the output (resolution change, rotation, dock/undock).

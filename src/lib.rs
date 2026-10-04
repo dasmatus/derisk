@@ -12,6 +12,7 @@
 //! - [`menu`]: the global menu.
 //! - [`tray`]: monochrome system tray icons.
 //! - [`animation`]: the startup animation.
+//! - [`effects`]: translucent, blurred panels and low power mode.
 //! - [`assistant`] and [`ipc`]: natural-language and agent control.
 //! - [`keys`]: keyboard shortcuts.
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
@@ -37,6 +38,7 @@ pub mod adaptive;
 pub mod animation;
 pub mod assistant;
 pub mod decorations;
+pub mod effects;
 pub mod geom;
 pub mod ipc;
 pub mod keys;

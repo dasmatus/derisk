@@ -23,14 +23,14 @@ use std::path::PathBuf;
 
 use mcsapi_ui::{App, Theme, egui};
 pub use model::{
-    Accent, Appearance, ColorScheme, DesktopPrefs, Input, Layout, Notifications, Power, Profile,
-    Settings, Warning, default_path,
+    Accent, Appearance, ColorScheme, DesktopPrefs, Input, Layout, LowPower, Notifications,
+    PanelOpacity, Power, Profile, Settings, Warning, default_path,
 };
 
 /// A page of the Settings app.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Page {
-    /// Colors, text size, and motion.
+    /// Colors, text size, motion, blur, and panel opacity.
     #[default]
     Appearance,
     /// Layout, gaps, workspaces, and profile.
@@ -39,7 +39,7 @@ pub enum Page {
     Input,
     /// Banners and sounds.
     Notifications,
-    /// Dimming, locking, and suspend.
+    /// Dimming, locking, suspend, and low power mode.
     Power,
     /// Version and file location.
     About,
@@ -193,6 +193,26 @@ impl SettingsApp {
                     ui.label("Reduce motion");
                     ui.checkbox(&mut a.reduce_motion, "Cross-fade instead of animating");
                     ui.end_row();
+                    ui.label("Background blur");
+                    ui.add(
+                        egui::Slider::new(&mut a.blur, 0..=10).custom_formatter(|v, _| {
+                            if v == 0.0 {
+                                "Off".into()
+                            } else {
+                                format!("{v}")
+                            }
+                        }),
+                    );
+                    ui.end_row();
+                    for (label, value) in [
+                        ("Top bar opacity", &mut a.panels.top_bar),
+                        ("Overview opacity", &mut a.panels.overview),
+                        ("Snap Assist opacity", &mut a.panels.snap_assist),
+                    ] {
+                        ui.label(label);
+                        ui.add(egui::Slider::new(value, 20..=100).suffix(" %"));
+                        ui.end_row();
+                    }
                 }
                 Page::Desktop => {
                     let d = &mut s.desktop;
@@ -275,6 +295,22 @@ impl SettingsApp {
                         );
                         ui.end_row();
                     }
+                    ui.label("Low power mode");
+                    ui.horizontal(|ui| {
+                        for mode in LowPower::ALL {
+                            ui.selectable_value(&mut p.low_power, mode, mode.label());
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    ui.label(
+                        egui::RichText::new(
+                            "Turns off blur and animations and halves the frame rate.",
+                        )
+                        .small()
+                        .color(theme.border),
+                    );
+                    ui.end_row();
                 }
                 Page::About => {
                     ui.label("derisk Settings");

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use derisk_settings::{Accent, ColorScheme, Layout, Page, Profile, Settings, SettingsApp};
+use derisk_settings::{
+    Accent, ColorScheme, Layout, LowPower, Page, Profile, Settings, SettingsApp,
+};
 use mcsapi_ui::{Theme, egui, run_frame};
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -26,6 +28,11 @@ fn text_round_trips_every_field() {
     settings.input.repeat_rate = 40;
     settings.notifications.do_not_disturb = true;
     settings.power.suspend_after_min = 0;
+    settings.appearance.blur = 0;
+    settings.appearance.panels.top_bar = 100;
+    settings.appearance.panels.overview = 35;
+    settings.appearance.panels.snap_assist = 20;
+    settings.power.low_power = LowPower::On;
     let (parsed, warnings) = Settings::parse(&settings.to_text());
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(parsed, settings);
@@ -56,6 +63,9 @@ fn set_rejects_out_of_range_values() {
     assert!(!settings.set("appearance.text_scale", "3"));
     assert!(!settings.set("input.repeat_rate", "0"));
     assert!(!settings.set("power.dim_after_min", "-1"));
+    assert!(!settings.set("appearance.blur", "11"));
+    assert!(!settings.set("appearance.top_bar_opacity", "10"));
+    assert!(!settings.set("power.low_power", "sometimes"));
     assert_eq!(settings, Settings::default());
     assert!(settings.set("power.dim_after_min", "0"));
     assert_eq!(settings.power.dim_after_min, 0);
@@ -136,4 +146,17 @@ fn every_page_renders() {
         assert!(!output.shapes.is_empty());
         output.textures_delta.clear();
     }
+}
+
+#[test]
+fn low_power_follows_the_battery_only_when_asked() {
+    assert_eq!(Settings::default().power.low_power, LowPower::OnBattery);
+    for on_battery in [false, true] {
+        assert!(!LowPower::Off.active(on_battery));
+        assert!(LowPower::On.active(on_battery));
+        assert_eq!(LowPower::OnBattery.active(on_battery), on_battery);
+    }
+    let (settings, warnings) = Settings::parse("power.low_power = on_battery\n");
+    assert!(warnings.is_empty());
+    assert_eq!(settings.power.low_power, LowPower::OnBattery);
 }
