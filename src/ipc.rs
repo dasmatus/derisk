@@ -207,6 +207,60 @@ struct Applied {
     effects: Vec<Effect>,
 }
 
+/// The longest request line a socket server reads, in bytes. A `state` reply
+/// is a few kilobytes and the largest request, a `register_menu`, rarely
+/// passes a few dozen; a client that sends more without a newline is cut off
+/// rather than left to grow one line until the compositor runs out of memory.
+pub const MAX_REQUEST: u64 = 1 << 20;
+
+/// Reads the next request line from a socket client: `Ok(None)` at the end
+/// of the stream, and an error for a line longer than [`MAX_REQUEST`] or not
+/// valid UTF-8.
+pub fn read_request(reader: &mut impl std::io::BufRead) -> std::io::Result<Option<String>> {
+    use std::io::{BufRead, Read};
+
+    let mut line = Vec::new();
+    let read = reader.take(MAX_REQUEST + 1).read_until(b'\n', &mut line)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if line.last() != Some(&b'\n') && read as u64 > MAX_REQUEST {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "request line too long",
+        ));
+    }
+    if line.last() == Some(&b'\n') {
+        line.pop();
+    }
+    String::from_utf8(line)
+        .map(Some)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// Checks that a directory may hold the agent socket: owned by this user and
+/// writable by nobody else. In a directory another user can write, they could
+/// replace the socket between its creation and its chmod, or put their own
+/// in its place for this user's tools to talk to.
+pub fn check_socket_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    // /proc/self belongs to the process's effective user, which saves
+    // calling geteuid from a crate that forbids unsafe code.
+    let me = std::fs::metadata("/proc/self")?.uid();
+    let meta = std::fs::metadata(dir)?;
+    if meta.uid() != me || meta.mode() & 0o022 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "{} must belong to this user and be writable by nobody else",
+                dir.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Handles one request line; returns the response line and host effects.
 pub fn handle_line(shell: &mut Shell, line: &str) -> (String, Vec<Effect>) {
     let reply = |result: Result<Value, String>| match result {

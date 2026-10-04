@@ -206,3 +206,23 @@ fn agent_requests_show_in_the_conversation() {
     assert_eq!(turns[1].request, "1 action");
     assert_eq!(turns[1].steps[0].label, "Go to workspace 3");
 }
+
+#[test]
+fn socket_requests_are_capped() {
+    use std::io::Cursor;
+
+    let mut ok = Cursor::new(b"{\"method\":\"state\"}\nlast".to_vec());
+    assert_eq!(
+        derisk::ipc::read_request(&mut ok).unwrap().as_deref(),
+        Some("{\"method\":\"state\"}")
+    );
+    assert_eq!(
+        derisk::ipc::read_request(&mut ok).unwrap().as_deref(),
+        Some("last")
+    );
+    assert_eq!(derisk::ipc::read_request(&mut ok).unwrap(), None);
+
+    // A client that never sends a newline is cut off, not buffered forever.
+    let endless = vec![b'a'; derisk::ipc::MAX_REQUEST as usize + 10];
+    assert!(derisk::ipc::read_request(&mut Cursor::new(endless)).is_err());
+}
