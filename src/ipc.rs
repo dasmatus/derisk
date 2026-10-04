@@ -22,6 +22,7 @@ use crate::{
     action::{Action, Effect},
     adaptive::FormFactor,
     assistant,
+    conversation::Source,
     geom::Rect,
     menu::Menu,
     overview::Battery,
@@ -214,18 +215,26 @@ pub fn handle_line(shell: &mut Shell, line: &str) -> (String, Vec<Effect>) {
     let (result, effects) = match request {
         Request::State => (Ok(to_value(&state(shell))), Vec::new()),
         Request::Tools => (Ok(tools()), Vec::new()),
-        Request::Dispatch { actions } => match shell.run(actions.clone()) {
-            Ok(effects) => (
-                Ok(to_value(&Applied {
-                    actions,
-                    effects: effects.clone(),
-                })),
-                effects,
-            ),
-            Err(e) => (Err(e.to_string()), Vec::new()),
-        },
+        Request::Dispatch { actions } => {
+            let request = match actions.len() {
+                1 => "1 action".to_owned(),
+                n => format!("{n} actions"),
+            };
+            match shell.run_recorded(&request, Source::Agent, actions.clone()) {
+                Ok(effects) => (
+                    Ok(to_value(&Applied {
+                        actions,
+                        effects: effects.clone(),
+                    })),
+                    effects,
+                ),
+                Err(e) => (Err(e.to_string()), Vec::new()),
+            }
+        }
         Request::Ask { text } => match assistant::interpret(&text) {
-            Ok(actions) => match shell.run(actions.clone()) {
+            // Interpreted twice so the response can list the actions; both
+            // runs of the assistant are pure.
+            Ok(actions) => match shell.ask(&text, Source::Agent, false) {
                 Ok(effects) => (
                     Ok(to_value(&Applied {
                         actions,
@@ -235,7 +244,12 @@ pub fn handle_line(shell: &mut Shell, line: &str) -> (String, Vec<Effect>) {
                 ),
                 Err(e) => (Err(e.to_string()), Vec::new()),
             },
-            Err(e) => (Err(e.to_string()), Vec::new()),
+            Err(e) => {
+                shell
+                    .conversation
+                    .not_understood(Source::Agent, &text, &e.to_string());
+                (Err(e.to_string()), Vec::new())
+            }
         },
         Request::RegisterMenu { window, menus } => {
             shell.menus.register(window, menus);

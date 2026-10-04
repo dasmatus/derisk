@@ -11,12 +11,12 @@ derisk takes the good parts from many desktops:
 | Drag a title bar to an edge or corner to snap; top edge maximizes; Super+arrows; Snap Assist offers the other half | Windows |
 | Window buttons (close, minimize, maximize) on the **left** of the title bar | macOS |
 | Global menu in the top bar (app menus + a Window menu) | macOS, KDE |
-| Overview with workspaces, an exposé grid and widgets (assistant, clock, suggestions, failed units, calendar, battery, notes) | GNOME, iPadOS |
+| Overview with workspaces, an exposé grid and widgets (clock, suggestions, failed units, calendar, battery, notes) | GNOME, iPadOS |
 | Monochrome systray icons recolored to the theme | macOS, GNOME |
 | Adaptive profiles: phone (monocle, no gaps), tablet, desktop | mobile shells |
 | App suggestions learned from when you launch apps | Android, iOS |
 | Startup animation: logo pops in, ring sweeps, then blooms into the desktop (cross-fade with reduced motion) | — |
-| Command palette (Super+Space) for apps, windows, commands, settings and files, falling back to the assistant | Raycast, Spotlight, VS Code |
+| Command palette (Super+Space) for apps, app actions, windows, commands, system actions and files, hosting the agent conversation | Raycast, Spotlight, VS Code |
 | Built-in assistant and an agent protocol | agent-first |
 | Deep systemd integration | — |
 
@@ -48,6 +48,17 @@ Anything else goes to the assistant: `open firefox and snap it left`,
 Enter, done. When a typed sentence is something the assistant understands
 and no entry title contains all its words, the assistant row comes first.
 
+**The palette is where the agent lives.** A request opens its
+conversation view: what you asked, each planned step with its progress
+(✔ done, ⟳ waiting for a launched app's window, ✖ failed and why), and
+the outcome. Keep typing to follow up; Backspace on an empty field returns
+to search, `?` opens the conversation directly, and "New" starts over.
+Requests from external agents (`ask` and `dispatch` over the agent
+protocol) appear in the same conversation, and the panel shows a ✨ count
+of agent activity you haven't seen (or ✨ while a request is still
+working); click it to open the conversation. Typing on the overview opens
+the palette with what you typed.
+
 Prefixes narrow the list: `>` commands, `@` windows, `/` or `~` files,
 `?` ask the assistant. ↑/↓ (or Tab, Ctrl+N/P) select, Enter runs, Esc
 closes. Picks you use often rise to the top. Agents can open and close it
@@ -60,7 +71,7 @@ Everything the shell can do is an `Action` (see `src/action.rs`). The UI,
 keyboard, assistant and external agents all go through the same actions, so
 anything a person can do an agent can do too, under the same rules.
 
-- **Assistant**: type in the overview's assistant widget, e.g.
+- **Assistant**: type in the command palette, e.g.
   `open firefox and snap it left, then go to workspace 2`.
   Try it from a terminal with `derisk ask open firefox and snap it left`.
 - **Agent protocol**: JSON lines over stdio or a Unix socket.
@@ -125,7 +136,7 @@ $ cargo run --release --features host -- session --launch foot
 of your current X11 or Wayland session. The core apps (Files, Settings, Text
 Editor, System Monitor, Calculator, in `crates/`) run inside
 the session and launch by name: `--launch files`, `derisk do open calculator`,
-or the overview assistant. Wayland apps launched from it (or from any
+or the command palette. Wayland apps launched from it (or from any
 terminal with `WAYLAND_DISPLAY` set to the socket it prints) get derisk's
 title bars, tiling, snapping, overview and assistant. The agent protocol is
 served on `$XDG_RUNTIME_DIR/derisk/agent.sock` against the live desktop:
@@ -144,7 +155,7 @@ systemd units and run logind session operations.
 | Chord | Action |
 | --- | --- |
 | Super+Space | Command palette |
-| Super (tap), Super+A | Overview (the assistant is focused, just type) |
+| Super (tap), Super+A | Overview (typing opens the palette) |
 | Super+←/→/↑/↓ | Snap halves and quarters, maximize, restore, minimize |
 | Super+1…9 / Super+Shift+1…9 | Switch workspace / move the window there |
 | Super+J / Super+K, Alt+Tab | Focus next / previous |

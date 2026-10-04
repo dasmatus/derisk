@@ -19,6 +19,7 @@ use std::{
 
 use derisk::{
     action::{Action, Effect},
+    conversation::Source,
     desktop::{self, DesktopEntry},
     geom::rect,
     ipc,
@@ -458,6 +459,14 @@ impl compositor::Shell for Session {
     fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
+        // Requests typed in the palette; their progress shows in its
+        // conversation.
+        for ask in self.ui.take_asks() {
+            match self.shell.ask(&ask.text, Source::User, ask.confirmed) {
+                Ok(effects) => self.perform(effects),
+                Err(e) => log(Priority::Info, &format!("request failed: {e}")),
+            }
+        }
         self.palette_opened();
     }
 

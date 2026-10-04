@@ -129,3 +129,80 @@ fn agent_binary_speaks_json_lines_on_stdio() {
     assert_eq!(window["app_id"], "kitty");
     assert_eq!(window["zone"], "right");
 }
+
+#[test]
+fn requests_are_recorded_with_step_progress() {
+    use derisk::conversation::{Source, StepStatus};
+
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell
+        .ask("open kitty and snap it left", Source::User, false)
+        .unwrap();
+    let turn = shell.conversation.turns().last().unwrap().clone();
+    assert_eq!(turn.source, Source::User);
+    assert_eq!(turn.steps[0].label, "Open kitty");
+    assert_eq!(turn.steps[0].status, StepStatus::Done);
+    assert_eq!(turn.steps[1].label, "Snap the window left");
+    assert_eq!(turn.steps[1].status, StepStatus::Waiting);
+    assert!(!turn.is_settled());
+    assert!(turn.reply().starts_with("Waiting"));
+
+    // The step finishes when kitty's window maps.
+    shell.map_window("kitty", "~");
+    let turn = shell.conversation.turns().last().unwrap();
+    assert_eq!(turn.steps[1].status, StepStatus::Done);
+    assert_eq!(turn.reply(), "Done.");
+
+    // A failing step stops the rest.
+    assert!(
+        shell
+            .ask("go to workspace 42 and close it", Source::User, false)
+            .is_err()
+    );
+    let turn = shell.conversation.turns().last().unwrap();
+    assert!(matches!(turn.steps[0].status, StepStatus::Failed(_)));
+    assert_eq!(turn.steps[1].status, StepStatus::Skipped);
+    assert!(
+        turn.reply()
+            .starts_with("Stopped at \"Go to workspace 42\"")
+    );
+
+    // Not understood.
+    assert!(
+        shell
+            .ask("make me a sandwich", Source::User, false)
+            .is_err()
+    );
+    assert!(shell.conversation.turns().last().unwrap().error.is_some());
+
+    // Destructive operations need the person's confirmation.
+    assert!(matches!(
+        shell.ask("reboot", Source::User, false),
+        Err(derisk::shell::Error::NeedsConfirmation(SessionOp::Reboot))
+    ));
+    assert!(shell.ask("reboot", Source::User, true).is_ok());
+    assert!(shell.ask("lock the screen", Source::User, false).is_ok());
+}
+
+#[test]
+fn agent_requests_show_in_the_conversation() {
+    use derisk::conversation::Source;
+
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    ipc::handle_line(&mut shell, r#"{"method":"ask","text":"go to workspace 2"}"#);
+    ipc::handle_line(
+        &mut shell,
+        r#"{"method":"dispatch","actions":[{"action":"switch_workspace","workspace":3}]}"#,
+    );
+    let (_, effects) = ipc::handle_line(&mut shell, r#"{"method":"ask","text":"shut down"}"#);
+    assert!(
+        effects.is_empty(),
+        "agents still cannot power off unconfirmed"
+    );
+    let turns: Vec<_> = shell.conversation.turns().collect();
+    assert_eq!(turns.len(), 3);
+    assert!(turns.iter().all(|t| t.source == Source::Agent));
+    assert_eq!(turns[0].request, "go to workspace 2");
+    assert_eq!(turns[1].request, "1 action");
+    assert_eq!(turns[1].steps[0].label, "Go to workspace 3");
+}

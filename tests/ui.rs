@@ -216,8 +216,20 @@ fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
     );
 }
 
+fn key(key: egui::Key) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Default::default(),
+    }
+}
+
 #[test]
-fn palette_hands_requests_to_the_assistant() {
+fn palette_hands_requests_to_the_assistant_and_shows_the_conversation() {
+    use derisk::{conversation::Source, ui::Ask};
+
     let (w, h) = (1280.0, 800.0);
     let mut shell = Shell::new(rect(0, 0, 1280, 800), false);
     shell.apply(Action::Palette { visible: None }).unwrap();
@@ -234,32 +246,161 @@ fn palette_hands_requests_to_the_assistant() {
         )],
         5000,
     );
+    // The palette stays open: the request runs in the conversation.
     let actions = frame(
         &ctx,
         &mut ui,
         &shell,
         (w, h),
-        vec![egui::Event::Key {
-            key: egui::Key::Enter,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: Default::default(),
-        }],
+        vec![key(egui::Key::Enter)],
+        5000,
+    );
+    assert!(actions.is_empty());
+    let asks = ui.take_asks();
+    assert_eq!(
+        asks,
+        [Ask {
+            text: "open kitty then go to workspace 2".into(),
+            confirmed: false
+        }]
+    );
+    shell.ask(&asks[0].text, Source::User, false).unwrap();
+    frame(&ctx, &mut ui, &shell, (w, h), vec![], 5000);
+
+    // Follow-ups go straight to the assistant, and shutting down needs a
+    // second Enter.
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![egui::Event::Text("shut down".into())],
+        5000,
+    );
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![key(egui::Key::Enter)],
+        5000,
+    );
+    assert!(ui.take_asks().is_empty());
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![key(egui::Key::Enter)],
+        5000,
+    );
+    assert_eq!(
+        ui.take_asks(),
+        [Ask {
+            text: "shut down".into(),
+            confirmed: true
+        }]
+    );
+
+    // Backspace on an empty field goes back to searching.
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![key(egui::Key::Backspace)],
+        5000,
+    );
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![egui::Event::Text("workspace 3".into())],
+        5000,
+    );
+    let actions = frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![key(egui::Key::Enter)],
+        5000,
+    );
+    assert_eq!(actions[0], Action::SwitchWorkspace { workspace: 3 });
+}
+
+#[test]
+fn question_mark_opens_the_conversation() {
+    let (w, h) = (1280.0, 800.0);
+    let mut shell = Shell::new(rect(0, 0, 1280, 800), false);
+    shell.apply(Action::Palette { visible: None }).unwrap();
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, (w, h), vec![], 5000);
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![egui::Event::Text("?lock".into())],
+        5000,
+    );
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![key(egui::Key::Enter)],
+        5000,
+    );
+    assert_eq!(ui.take_asks()[0].text, "lock");
+}
+
+#[test]
+fn typing_on_the_overview_opens_the_palette() {
+    let (w, h) = (1280.0, 800.0);
+    let mut shell = Shell::new(rect(0, 0, 1280, 800), false);
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, (w, h), vec![], 5000);
+    let actions = frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![egui::Event::Text("o".into())],
         5000,
     );
     assert_eq!(
         actions,
-        [
-            Action::Launch {
-                app: "kitty".into()
-            },
-            Action::SwitchWorkspace { workspace: 2 },
-            Action::Palette {
-                visible: Some(false)
-            }
-        ]
+        [Action::Palette {
+            visible: Some(true)
+        }]
     );
+    shell.run(actions).unwrap();
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![egui::Event::Text("pen kitty and snap it left".into())],
+        5000,
+    );
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        (w, h),
+        vec![key(egui::Key::Enter)],
+        5000,
+    );
+    assert_eq!(ui.take_asks()[0].text, "open kitty and snap it left");
 }
 
 #[test]

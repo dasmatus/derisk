@@ -17,6 +17,7 @@
 //! - [`tray`]: monochrome system tray icons.
 //! - [`animation`]: the startup animation.
 //! - [`assistant`] and [`ipc`]: natural-language and agent control.
+//! - [`conversation`]: requests and their progress, shown in the palette.
 //! - [`keys`]: keyboard shortcuts.
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
 //!   journald, logind session actions and focus-aware resource weights.
@@ -40,6 +41,7 @@ pub mod action;
 pub mod adaptive;
 pub mod animation;
 pub mod assistant;
+pub mod conversation;
 pub mod decorations;
 pub mod desktop;
 pub mod geom;
