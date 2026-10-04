@@ -29,8 +29,8 @@ use std::path::PathBuf;
 use mcsapi_ui::{App, Theme, egui};
 pub use model::{
     Accent, Appearance, BarPosition, ColorScheme, DesktopPrefs, Fit, Input, Layout, LowPower,
-    Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings, TopBar, Vrr, Wallpaper,
-    WallpaperKind, Warning, WindowStyle, default_path,
+    Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings, ThemeId, TopBar, Vrr,
+    Wallpaper, WallpaperKind, Warning, WindowStyle, default_path,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
 pub use shortcuts::{Chord, KeyName, Shortcut, Shortcuts};
@@ -107,6 +107,8 @@ pub struct SettingsApp {
     drafts: pages::Drafts,
     thumbs: thumbs::Thumbnails,
     privacy: privacy::PrivacyUi,
+    /// Theme IDs offered on the Appearance page, read once when opened.
+    themes: Vec<String>,
 }
 
 impl Default for SettingsApp {
@@ -162,6 +164,7 @@ impl SettingsApp {
             saved,
             page: Page::default(),
             status,
+            themes: mcsapi_theme::Library::xdg("derisk").ids(),
         }
     }
 
@@ -217,23 +220,45 @@ impl SettingsApp {
             .show(ui, |ui| match self.page {
                 Page::Appearance => {
                     let a = &mut s.appearance;
+                    ui.label("Theme");
+                    egui::ComboBox::from_id_salt("settings-theme")
+                        .selected_text(if a.theme.is_automatic() {
+                            "Automatic"
+                        } else {
+                            a.theme.as_str()
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut a.theme, ThemeId::AUTOMATIC, "Automatic");
+                            for id in &self.themes {
+                                if let Some(theme) = ThemeId::parse(id) {
+                                    ui.selectable_value(&mut a.theme, theme, id.as_str());
+                                }
+                            }
+                        });
+                    ui.end_row();
+                    // A named theme brings its own colors.
+                    let automatic = a.theme.is_automatic();
                     ui.label("Style");
-                    ui.horizontal(|ui| {
-                        for scheme in [ColorScheme::Dark, ColorScheme::Light] {
-                            let text = if scheme == ColorScheme::Dark {
-                                "Dark"
-                            } else {
-                                "Light"
-                            };
-                            ui.selectable_value(&mut a.scheme, scheme, text);
-                        }
+                    ui.add_enabled_ui(automatic, |ui| {
+                        ui.horizontal(|ui| {
+                            for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+                                let text = if scheme == ColorScheme::Dark {
+                                    "Dark"
+                                } else {
+                                    "Light"
+                                };
+                                ui.selectable_value(&mut a.scheme, scheme, text);
+                            }
+                        })
                     });
                     ui.end_row();
                     ui.label("Accent");
-                    ui.horizontal(|ui| {
-                        for accent in Accent::ALL {
-                            swatch(ui, &mut a.accent, accent, theme);
-                        }
+                    ui.add_enabled_ui(automatic, |ui| {
+                        ui.horizontal(|ui| {
+                            for accent in Accent::ALL {
+                                swatch(ui, &mut a.accent, accent, theme);
+                            }
+                        })
                     });
                     ui.end_row();
                     ui.label("Text size");

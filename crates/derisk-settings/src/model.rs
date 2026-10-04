@@ -40,15 +40,91 @@ impl Accent {
     /// Every accent, in display order.
     pub const ALL: [Self; 5] = [Self::Lime, Self::Sky, Self::Violet, Self::Rose, Self::Amber];
 
+    /// The accent's color, from the theming engine's built-in accents.
+    pub fn spec_color(self) -> mcsapi_theme::Color {
+        // Every name in `enum_text!` below is one of mcsapi_theme::ACCENTS.
+        mcsapi_theme::accent(self.as_str()).unwrap_or(mcsapi_theme::ACCENTS[0].1)
+    }
+
     /// The accent's color.
-    pub const fn color(self) -> Color32 {
-        match self {
-            Self::Lime => Color32::from_rgb(163, 230, 53),
-            Self::Sky => Color32::from_rgb(56, 189, 248),
-            Self::Violet => Color32::from_rgb(167, 139, 250),
-            Self::Rose => Color32::from_rgb(251, 113, 133),
-            Self::Amber => Color32::from_rgb(251, 191, 36),
+    pub fn color(self) -> Color32 {
+        let c = self.spec_color();
+        Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
+    }
+}
+
+/// Which theme the desktop uses: [`ThemeId::AUTOMATIC`] (the built-in light
+/// or dark theme for [`ColorScheme`], with the chosen [`Accent`]) or the ID of
+/// a theme file, `derisk/themes/<id>.theme` in an XDG data directory.
+///
+/// Stored inline so [`Settings`] stays `Copy`.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ThemeId {
+    bytes: [u8; Self::MAX],
+    len: u8,
+}
+
+impl ThemeId {
+    /// Longest ID accepted.
+    pub const MAX: usize = 48;
+    /// Follow the color scheme and accent settings.
+    pub const AUTOMATIC: Self = Self {
+        bytes: [0; Self::MAX],
+        len: 0,
+    };
+
+    /// Parses `auto` or a theme ID: letters, digits, `-`, `_` and `.`, not
+    /// starting with a dot, at most [`ThemeId::MAX`] bytes.
+    pub fn parse(text: &str) -> Option<Self> {
+        if text == "auto" {
+            return Some(Self::AUTOMATIC);
         }
+        let valid = !text.is_empty()
+            && text.len() <= Self::MAX
+            && !text.starts_with('.')
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+        valid.then(|| {
+            let mut bytes = [0; Self::MAX];
+            bytes[..text.len()].copy_from_slice(text.as_bytes());
+            Self {
+                bytes,
+                len: text.len() as u8,
+            }
+        })
+    }
+
+    /// Whether this follows the scheme and accent settings.
+    pub fn is_automatic(self) -> bool {
+        self.len == 0
+    }
+
+    /// The ID, or `auto`.
+    pub fn as_str(&self) -> &str {
+        if self.is_automatic() {
+            return "auto";
+        }
+        // Infallible: `parse` only stores ASCII.
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or("auto")
+    }
+}
+
+impl Default for ThemeId {
+    fn default() -> Self {
+        Self::AUTOMATIC
+    }
+}
+
+impl fmt::Debug for ThemeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ThemeId({})", self.as_str())
+    }
+}
+
+impl fmt::Display for ThemeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -127,6 +203,8 @@ pub struct PanelOpacity {
 /// Appearance preferences.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Appearance {
+    /// The theme; when automatic, `scheme` and `accent` pick a built-in one.
+    pub theme: ThemeId,
     /// Light or dark colors.
     pub scheme: ColorScheme,
     /// Highlight color.
@@ -496,6 +574,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             appearance: Appearance {
+                theme: ThemeId::AUTOMATIC,
                 scheme: ColorScheme::Dark,
                 accent: Accent::Lime,
                 text_scale: 1.0,
@@ -676,6 +755,7 @@ impl Settings {
             return self.shortcuts.set_text(id, value);
         }
         match key {
+            "appearance.theme" => put(&mut a.theme, ThemeId::parse(value)),
             "appearance.scheme" => put(&mut a.scheme, ColorScheme::parse(value)),
             "appearance.accent" => put(&mut a.accent, Accent::parse(value)),
             "appearance.text_scale" => put(&mut a.text_scale, parse_in(value, 0.75, 2.0)),
@@ -748,6 +828,7 @@ impl Settings {
         let (b, win, w) = (&self.top_bar, &self.windows, &self.wallpaper);
         format!(
             "# derisk settings, written by the Settings app.\n\
+             appearance.theme = {}\n\
              appearance.scheme = {}\n\
              appearance.accent = {}\n\
              appearance.text_scale = {}\n\
@@ -796,6 +877,7 @@ impl Settings {
              privacy.remember_recent = {}\n\
              privacy.empty_trash_days = {}\n\
              {}",
+            a.theme.as_str(),
             a.scheme.as_str(),
             a.accent.as_str(),
             a.text_scale,
@@ -868,23 +950,38 @@ impl Settings {
         fs::rename(&temporary, path)
     }
 
-    /// The shell and app colors these settings select.
-    pub fn theme(&self) -> Theme {
-        let accent = self.appearance.accent.color();
-        match self.appearance.scheme {
-            ColorScheme::Dark => Theme {
-                accent,
-                ..Theme::default()
-            },
-            ColorScheme::Light => Theme {
-                background: Color32::from_rgb(248, 250, 252),
-                surface: Color32::from_rgb(226, 232, 240),
-                foreground: Color32::from_rgb(15, 23, 42),
-                border: Color32::from_rgb(148, 163, 184),
-                // Accents are tuned for dark backgrounds; darken for contrast.
-                accent: Color32::from_rgb(accent.r() / 2, accent.g() / 2, accent.b() / 2),
-            },
+    /// The theme these settings select, looking theme files up in
+    /// `library` (usually [`mcsapi_theme::Library::xdg`]`("derisk")`).
+    ///
+    /// An automatic theme is the built-in `derisk-dark` or `derisk-light`
+    /// with the chosen accent, kept legible on the background. A named theme
+    /// brings its own accent; if it cannot be loaded, the automatic theme is
+    /// used and the error is returned alongside it.
+    pub fn theme_spec(
+        &self,
+        library: &mcsapi_theme::Library,
+    ) -> (mcsapi_theme::Theme, Option<mcsapi_theme::LoadError>) {
+        let a = &self.appearance;
+        let automatic = || {
+            let base = match a.scheme {
+                ColorScheme::Dark => mcsapi_theme::Theme::dark(),
+                ColorScheme::Light => mcsapi_theme::Theme::light(),
+            };
+            base.with_accent(a.accent.spec_color())
+        };
+        if a.theme.is_automatic() {
+            return (automatic(), None);
         }
+        match library.load(a.theme.as_str()) {
+            Ok(parsed) => (parsed.theme, None),
+            Err(error) => (automatic(), Some(error)),
+        }
+    }
+
+    /// The shell and app colors these settings select, with theme files from
+    /// the XDG data directories.
+    pub fn theme(&self) -> Theme {
+        Theme::from(&self.theme_spec(&mcsapi_theme::Library::xdg("derisk")).0)
     }
 }
 

@@ -92,6 +92,36 @@ name (no paths or arguments); reboot, power off, hibernate and log out need
 `"confirmed": true`, which the assistant never sets on its own (the UI asks
 first); unit actions only apply to units that are currently failed.
 
+## Themes
+
+Everything derisk draws, and every app it can reach, follows one theme
+from mcsapi's theming engine (`mcsapi-theme`). Settings → Appearance picks
+it: **Automatic** is the built-in dark or light theme with your accent,
+kept at 3:1 contrast; any other entry is a theme file, `<id>.theme` under
+`derisk/themes` in `$XDG_DATA_HOME` or `$XDG_DATA_DIRS`, which can inherit
+from another and change only what it needs:
+
+```toml
+name = "Paper"
+inherits = "derisk-light"
+
+[colors]
+accent = "rose"
+
+[icons]
+theme = "Papirus"
+```
+
+The session publishes the active theme under `$XDG_RUNTIME_DIR/derisk`
+whenever settings change, each file replaced atomically:
+`theme.json` (colors, tokens, fonts, icons and the freedesktop appearance
+values) for any consumer, `android/values/colors.xml` for the Android
+translation layer, and GTK `settings.ini` files. Apps launched from the
+shell get `XDG_CONFIG_DIRS` with those GTK settings first (your own
+`~/.config/gtk-*` still wins) and `XCURSOR_THEME`/`XCURSOR_SIZE`.
+`x2mcsapi --theme <id>` restyles web, Electron, GTK and Qt apps from the
+same theme.
+
 ## systemd integration
 
 - **Apps run as units.** Each launch is a transient user service
@@ -257,6 +287,31 @@ To try them in one window without the compositor:
 
 ```console
 $ cargo run -p derisk-apps --features preview --bin derisk-preview -- org.derisk.files
+```
+
+### GPUI
+
+derisk is moving from egui to [GPUI](https://www.gpui.rs). `derisk-gpui`
+draws the ported apps (so far the Calculator) as their own Wayland clients,
+in the desktop theme, and follows theme changes while running. When the
+`derisk-gpui` binary sits next to `derisk`, the session opens ported apps
+with it; otherwise they run in-process with egui as before.
+
+```console
+$ cargo build -p derisk-gpui --features gpui
+$ cargo run -p derisk-gpui --features gpui -- org.derisk.calculator
+```
+
+GPUI cannot draw inside the compositor, so the shell's chrome is still egui.
+GPUI panels and overlays run as the compositor's runtime clients: it starts
+them on a private connection and places their windows by the role given on
+the command line, which a client cannot choose for itself. Panels keep
+windows out of their strip; an overlay covers the screen and takes every key.
+Both come back if they exit.
+
+```console
+$ derisk session --runtime panel:bottom:48 "my-gpui-dock"
+$ derisk session --runtime overlay "my-gpui-launcher"
 ```
 
 ## Building

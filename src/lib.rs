@@ -58,6 +58,7 @@ pub mod privacy;
 pub mod shell;
 pub mod snap;
 pub mod systemd;
+pub mod theme;
 pub mod time;
 pub mod tray;
 pub mod ui;

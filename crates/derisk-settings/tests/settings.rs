@@ -272,3 +272,36 @@ fn slideshow_candidates_are_folders_of_pictures() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_named_theme_is_loaded_and_a_missing_one_falls_back() {
+    use derisk_settings::ThemeId;
+    let dir = std::env::temp_dir().join(format!("derisk-settings-themes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("paper.theme"),
+        "inherits = \"derisk-light\"\n[shape]\nradius = 11\n",
+    )
+    .unwrap();
+    let library = mcsapi_theme::Library::new([dir.clone()]);
+
+    let (mut settings, warnings) = Settings::parse("appearance.theme = paper\n");
+    assert!(warnings.is_empty());
+    assert_eq!(settings.appearance.theme.as_str(), "paper");
+    let (theme, error) = settings.theme_spec(&library);
+    assert!(error.is_none());
+    assert_eq!(theme.radius, 11);
+    // The file round-trips the choice.
+    assert_eq!(Settings::parse(&settings.to_text()).0, settings);
+
+    settings.appearance.theme = ThemeId::parse("gone").unwrap();
+    let (theme, error) = settings.theme_spec(&library);
+    assert!(error.is_some());
+    assert_eq!(theme, mcsapi_theme::Theme::dark());
+
+    for bad in ["", "../x", ".hidden", "a/b"] {
+        assert!(ThemeId::parse(bad).is_none(), "{bad:?}");
+    }
+    assert!(ThemeId::parse("auto").unwrap().is_automatic());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
