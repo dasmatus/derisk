@@ -446,6 +446,7 @@ dependencies = [
  "mcsapi",
  "mcsapi-compositor",
  "mcsapi-runtime",
+ "mcsapi-theme",
  "serde",
  "serde_json",
 ]
@@ -496,6 +497,7 @@ dependencies = [
 name = "derisk-settings"
 version = "0.1.0"
 dependencies = [
+ "mcsapi-theme",
  "mcsapi-ui",
 ]
 
@@ -1274,16 +1276,17 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#d3cb3dfe40836d4e56b42d7205ae1bf9a9330b9a"
 dependencies = [
  "egui",
+ "mcsapi-theme",
  "smithay",
 ]
 
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#d3cb3dfe40836d4e56b42d7205ae1bf9a9330b9a"
 dependencies = [
  "egui_glow",
  "glow",
@@ -1297,12 +1300,17 @@ dependencies = [
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#d3cb3dfe40836d4e56b42d7205ae1bf9a9330b9a"
+
+[[package]]
+name = "mcsapi-theme"
+version = "0.1.0"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#d3cb3dfe40836d4e56b42d7205ae1bf9a9330b9a"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#d3cb3dfe40836d4e56b42d7205ae1bf9a9330b9a"
 dependencies = [
  "egui",
  "mcsapi",

@@ -73,6 +73,8 @@ pub struct Session {
     installed: Vec<DesktopEntry>,
     pending_actions: PendingActions,
     settings: SettingsWatch,
+    /// Environment launched apps get from the published theme.
+    theme_env: Vec<(String, String)>,
 }
 
 /// Core-app actions waiting for the compositor to launch their app, shared
@@ -135,7 +137,44 @@ impl Session {
             installed,
             pending_actions,
             settings: SettingsWatch::new(derisk_settings::default_path()),
+            theme_env: Vec::new(),
         }
+    }
+
+    /// Takes the theme from the current settings for the chrome and core
+    /// apps, and publishes it for everything else ([`derisk::theme`]).
+    fn apply_theme(&mut self) {
+        let settings = self.settings.current();
+        let library = mcsapi_theme::Library::xdg("derisk");
+        let (theme, error) = settings.theme_spec(&library);
+        if let Some(error) = error {
+            log(
+                Priority::Warning,
+                &format!(
+                    "theme {}: {error}; using the automatic theme",
+                    settings.appearance.theme
+                ),
+            );
+        }
+        self.ui.theme = Theme::from(&theme);
+        let id = match settings.appearance.theme {
+            id if id.is_automatic() => match settings.appearance.scheme {
+                derisk_settings::ColorScheme::Dark => "derisk-dark".to_owned(),
+                derisk_settings::ColorScheme::Light => "derisk-light".to_owned(),
+            },
+            id => id.as_str().to_owned(),
+        };
+        let Some(dir) = derisk::theme::runtime_dir() else {
+            return;
+        };
+        if let Err(error) = derisk::theme::publish(&dir, &id, &theme) {
+            log(
+                Priority::Warning,
+                &format!("publishing the theme to {}: {error}", dir.display()),
+            );
+        }
+        self.theme_env =
+            derisk::theme::environment(&dir, &theme, std::env::var_os("XDG_CONFIG_DIRS"));
     }
 
     /// Applies actions from any source and carries out their effects.
@@ -184,12 +223,16 @@ impl Session {
                     split,
                     format!("--setenv=WAYLAND_DISPLAY={}", self.wayland_display),
                 );
+                for (key, value) in &self.theme_env {
+                    unit.insert(split, format!("--setenv={key}={value}"));
+                }
                 let _ = systemd::run(&unit);
             }
         } else if let Some((program, args)) = argv.split_first()
             && let Err(e) = std::process::Command::new(program)
                 .args(args)
                 .env("WAYLAND_DISPLAY", &self.wayland_display)
+                .envs(self.theme_env.iter().map(|(k, v)| (k, v)))
                 .spawn()
         {
             log(Priority::Warning, &format!("{program}: {e}"));
@@ -264,6 +307,7 @@ impl Session {
                     } else if let Err(e) = std::process::Command::new("xdg-open")
                         .arg(path)
                         .env("WAYLAND_DISPLAY", &self.wayland_display)
+                        .envs(self.theme_env.iter().map(|(k, v)| (k, v)))
                         .spawn()
                     {
                         log(Priority::Warning, &format!("xdg-open {path}: {e}"));
@@ -358,6 +402,7 @@ impl compositor::Shell for Session {
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
         if let Some(effects) = self.settings.poll() {
             self.shell.effects = effects;
+            self.apply_theme();
         }
         if self.execute {
             self.shell.failed_units = systemd::failed_units();

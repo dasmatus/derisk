@@ -92,6 +92,36 @@ name (no paths or arguments); reboot, power off, hibernate and log out need
 `"confirmed": true`, which the assistant never sets on its own (the UI asks
 first); unit actions only apply to units that are currently failed.
 
+## Themes
+
+Everything derisk draws, and every app it can reach, follows one theme
+from mcsapi's theming engine (`mcsapi-theme`). Settings → Appearance picks
+it: **Automatic** is the built-in dark or light theme with your accent,
+kept at 3:1 contrast; any other entry is a theme file, `<id>.theme` under
+`derisk/themes` in `$XDG_DATA_HOME` or `$XDG_DATA_DIRS`, which can inherit
+from another and change only what it needs:
+
+```toml
+name = "Paper"
+inherits = "derisk-light"
+
+[colors]
+accent = "rose"
+
+[icons]
+theme = "Papirus"
+```
+
+The session publishes the active theme under `$XDG_RUNTIME_DIR/derisk`
+whenever settings change, each file replaced atomically:
+`theme.json` (colors, tokens, fonts, icons and the freedesktop appearance
+values) for any consumer, `android/values/colors.xml` for the Android
+translation layer, and GTK `settings.ini` files. Apps launched from the
+shell get `XDG_CONFIG_DIRS` with those GTK settings first (your own
+`~/.config/gtk-*` still wins) and `XCURSOR_THEME`/`XCURSOR_SIZE`.
+`x2mcsapi --theme <id>` restyles web, Electron, GTK and Qt apps from the
+same theme.
+
 ## systemd integration
 
 - **Apps run as units.** Each launch is a transient user service

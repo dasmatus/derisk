@@ -9,13 +9,14 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#23 (frame pacing by refresh rate and VRR) merges, every
+# Until dasmatus/mcsapi#25 (the mcsapi-theme theming engine) merges, every
 # mcsapi crate comes from its branch so the apps and the compositor share one
 # mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
+mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
@@ -36,6 +37,7 @@ repository.workspace = true
 [dependencies]
 derisk-settings.workspace = true
 mcsapi.workspace = true
+mcsapi-theme.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
