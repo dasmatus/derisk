@@ -108,3 +108,40 @@ fn icons_come_from_hicolor_then_other_themes_then_pixmaps() {
     );
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn action_icons_come_from_papirus_as_greyscale_masks() {
+    let root = std::env::temp_dir().join(format!("derisk-papirus-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let write = |rel: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#f44336"/></svg>"##,
+        )
+        .unwrap();
+        path
+    };
+    let symbolic = write("Papirus-Dark/16x16/symbolic/actions/window-close-symbolic.svg");
+    write("Papirus-Dark/16x16/actions/window-close.svg");
+    let plain = write("Papirus/16x16/places/folder.svg");
+    let roots = [root.clone()];
+
+    // The symbolic variant first, Papirus-Dark before Papirus, any context.
+    assert_eq!(
+        icons::find_action_in("window-close", &roots),
+        Some(symbolic.clone())
+    );
+    assert_eq!(icons::find_action_in("folder", &roots), Some(plain));
+    assert_eq!(icons::find_action_in("../folder", &roots), None);
+    assert_eq!(icons::find_action_in("list-add", &roots), None);
+
+    // A red icon becomes a white mask, tinted when painted.
+    let mask = icons::load_mask(&symbolic, 16).unwrap();
+    assert_eq!(mask.pixels[0], mcsapi::toolkit::egui::Color32::WHITE);
+
+    assert_eq!(icons::action_for_glyph("🔒"), Some("system-lock-screen"));
+    assert_eq!(icons::action_for_glyph("📁"), None);
+    fs::remove_dir_all(&root).unwrap();
+}

@@ -51,6 +51,57 @@ fn button_color(button: Button) -> Color32 {
     }
 }
 
+/// Pixels action icons are decoded at: 16 points at up to 3x.
+const ACTION_PX: u32 = 48;
+
+/// The Papirus action icon `name` as a texture of `ctx`, or `None` when no
+/// Papirus theme is installed. Each egui context uploads it once.
+fn action_texture(ctx: &egui::Context, name: &str) -> Option<TextureHandle> {
+    let id = Id::new(("derisk-action-icon", name));
+    if let Some(cached) = ctx.data(|d| d.get_temp::<Option<TextureHandle>>(id)) {
+        return cached;
+    }
+    let texture = icons::find_action(name)
+        .and_then(|path| icons::load_mask(&path, ACTION_PX))
+        .map(|image| {
+            ctx.load_texture(
+                format!("derisk-action-icon:{name}"),
+                image,
+                TextureOptions::LINEAR,
+            )
+        });
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    texture
+}
+
+/// Paints the Papirus action icon `name` into `r` in `color`, greyscale like
+/// the theme's text. Returns `false`, painting nothing, without Papirus.
+fn paint_action(painter: &Painter, r: Rect, name: &str, color: Color32) -> bool {
+    let Some(texture) = action_texture(painter.ctx(), name) else {
+        return false;
+    };
+    painter.image(
+        texture.id(),
+        r,
+        Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+        color,
+    );
+    true
+}
+
+/// A frameless top bar button showing the Papirus icon for `glyph`, or the
+/// glyph itself without Papirus.
+fn action_button(ui: &mut Ui, glyph: &str, size: f32, color: Color32) -> egui::Response {
+    let texture = icons::action_for_glyph(glyph).and_then(|name| action_texture(ui.ctx(), name));
+    match texture {
+        Some(texture) => ui.add(
+            egui::Button::image(egui::Image::new((texture.id(), vec2(size, size))).tint(color))
+                .frame(false),
+        ),
+        None => ui.add(egui::Button::new(RichText::new(glyph).color(color)).frame(false)),
+    }
+}
+
 fn elide(text: &str, width: f32, size: f32) -> String {
     let max = ((width / (size * 0.55)) as usize).max(1);
     if text.chars().count() <= max {
@@ -420,13 +471,32 @@ impl ShellUi {
             StrokeKind::Inside,
         );
         for (button, area) in bar.buttons(p.frame) {
-            let color = if p.focused {
-                button_color(button)
+            let r = to_rect(area);
+            let name = match button {
+                Button::Close => "window-close",
+                Button::Minimize => "window-minimize",
+                Button::Maximize => "window-maximize",
+            };
+            // Greyscale Papirus buttons on a faint disc; the colored dots
+            // remain for systems without Papirus.
+            painter.circle_filled(
+                r.center(),
+                r.width() / 2.0,
+                theme.border.gamma_multiply(0.35),
+            );
+            let icon_color = if p.focused {
+                theme.foreground
             } else {
                 theme.border
             };
-            let r = to_rect(area);
-            painter.circle_filled(r.center(), r.width() / 2.0, color);
+            if !paint_action(painter, r.shrink(r.width() * 0.15), name, icon_color) {
+                let color = if p.focused {
+                    button_color(button)
+                } else {
+                    theme.border
+                };
+                painter.circle_filled(r.center(), r.width() / 2.0, color);
+            }
         }
         let title_area = to_rect(bar.title(p.frame));
         let (app, title) = shell.window_label(p.window).unwrap_or_default();
@@ -558,23 +628,27 @@ impl ShellUi {
             |ui| {
                 ui.visuals_mut().override_text_color = Some(self.theme.foreground);
                 ui.spacing_mut().item_spacing.x = 12.0;
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("◆").color(self.theme.accent)).frame(false),
-                    )
+                if action_button(ui, "◆", 16.0, self.theme.foreground)
                     .on_hover_text("Overview")
                     .clicked()
                 {
                     actions.push(Action::Overview { visible: None });
                 }
+                let search = match action_texture(ui.ctx(), "system-search") {
+                    Some(texture) => egui::Button::image_and_text(
+                        egui::Image::new((texture.id(), vec2(14.0, 14.0))).tint(self.theme.border),
+                        RichText::new("Search or ask…").color(self.theme.border),
+                    ),
+                    None => egui::Button::new(
+                        RichText::new("🔍  Search or ask…").color(self.theme.border),
+                    ),
+                };
                 if ui
                     .add(
-                        egui::Button::new(
-                            RichText::new("🔍  Search or ask…").color(self.theme.border),
-                        )
-                        .fill(self.theme.surface)
-                        .stroke(Stroke::new(1.0, self.theme.border))
-                        .corner_radius(8),
+                        search
+                            .fill(self.theme.surface)
+                            .stroke(Stroke::new(1.0, self.theme.border))
+                            .corner_radius(8),
                     )
                     .on_hover_text("Command palette (Super+Space)")
                     .clicked()
@@ -790,17 +864,25 @@ impl ShellUi {
                     ),
                     StrokeKind::Inside,
                 );
-                ui.painter().text(
-                    r.center(),
-                    Align2::CENTER_CENTER,
-                    "+",
-                    FontId::proportional(24.0),
-                    if hot {
-                        self.theme.accent
-                    } else {
-                        self.theme.foreground
-                    },
-                );
+                let plus = if hot {
+                    self.theme.accent
+                } else {
+                    self.theme.foreground
+                };
+                if !paint_action(
+                    ui.painter(),
+                    Rect::from_center_size(r.center(), vec2(20.0, 20.0)),
+                    "list-add",
+                    plus,
+                ) {
+                    ui.painter().text(
+                        r.center(),
+                        Align2::CENTER_CENTER,
+                        "+",
+                        FontId::proportional(24.0),
+                        plus,
+                    );
+                }
                 if response.on_hover_text("New workspace").clicked() {
                     actions.push(Action::SwitchWorkspace { workspace: n });
                 }
@@ -1467,13 +1549,22 @@ fn palette_row(ui: &mut Ui, theme: &Theme, entry: &Entry, selected: bool) -> egu
         );
     }
     let mid = r.center().y;
-    painter.text(
-        pos2(r.left() + 18.0, mid),
-        Align2::CENTER_CENTER,
-        &entry.icon,
-        FontId::proportional(16.0),
-        theme.foreground,
-    );
+    // Apps keep their own glyph; every other row is an action and gets its
+    // greyscale Papirus icon when one is installed.
+    let action = match entry.category {
+        Category::App | Category::AppAction => None,
+        _ => icons::action_for_glyph(&entry.icon),
+    };
+    let icon_area = Rect::from_center_size(pos2(r.left() + 18.0, mid), vec2(16.0, 16.0));
+    if !action.is_some_and(|name| paint_action(&painter, icon_area, name, theme.foreground)) {
+        painter.text(
+            pos2(r.left() + 18.0, mid),
+            Align2::CENTER_CENTER,
+            &entry.icon,
+            FontId::proportional(16.0),
+            theme.foreground,
+        );
+    }
     let shortcut_width = entry
         .shortcut
         .as_ref()

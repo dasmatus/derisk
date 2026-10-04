@@ -180,3 +180,81 @@ pub fn load(path: &Path, size: u32) -> Option<ColorImage> {
         ))
     }
 }
+
+/// Papirus variants, dark first because the shell's default theme is dark.
+/// Each is tinted at paint time, so the variant only matters for shapes.
+const PAPIRUS: [&str; 3] = ["Papirus-Dark", "Papirus", "Papirus-Light"];
+
+/// The Papirus file for action icon `name`: the symbolic variant
+/// (`16x16/symbolic/actions/window-close-symbolic.svg`), else the plain 16 px
+/// one, from any context (actions, places, status, ...).
+pub fn find_action(name: &str) -> Option<PathBuf> {
+    let (icons, _) = roots();
+    find_action_in(name, &icons)
+}
+
+/// [`find_action`] in the given `icons` roots.
+pub fn find_action_in(name: &str, icons: &[PathBuf]) -> Option<PathBuf> {
+    if name.is_empty() || name.contains('/') || name.starts_with('.') {
+        return None;
+    }
+    let in_contexts = |dir: PathBuf, file: &str| {
+        let mut contexts: Vec<_> = fs::read_dir(dir).ok()?.filter_map(Result::ok).collect();
+        contexts.sort_by_key(|c| c.file_name());
+        contexts
+            .iter()
+            .map(|c| c.path().join(file))
+            .find(|p| p.is_file())
+    };
+    for theme in PAPIRUS {
+        for root in icons {
+            let base = root.join(theme).join("16x16");
+            if let Some(found) = in_contexts(base.join("symbolic"), &format!("{name}-symbolic.svg"))
+                .or_else(|| in_contexts(base.clone(), &format!("{name}.svg")))
+            {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Decodes an icon as a white mask: only its shape survives, so painting it
+/// with a tint gives a greyscale icon in the theme's own text color whatever
+/// colors the file uses.
+pub fn load_mask(path: &Path, size: u32) -> Option<ColorImage> {
+    let mut image = load(path, size)?;
+    for pixel in &mut image.pixels {
+        *pixel = mcsapi::toolkit::egui::Color32::from_white_alpha(pixel.a());
+    }
+    Some(image)
+}
+
+/// The Papirus action icon standing in for a glyph the shell has always
+/// drawn, or `None` for glyphs that are not actions (app emoji, ✨).
+pub fn action_for_glyph(glyph: &str) -> Option<&'static str> {
+    Some(match glyph {
+        "◆" | "⊞" => "view-app-grid",
+        "🔍" => "system-search",
+        "🔄" => "go-next",
+        "🔃" => "go-previous",
+        "⊟" => "view-dual",
+        "▣" => "view-fullscreen",
+        "🖥" => "video-display",
+        "⎆" => "go-jump",
+        "🔒" => "system-lock-screen",
+        "🌙" => "system-suspend",
+        "❄" => "system-hibernate",
+        "🚪" => "system-log-out",
+        "⟳" => "system-reboot",
+        "✖" => "system-shutdown",
+        "★" => "starred",
+        "⚠" => "dialog-warning",
+        "🗗" => "view-restore",
+        "🗖" => "window-maximize",
+        "☰" => "open-menu",
+        "🗀" => "folder",
+        "🗋" => "text-x-generic",
+        _ => return None,
+    })
+}
