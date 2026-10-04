@@ -6,6 +6,8 @@
 //! (launching apps as units, session operations) can be executed for real.
 
 #[cfg(feature = "host")]
+mod greeter;
+#[cfg(feature = "host")]
 mod host;
 #[cfg(feature = "host")]
 mod pam;
@@ -46,6 +48,9 @@ derisk: an adaptive, agent-first Wayland desktop shell built on mcsapi
 
 USAGE:
     derisk session [OPTIONS]      Run the desktop (needs the `host` feature)
+    derisk greeter [OPTIONS] -- <session command...>
+                                  Log in through greetd on the lock screen,
+                                  then start the command (needs `host`)
     derisk demo                   Run a headless walkthrough
     derisk ask <request...>       Show how the assistant interprets a request
     derisk do <request...>        Ask the running session's assistant to do it
@@ -62,6 +67,10 @@ SESSION OPTIONS:
     --reduced-motion      Cross-fade instead of the full startup animation
     --execute             Launch apps as systemd units and run session operations
 
+GREETER OPTIONS:
+    --user <NAME>         Fill in this user (default: the only regular user)
+    --env <KEY=VALUE>     Set in the session's environment (repeatable)
+
 AGENT OPTIONS:
     --socket <PATH>       Listen on a Unix socket (default: stdin/stdout)
     --socket-activated    Use the socket passed by systemd (derisk-agent.socket)
@@ -75,6 +84,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("session") => session(&args[1..]),
+        Some("greeter") => greeter(&args[1..]),
         Some("demo") => demo(),
         Some("ask") => ask(&args[1..].join(" ")),
         Some("do") => {
@@ -126,6 +136,35 @@ fn session(args: &[String]) -> Result {
 #[cfg(not(feature = "host"))]
 fn session(_args: &[String]) -> Result {
     Err("this derisk was built without the compositor host; rebuild with `--features host`".into())
+}
+
+#[cfg(feature = "host")]
+fn greeter(args: &[String]) -> Result {
+    let mut options = greeter::Options::default();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--user" => options.user = Some(it.next().ok_or("--user needs a name")?.clone()),
+            "--env" => {
+                let pair = it.next().ok_or("--env needs KEY=VALUE")?;
+                if !pair.contains('=') {
+                    return Err("--env needs KEY=VALUE".into());
+                }
+                options.env.push(pair.clone());
+            }
+            "--" => {
+                options.command = it.cloned().collect();
+                break;
+            }
+            other => return Err(format!("unknown greeter option: {other}").into()),
+        }
+    }
+    greeter::run(options)
+}
+
+#[cfg(not(feature = "host"))]
+fn greeter(_args: &[String]) -> Result {
+    session(&[])
 }
 
 fn ask(text: &str) -> Result {

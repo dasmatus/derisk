@@ -124,6 +124,20 @@ first); unit actions only apply to units that are currently failed.
   lock-session`, `lock-sessions`, `busctl wait` on the session's `Lock`
   signal) and sets logind's `LockedHint`. While locked the agent protocol
   answers nothing.
+- **Login screen.** `derisk greeter` is the lock screen as a
+  [greetd](https://git.sr.ht/~kennylevinsen/greetd) greeter: it asks who is
+  logging in (filled in when there is one regular user), relays PAM's
+  questions from greetd, and asks greetd to start the session command given
+  after `--`. greetd owns PAM and the logind session; the greeter checks
+  nothing itself. Like `derisk session` it runs nested, so under greetd it
+  runs inside cage:
+
+  ```toml
+  # /etc/greetd/config.toml
+  [default_session]
+  command = "cage -s -- derisk greeter -- cage -s -- derisk session --execute"
+  user = "greeter"
+  ```
 - **Failed units widget.** Failed user units show in the top bar and overview
   with restart and reset actions.
 

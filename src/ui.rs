@@ -28,11 +28,13 @@ use crate::{
     decorations::Button,
     effects::{BlurArea, Look},
     geom::inset,
+    greetd::{Login, Phase},
     lock::LockScreen,
     menu::{Menu, MenuEntry},
     overview::{OverviewLayout, Widget, fit, grid, row},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
+    time::Clock,
 };
 
 /// Converts a logical geometry to an egui rectangle.
@@ -1505,27 +1507,16 @@ pub fn paint_wallpaper(painter: &Painter, screen: Rect, theme: &Theme) {
     );
 }
 
-/// Draws the lock screen over the whole output: the wallpaper, the clock,
-/// who is locked out, and the password field. Returns `true` when Enter was
-/// pressed in the field, to check what was typed.
-///
-/// Everything is opaque. The host also stops drawing windows while locked, so
-/// nothing on the desktop shows through even if this frame were skipped.
-pub fn show_lock(
-    ui: &mut Ui,
-    lock: &mut LockScreen,
-    shell: &Shell,
-    theme: &Theme,
-    user: &str,
-) -> bool {
-    let screen = to_rect(shell.output());
+/// The lock screen and the greeter share one look: the wallpaper over the
+/// whole output, the clock, and a centered column below it that `add` fills.
+/// Everything is opaque, so nothing behind shows through.
+fn login_panel(ui: &mut Ui, screen: Rect, clock: &Clock, theme: &Theme, add: impl FnOnce(&mut Ui)) {
     let painter = ui.ctx().layer_painter(egui::LayerId::new(
         Order::Background,
         Id::new("derisk-lock-bg"),
     ));
     painter.rect_filled(screen, 0, theme.background);
     paint_wallpaper(&painter, screen, theme);
-    let mut submit = false;
     egui::Area::new(Id::new("derisk-lock"))
         .order(Order::Foreground)
         .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
@@ -1533,40 +1524,144 @@ pub fn show_lock(
             ui.set_width(320.0);
             ui.visuals_mut().override_text_color = Some(theme.foreground);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new(shell.clock.time_label()).size(64.0).strong());
-                ui.label(RichText::new(shell.clock.date_label()).size(18.0));
+                ui.label(RichText::new(clock.time_label()).size(64.0).strong());
+                ui.label(RichText::new(clock.date_label()).size(18.0));
                 ui.add_space(32.0);
-                ui.label(RichText::new(user).size(20.0).strong());
-                ui.add_space(8.0);
-                let field = ui.add_enabled(
-                    !lock.is_checking(),
-                    egui::TextEdit::singleline(&mut lock.password)
-                        .password(true)
-                        .hint_text("Password")
-                        .font(FontId::proportional(18.0))
-                        .margin(vec2(10.0, 8.0))
-                        .desired_width(f32::INFINITY),
-                );
-                // The field is the only thing that takes keys, so Enter
-                // anywhere submits. Focus is taken back every frame, since a
-                // single-line field gives it up on Enter.
-                if !lock.is_checking() && !field.has_focus() {
-                    field.request_focus();
-                }
-                submit = ui.input(|i| i.key_pressed(Key::Enter));
-                ui.add_space(8.0);
-                let color = if lock.failures() > 0 && !lock.is_checking() {
-                    Color32::from_rgb(248, 113, 113)
-                } else {
-                    theme.border
-                };
-                ui.label(RichText::new(lock.message()).color(color));
+                add(ui);
             });
         });
+}
+
+/// The one text field on the lock screen and the greeter. It is the only
+/// thing that takes keys, so focus is taken back every frame: a single-line
+/// field gives it up on Enter.
+fn login_field(ui: &mut Ui, text: &mut String, enabled: bool, secret: bool, hint: &str) {
+    let field = ui.add_enabled(
+        enabled,
+        egui::TextEdit::singleline(text)
+            .password(secret)
+            .hint_text(hint)
+            .font(FontId::proportional(18.0))
+            .margin(vec2(10.0, 8.0))
+            .desired_width(f32::INFINITY),
+    );
+    if enabled && !field.has_focus() {
+        field.request_focus();
+    }
+}
+
+/// The line under the field, red when it reports a failure.
+fn login_status(ui: &mut Ui, text: &str, error: bool, theme: &Theme) {
+    let color = if error {
+        Color32::from_rgb(248, 113, 113)
+    } else {
+        theme.border
+    };
+    ui.label(RichText::new(text).color(color));
+}
+
+/// Draws the lock screen over the whole output: the wallpaper, the clock,
+/// who is locked out, and the password field. Returns `true` when Enter was
+/// pressed in the field, to check what was typed.
+///
+/// The host also stops drawing windows while locked, so nothing on the
+/// desktop shows through even if this frame were skipped.
+pub fn show_lock(
+    ui: &mut Ui,
+    lock: &mut LockScreen,
+    shell: &Shell,
+    theme: &Theme,
+    user: &str,
+) -> bool {
+    let mut submit = false;
+    login_panel(ui, to_rect(shell.output()), &shell.clock, theme, |ui| {
+        ui.label(RichText::new(user).size(20.0).strong());
+        ui.add_space(8.0);
+        let checking = lock.is_checking();
+        login_field(ui, &mut lock.password, !checking, true, "Password");
+        submit = ui.input(|i| i.key_pressed(Key::Enter));
+        ui.add_space(8.0);
+        let failed = lock.failures() > 0 && !lock.is_checking();
+        login_status(ui, lock.message(), failed, theme);
+    });
     if lock.is_checking() {
         ui.ctx().request_repaint();
     }
     submit
+}
+
+/// What the user did on the greeter this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GreeterInput {
+    /// Nothing to act on.
+    None,
+    /// Enter: send what was typed.
+    Submit,
+    /// Escape: back to the user name.
+    Back,
+}
+
+/// Draws `derisk greeter`: the lock screen's look, asking first who is
+/// logging in and then whatever PAM asks through greetd. `users` are offered
+/// as buttons above the field when there are several to pick from.
+pub fn show_greeter(
+    ui: &mut Ui,
+    login: &mut Login,
+    users: &[String],
+    screen: Rect,
+    clock: &Clock,
+    theme: &Theme,
+) -> GreeterInput {
+    let mut input = GreeterInput::None;
+    login_panel(ui, screen, clock, theme, |ui| {
+        let editable = login.editable();
+        match login.phase().clone() {
+            Phase::User => {
+                if users.len() > 1 {
+                    ui.horizontal_wrapped(|ui| {
+                        for user in users {
+                            if ui.selectable_label(login.username == *user, user).clicked() {
+                                login.username = user.clone();
+                                input = GreeterInput::Submit;
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
+                let hint = login.hint().to_owned();
+                login_field(ui, &mut login.username, editable, false, &hint);
+            }
+            Phase::Prompt { secret, .. } => {
+                ui.label(RichText::new(&login.username).size(20.0).strong());
+                ui.add_space(8.0);
+                let hint = login.hint().to_owned();
+                login_field(ui, &mut login.answer, editable, secret, &hint);
+            }
+            _ => {
+                ui.label(RichText::new(&login.username).size(20.0).strong());
+                ui.add_space(8.0);
+                // Keeps the column from jumping while greetd answers.
+                let mut nothing = String::new();
+                login_field(ui, &mut nothing, false, true, login.hint());
+                ui.ctx().request_repaint();
+            }
+        }
+        if editable {
+            ui.input(|i| {
+                if i.key_pressed(Key::Enter) {
+                    input = GreeterInput::Submit;
+                } else if i.key_pressed(Key::Escape) {
+                    input = GreeterInput::Back;
+                }
+            });
+        }
+        ui.add_space(8.0);
+        match login.notice() {
+            Some(notice) => login_status(ui, &notice.text, notice.error, theme),
+            None => login_status(ui, login.status(), false, theme),
+        }
+    });
+    input
 }
 
 /// Paints one frame of the startup animation over `screen`.
