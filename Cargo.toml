@@ -12,10 +12,10 @@ repository = "https://github.com/dasmatus/derisk"
 # Until dasmatus/mcsapi#19 (panel blur and frame pacing) merges, every mcsapi
 # crate comes from its branch so the apps and the compositor share one
 # mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
+mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
