@@ -165,9 +165,9 @@ impl SettingsWatch {
         if self.loaded && modified == self.modified {
             return None;
         }
+        let (settings, _) = Settings::load(path).ok()?;
         self.loaded = true;
         self.modified = modified;
-        let settings = Settings::load(path).map_or_else(|_| Settings::default(), |(s, _)| s);
         Some(Effects::from_settings(&settings))
     }
 }
