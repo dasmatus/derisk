@@ -50,6 +50,8 @@
             libxkbcommon
             wayland
             libGL
+            # The lock screen authenticates through PAM.
+            linux-pam
           ];
 
           # dlopen'd at run time by winit, Smithay's EGL renderer and eframe.

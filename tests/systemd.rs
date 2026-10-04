@@ -202,3 +202,34 @@ fn shipped_units_wire_socket_activation() {
     assert!(service.contains("--socket-activated"));
     assert!(service.contains("WatchdogSec="));
 }
+
+#[test]
+fn parses_the_session_object_path() {
+    assert_eq!(
+        systemd::parse_object_path("o \"/org/freedesktop/login1/session/_32\"\n").as_deref(),
+        Some("/org/freedesktop/login1/session/_32")
+    );
+    assert_eq!(systemd::parse_object_path("s \"nope\""), None);
+    assert_eq!(systemd::parse_object_path(""), None);
+}
+
+#[test]
+fn waits_for_logind_lock_on_this_session() {
+    let argv = systemd::lock_signal_argv("/org/freedesktop/login1/session/_32");
+    assert_eq!(&argv[..3], ["busctl", "--system", "wait"]);
+    assert!(argv.ends_with(&[
+        "/org/freedesktop/login1/session/_32".to_owned(),
+        "org.freedesktop.login1.Session".to_owned(),
+        "Lock".to_owned(),
+    ]));
+    let hint = systemd::locked_hint_argv("/p", true);
+    assert!(hint.ends_with(&[
+        "SetLockedHint".to_owned(),
+        "b".to_owned(),
+        "true".to_owned()
+    ]));
+    assert_eq!(
+        systemd::session_path_argv("3").last().map(String::as_str),
+        Some("3")
+    );
+}

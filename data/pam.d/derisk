@@ -1,0 +1,5 @@
+#%PAM-1.0
+# derisk's lock screen checks the session user's password with the same
+# stack as a console login. Install as /etc/pam.d/derisk.
+auth     include  login
+account  include  login

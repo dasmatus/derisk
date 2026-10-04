@@ -7,6 +7,8 @@
 
 #[cfg(feature = "host")]
 mod host;
+#[cfg(feature = "host")]
+mod pam;
 
 use std::{
     io::{self, BufRead, BufReader, Write},

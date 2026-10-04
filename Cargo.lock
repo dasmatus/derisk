@@ -443,6 +443,7 @@ version = "0.1.0"
 dependencies = [
  "derisk-apps",
  "derisk-settings",
+ "libc",
  "mcsapi",
  "mcsapi-compositor",
  "mcsapi-runtime",

@@ -49,6 +49,7 @@ pub mod effects;
 pub mod geom;
 pub mod ipc;
 pub mod keys;
+pub mod lock;
 pub mod menu;
 pub mod overview;
 pub mod palette;

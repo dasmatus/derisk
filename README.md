@@ -106,14 +106,24 @@ first); unit actions only apply to units that are currently failed.
   and pulls in XDG autostart; the compositor exports `WAYLAND_DISPLAY` and
   friends to the user manager and D-Bus activation environment first
   (`systemd::session_start_argv`).
-- **Socket-activated agent.** `derisk-agent.socket` listens on
-  `$XDG_RUNTIME_DIR/derisk/agent.sock` (mode 0600) and starts
-  `derisk-agent.service` (`Type=notify`, watchdog, hardening) on demand.
+- **Socket-activated agent.** Without a desktop, `derisk-agent.socket`
+  listens on `$XDG_RUNTIME_DIR/derisk/agent.sock` (mode 0600) and starts
+  `derisk-agent.service` (`Type=notify`, watchdog, hardening) on demand. A
+  `derisk session` serves that socket itself against the live desktop, so it
+  stops the headless agent first and the socket unit conflicts with
+  `derisk-session.target`.
 - **sd_notify, watchdog and journald.** Readiness, status, watchdog
   keep-alives and stopping are reported to the service manager; logs go to
   the journal with structured fields (stderr outside systemd).
 - **logind.** Lock, suspend, hibernate, log out, reboot and power off from the
-  command palette, assistant or agents.
+  command palette, assistant or agents, acting on this session
+  (`XDG_SESSION_ID`): Log out ends the logind session, not just the target.
+- **Lock screen.** Locking hides every window and sends every key to a
+  password field checked by PAM (the `derisk` service, `data/pam.d/derisk`).
+  With `--execute` the session also locks when logind asks it to (`loginctl
+  lock-session`, `lock-sessions`, `busctl wait` on the session's `Lock`
+  signal) and sets logind's `LockedHint`. While locked the agent protocol
+  answers nothing.
 - **Failed units widget.** Failed user units show in the top bar and overview
   with restart and reset actions.
 
@@ -123,7 +133,8 @@ Install the units:
 $ cargo install --path .
 $ cp data/systemd/user/* ~/.config/systemd/user/
 $ systemctl --user daemon-reload
-$ systemctl --user start derisk-agent.socket
+$ systemctl --user start derisk-agent.socket   # headless only; a session serves the socket itself
+$ sudo install -m644 data/pam.d/derisk /etc/pam.d/derisk   # for the lock screen
 ```
 
 ## Usage
@@ -236,7 +247,7 @@ Requires Rust 1.95 and the system libraries mcsapi links against, for
 example on Debian/Ubuntu:
 
 ```console
-$ sudo apt install libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libinput-dev libudev-dev libgbm-dev libseat-dev libdrm-dev
+$ sudo apt install libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libinput-dev libudev-dev libgbm-dev libseat-dev libdrm-dev libpam0g-dev
 $ cargo build
 $ cargo test --workspace
 $ cargo clippy --workspace --all-targets -- -D warnings

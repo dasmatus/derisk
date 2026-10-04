@@ -6,7 +6,8 @@
 //! 2. Client surfaces, at [`crate::shell::WindowPlacement::client`].
 //! 3. [`ShellUi::show`] above them: top bar with global menu and tray, snap
 //!    preview and Snap Assist, the overview with widgets, the command
-//!    palette, and the startup animation.
+//!    palette, and the startup animation. While the screen is locked,
+//!    [`show_lock`] draws the lock screen instead, over the whole output.
 //!
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
@@ -27,6 +28,7 @@ use crate::{
     decorations::Button,
     effects::{BlurArea, Look},
     geom::inset,
+    lock::LockScreen,
     menu::{Menu, MenuEntry},
     overview::{OverviewLayout, Widget, fit, grid, row},
     palette::{self, Category, Entry, History},
@@ -1490,6 +1492,70 @@ pub fn paint_wallpaper(painter: &Painter, screen: Rect, theme: &Theme) {
         FontId::proportional(22.0),
         theme.background.gamma_multiply(0.9),
     );
+}
+
+/// Draws the lock screen over the whole output: the wallpaper, the clock,
+/// who is locked out, and the password field. Returns `true` when Enter was
+/// pressed in the field, to check what was typed.
+///
+/// Everything is opaque. The host also stops drawing windows while locked, so
+/// nothing on the desktop shows through even if this frame were skipped.
+pub fn show_lock(
+    ui: &mut Ui,
+    lock: &mut LockScreen,
+    shell: &Shell,
+    theme: &Theme,
+    user: &str,
+) -> bool {
+    let screen = to_rect(shell.output());
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        Order::Background,
+        Id::new("derisk-lock-bg"),
+    ));
+    painter.rect_filled(screen, 0, theme.background);
+    paint_wallpaper(&painter, screen, theme);
+    let mut submit = false;
+    egui::Area::new(Id::new("derisk-lock"))
+        .order(Order::Foreground)
+        .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+        .show(ui.ctx(), |ui| {
+            ui.set_width(320.0);
+            ui.visuals_mut().override_text_color = Some(theme.foreground);
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new(shell.clock.time_label()).size(64.0).strong());
+                ui.label(RichText::new(shell.clock.date_label()).size(18.0));
+                ui.add_space(32.0);
+                ui.label(RichText::new(user).size(20.0).strong());
+                ui.add_space(8.0);
+                let field = ui.add_enabled(
+                    !lock.is_checking(),
+                    egui::TextEdit::singleline(&mut lock.password)
+                        .password(true)
+                        .hint_text("Password")
+                        .font(FontId::proportional(18.0))
+                        .margin(vec2(10.0, 8.0))
+                        .desired_width(f32::INFINITY),
+                );
+                // The field is the only thing that takes keys, so Enter
+                // anywhere submits. Focus is taken back every frame, since a
+                // single-line field gives it up on Enter.
+                if !lock.is_checking() && !field.has_focus() {
+                    field.request_focus();
+                }
+                submit = ui.input(|i| i.key_pressed(Key::Enter));
+                ui.add_space(8.0);
+                let color = if lock.failures() > 0 && !lock.is_checking() {
+                    Color32::from_rgb(248, 113, 113)
+                } else {
+                    theme.border
+                };
+                ui.label(RichText::new(lock.message()).color(color));
+            });
+        });
+    if lock.is_checking() {
+        ui.ctx().request_repaint();
+    }
+    submit
 }
 
 /// Paints one frame of the startup animation over `screen`.
