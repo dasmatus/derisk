@@ -44,6 +44,38 @@ fn saving_keeps_permissions_and_clears_dirty() {
 }
 
 #[test]
+fn saving_never_writes_through_a_planted_name() {
+    // Another user who can write to the directory used to be able to plant
+    // `<file>.derisk-save` as a symlink, and the save wrote the document
+    // through it into whatever it pointed at.
+    let dir = temp_dir("planted");
+    let victim = dir.join("bashrc");
+    fs::write(&victim, "untouched\n").unwrap();
+    let path = dir.join("notes.txt");
+    fs::write(&path, "shared\n").unwrap();
+    std::os::unix::fs::symlink(&victim, dir.join("notes.txt.derisk-save")).unwrap();
+    let mut doc = Document::open(&path).unwrap();
+    doc.text.push_str("more\n");
+    doc.save().unwrap();
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "untouched\n");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "shared\nmore\n");
+    assert!(
+        !fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    // Nothing left behind but the planted link.
+    let left: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert_eq!(left.len(), 3, "{left:?}");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn finds_replaces_and_reports_positions() {
     let mut doc = Document::default();
     doc.text = "Alpha beta\nALPHA gamma\nalpha".into();
