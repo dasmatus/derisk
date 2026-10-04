@@ -1,5 +1,6 @@
 use derisk::{
     action::Action,
+    animation::StartupFrame,
     geom::rect,
     overview::{OverviewLayout, fit, grid, row},
     shell::Shell,
@@ -468,6 +469,36 @@ fn translucent_panels_report_blur_areas_unless_low_power() {
     shell.effects.blur = 0;
     frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5200);
     assert!(ui.blur_regions().is_empty());
+}
+
+#[test]
+fn opaque_panels_are_not_blurred() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    shell.effects.panels.top_bar = 100;
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5000);
+    let bar = shell.profile().top_bar;
+    let areas: Vec<_> = ui.blur_regions().iter().map(|b| b.area).collect();
+    assert!(!areas.contains(&rect(0, 0, 1920, bar)), "{areas:?}");
+    assert!(areas.contains(&shell.work_area()), "{areas:?}");
+}
+
+#[test]
+fn low_power_skips_the_startup_animation() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.effects.low_power = LowPower::On;
+    let ui = ShellUi::new(&shell, false);
+    assert_eq!(ui.startup_frame(0), StartupFrame::DONE);
+    shell.effects.low_power = LowPower::Off;
+    shell.effects.reduce_motion = true;
+    let ui = ShellUi::new(&shell, true);
+    assert!(!ui.startup_frame(0).done);
 }
 /// Drags the first exposé window onto workspace strip slot `slot` (0-based).
 fn drag_to_slot(shell: &mut Shell, slot: usize, slots: usize) -> Vec<Action> {

@@ -279,7 +279,7 @@ impl Session {
 
     fn startup_done(&self) -> bool {
         let elapsed = self.start.elapsed().as_millis() as u32;
-        self.ui.startup.frame(elapsed).done
+        self.ui.startup_frame(elapsed).done
     }
 }
 

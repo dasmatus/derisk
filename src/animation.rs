@@ -49,6 +49,19 @@ pub struct StartupFrame {
     pub done: bool,
 }
 
+impl StartupFrame {
+    /// The end of the animation: the desktop fully shown, the top bar in place.
+    pub const DONE: Self = Self {
+        cover: 0.0,
+        logo_opacity: 0.0,
+        logo_scale: 1.0,
+        ring: 1.0,
+        shell_opacity: 1.0,
+        bar_offset: 0.0,
+        done: true,
+    };
+}
+
 /// The startup animation: the logo pops in, a ring sweeps around it, then it
 /// blooms away as the desktop fades up and the top bar slides into place.
 #[derive(Clone, Copy, Debug, PartialEq)]

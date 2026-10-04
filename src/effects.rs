@@ -14,8 +14,8 @@
 //! use derisk_settings::LowPower;
 //!
 //! let effects = Effects { low_power: LowPower::OnBattery, ..Effects::default() };
-//! let plugged = effects.resolve(Some(Battery { percent: 80, charging: true }));
-//! let unplugged = effects.resolve(Some(Battery { percent: 80, charging: false }));
+//! let plugged = effects.resolve(Some(Battery { percent: 80, charging: true, discharging: false }));
+//! let unplugged = effects.resolve(Some(Battery { percent: 80, charging: false, discharging: true }));
 //! assert!(plugged.blur > 0 && !plugged.low_power);
 //! assert!(unplugged.low_power && unplugged.blur == 0);
 //! assert_eq!((plugged.max_fps, unplugged.max_fps), (None, Some(30)));
@@ -109,7 +109,7 @@ impl Effects {
     /// The effects for this frame. A device without a battery is never on
     /// battery.
     pub fn resolve(&self, battery: Option<Battery>) -> Look {
-        let on_battery = battery.is_some_and(|b| !b.charging);
+        let on_battery = battery.is_some_and(|b| b.discharging);
         let low_power = self.low_power.active(on_battery);
         let opacity = |percent: u8| {
             let o = f32::from(percent.clamp(20, 100)) / 100.0;
@@ -185,10 +185,18 @@ mod tests {
     const PLUGGED: Option<Battery> = Some(Battery {
         percent: 50,
         charging: true,
+        discharging: false,
     });
     const UNPLUGGED: Option<Battery> = Some(Battery {
         percent: 50,
         charging: false,
+        discharging: true,
+    });
+    /// Plugged in but held below full charge ("Not charging").
+    const HELD: Option<Battery> = Some(Battery {
+        percent: 80,
+        charging: false,
+        discharging: false,
     });
 
     #[test]
@@ -224,6 +232,7 @@ mod tests {
         };
         assert!(!effects.resolve(None).low_power);
         assert!(!effects.resolve(PLUGGED).low_power);
+        assert!(!effects.resolve(HELD).low_power);
         assert!(effects.resolve(UNPLUGGED).low_power);
         let off = Effects {
             low_power: LowPower::Off,
