@@ -51,7 +51,7 @@ use mcsapi::WindowId;
 use crate::pam;
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, InstanceId,
-    KeyInput, KeyRoute, Keysym, Placement, Press, Remote, Theme, egui,
+    KeyInput, KeyRoute, Keysym, OutputTiming, Placement, Press, Remote, Theme, egui,
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -566,6 +566,9 @@ impl compositor::Shell for Session {
         self.dispatch(vec![match request {
             ClientRequest::Maximize => Action::ToggleMaximize { window },
             ClientRequest::Minimize => Action::Minimize { window },
+            // Requests mcsapi learns later are ignored until derisk has an
+            // action for them.
+            _ => return,
         }]);
     }
 
@@ -629,7 +632,9 @@ impl compositor::Shell for Session {
             .collect()
     }
 
-    fn frame_interval(&self) -> Duration {
+    // The look's interval already encodes reduced motion and low power, so
+    // the output's refresh rate does not change it yet.
+    fn frame_interval(&self, _timing: &OutputTiming) -> Duration {
         self.shell.look().frame_interval
     }
 
