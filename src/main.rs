@@ -426,7 +426,12 @@ fn agent(args: &[String]) -> Result {
             systemd::listen_fd().ok_or("no socket passed by systemd (LISTEN_PID/LISTEN_FDS)")?;
         // SAFETY: systemd handed this listening socket to this very process
         // (LISTEN_PID matched) and nothing else in the process owns the fd.
-        Some(UnixListener::from(unsafe { OwnedFd::from_raw_fd(fd) }))
+        let passed = UnixListener::from(unsafe { OwnedFd::from_raw_fd(fd) });
+        // systemd passes fd 3 without close-on-exec, so every systemctl,
+        // systemd-run and loginctl this process spawns would inherit the
+        // listening socket. try_clone duplicates with F_DUPFD_CLOEXEC, and
+        // dropping the original closes fd 3.
+        Some(passed.try_clone()?)
     } else if let Some(path) = socket {
         Some(bind(&path)?)
     } else {
@@ -470,8 +475,8 @@ fn agent(args: &[String]) -> Result {
 
 fn serve(stream: UnixStream, host: &Mutex<Host>) -> io::Result<()> {
     let mut writer = stream.try_clone()?;
-    for line in BufReader::new(stream).lines() {
-        let line = line?;
+    let mut reader = BufReader::new(stream);
+    while let Some(line) = derisk::ipc::read_request(&mut reader)? {
         if line.trim().is_empty() {
             continue;
         }
@@ -491,12 +496,19 @@ fn bind(path: &Path) -> Result<UnixListener> {
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
+        derisk::ipc::check_socket_dir(dir)?;
     }
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         if !meta.file_type().is_socket() {
             return Err(format!("{} exists and is not a socket", path.display()).into());
         }
-        std::fs::remove_file(path)?;
+        // Never take over a socket something is still listening on.
+        match UnixStream::connect(path) {
+            Ok(_) => return Err(format!("{} is already in use", path.display()).into()),
+            Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => std::fs::remove_file(path)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
     }
     let listener = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;

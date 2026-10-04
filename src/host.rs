@@ -14,7 +14,7 @@
 //! this session to lock (`loginctl lock-session`, `lock-sessions`).
 
 use std::{
-    io::{BufRead, BufReader, Write as _},
+    io::{BufReader, Write as _},
     os::unix::{
         fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
@@ -192,10 +192,20 @@ fn palette_entries(core: &[DesktopEntry], installed: &[DesktopEntry]) -> Vec<Ent
     core.chain(installed).collect()
 }
 
+/// Names and icons for app IDs: the core apps (with their emoji for a
+/// theme without their icon), then installed apps.
+fn app_index(core: &[DesktopEntry], installed: &[DesktopEntry]) -> derisk::apps::Apps {
+    let core = core.iter().map(|e| {
+        let glyph = derisk_apps::find(&e.id).map_or("", |app| app.icon);
+        (e, glyph)
+    });
+    derisk::apps::Apps::new(core.chain(installed.iter().map(|e| (e, ""))))
+}
+
 impl Session {
     fn new(options: &Options, pending_actions: PendingActions) -> Self {
         let (w, h) = options.size;
-        let shell = Shell::new(rect(0, 0, w, h), false);
+        let mut shell = Shell::new(rect(0, 0, w, h), false);
         let mut ui = ShellUi::new(&shell, options.reduced_motion);
         let core_apps = core_desktop_entries();
         let installed = installed_apps();
@@ -208,6 +218,7 @@ impl Session {
         let user = pam::current_user()
             .or_else(|| std::env::var("USER").ok())
             .unwrap_or_default();
+        shell.apps = app_index(&core_apps, &installed);
         Self {
             shell,
             ui,
@@ -359,6 +370,7 @@ impl Session {
         if let Some((files, installed)) = self.index.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.ui.palette.files = files;
             self.ui.palette.extra = palette_entries(&self.core_apps, &installed);
+            self.shell.apps = app_index(&self.core_apps, &installed);
             self.installed = installed;
             self.index = None;
         }
@@ -1067,6 +1079,7 @@ fn agent_socket(path: Option<PathBuf>, remote: Remote<Session>) -> Result<Option
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
+        ipc::check_socket_dir(dir)?;
     }
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if !meta.file_type().is_socket() {
@@ -1097,8 +1110,8 @@ fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { return };
+    let mut reader = BufReader::new(stream);
+    while let Ok(Some(line)) = ipc::read_request(&mut reader) {
         if line.trim().is_empty() {
             continue;
         }
