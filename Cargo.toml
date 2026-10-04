@@ -9,8 +9,8 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#19 (panel blur and frame pacing) merges, every mcsapi
-# crate comes from its branch so the apps and the compositor share one
+# Until dasmatus/mcsapi#23 (frame pacing by refresh rate and VRR) merges, every
+# mcsapi crate comes from its branch so the apps and the compositor share one
 # mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
 mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }
 mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/blur-lowpower-modes-yk3xx0" }

@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use mcsapi_ui::{App, Theme, egui};
 pub use model::{
     Accent, Appearance, ColorScheme, DesktopPrefs, Input, Layout, LowPower, Notifications,
-    PanelOpacity, Power, Profile, Settings, Warning, default_path,
+    PanelOpacity, Power, Profile, Settings, Vrr, Warning, default_path,
 };
 
 /// A page of the Settings app.
@@ -33,7 +33,7 @@ pub enum Page {
     /// Colors, text size, motion, blur, and panel opacity.
     #[default]
     Appearance,
-    /// Layout, gaps, workspaces, and profile.
+    /// Layout, gaps, workspaces, profile, and variable refresh rate.
     Desktop,
     /// Keyboard and pointer.
     Input,
@@ -246,6 +246,13 @@ impl SettingsApp {
                             }
                         });
                     ui.end_row();
+                    ui.label("Variable refresh rate");
+                    ui.horizontal(|ui| {
+                        for vrr in Vrr::ALL {
+                            ui.selectable_value(&mut d.vrr, vrr, vrr.label());
+                        }
+                    });
+                    ui.end_row();
                 }
                 Page::Input => {
                     let i = &mut s.input;
@@ -305,7 +312,7 @@ impl SettingsApp {
                     ui.label("");
                     ui.label(
                         egui::RichText::new(
-                            "Turns off blur and animations and halves the frame rate.",
+                            "Turns off blur and animations and caps the frame rate at 30 fps.",
                         )
                         .small()
                         .color(theme.border),

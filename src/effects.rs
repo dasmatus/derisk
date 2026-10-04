@@ -4,8 +4,10 @@
 //! strength, per-panel opacity, when to save power); [`Effects::resolve`]
 //! combines it with the battery into a [`Look`] for this frame. In low power
 //! mode the blur, window shadows and animations go away, panels turn nearly
-//! opaque so text stays readable without the blur, and the frame rate
-//! halves.
+//! opaque so text stays readable without the blur, and the frame rate is
+//! capped at [`LOW_POWER_MAX_FPS`]. Otherwise the session renders once per
+//! refresh of the display; the compositor turns the cap into a rate the
+//! display shows evenly, using [`Look::vrr`].
 //!
 //! ```
 //! use derisk::{effects::Effects, overview::Battery};
@@ -16,24 +18,21 @@
 //! let unplugged = effects.resolve(Some(Battery { percent: 80, charging: false }));
 //! assert!(plugged.blur > 0 && !plugged.low_power);
 //! assert!(unplugged.low_power && unplugged.blur == 0);
-//! assert!(unplugged.frame_interval > plugged.frame_interval);
+//! assert_eq!((plugged.max_fps, unplugged.max_fps), (None, Some(30)));
 //! ```
 
 use std::{
     path::{Path, PathBuf},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
-use derisk_settings::{LowPower, PanelOpacity, Settings};
+use derisk_settings::{LowPower, PanelOpacity, Settings, Vrr};
 use mcsapi::Geometry;
 
 use crate::overview::Battery;
 
-/// Time between frames normally, about 60 per second.
-pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
-
-/// Time between frames in low power mode, about 30 per second.
-pub const LOW_POWER_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// The frame rate cap in low power mode.
+pub const LOW_POWER_MAX_FPS: u32 = 30;
 
 /// The least panel opacity in low power mode, where nothing is blurred.
 const LOW_POWER_MIN_OPACITY: f32 = 0.97;
@@ -49,6 +48,8 @@ pub struct Effects {
     pub reduce_motion: bool,
     /// When low power mode turns on.
     pub low_power: LowPower,
+    /// Whether the display has variable refresh rate.
+    pub vrr: Vrr,
 }
 
 impl Default for Effects {
@@ -74,8 +75,11 @@ pub struct Look {
     pub animate: bool,
     /// Whether windows cast shadows.
     pub shadows: bool,
-    /// Time between frames.
-    pub frame_interval: Duration,
+    /// The most frames per second; `None` renders once per refresh.
+    pub max_fps: Option<u32>,
+    /// The user's variable refresh rate choice: `Some` overrides what the
+    /// compositor detects, `None` keeps it.
+    pub vrr: Option<bool>,
 }
 
 /// An area of the screen to blur under a panel, in logical pixels.
@@ -98,6 +102,7 @@ impl Effects {
             panels: a.panels,
             reduce_motion: a.reduce_motion,
             low_power: settings.power.low_power,
+            vrr: settings.desktop.vrr,
         }
     }
 
@@ -122,10 +127,11 @@ impl Effects {
             snap_assist: opacity(self.panels.snap_assist),
             animate: !low_power && !self.reduce_motion,
             shadows: !low_power,
-            frame_interval: if low_power {
-                LOW_POWER_FRAME_INTERVAL
-            } else {
-                FRAME_INTERVAL
+            max_fps: low_power.then_some(LOW_POWER_MAX_FPS),
+            vrr: match self.vrr {
+                Vrr::Automatic => None,
+                Vrr::On => Some(true),
+                Vrr::Off => Some(false),
             },
         }
     }
@@ -192,7 +198,8 @@ mod tests {
         assert!(look.blur > 0);
         assert!(look.top_bar < 1.0 && look.top_bar >= 0.2);
         assert!(look.animate && look.shadows);
-        assert_eq!(look.frame_interval, FRAME_INTERVAL);
+        assert_eq!(look.max_fps, None);
+        assert_eq!(look.vrr, None);
     }
 
     #[test]
@@ -205,7 +212,7 @@ mod tests {
         assert!(look.low_power);
         assert_eq!(look.blur, 0);
         assert!(!look.animate && !look.shadows);
-        assert_eq!(look.frame_interval, LOW_POWER_FRAME_INTERVAL);
+        assert_eq!(look.max_fps, Some(LOW_POWER_MAX_FPS));
         assert!(look.top_bar >= LOW_POWER_MIN_OPACITY);
     }
 
@@ -250,6 +257,21 @@ mod tests {
         let look = effects.resolve(None);
         assert!(!look.animate);
         assert!(look.blur > 0);
+    }
+
+    #[test]
+    fn vrr_choice_overrides_detection_only_when_set() {
+        for (vrr, expected) in [
+            (Vrr::Automatic, None),
+            (Vrr::On, Some(true)),
+            (Vrr::Off, Some(false)),
+        ] {
+            let effects = Effects {
+                vrr,
+                ..Effects::default()
+            };
+            assert_eq!(effects.resolve(None).vrr, expected);
+        }
     }
 
     #[test]

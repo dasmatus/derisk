@@ -1200,9 +1200,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libloading"
@@ -1274,7 +1274,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#c222cae4e39ea5383e918e7685b9f4482587901f"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
 dependencies = [
  "egui",
  "smithay",
@@ -1283,10 +1283,11 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#c222cae4e39ea5383e918e7685b9f4482587901f"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
 dependencies = [
  "egui_glow",
  "glow",
+ "libc",
  "mcsapi",
  "mcsapi-runtime",
  "mcsapi-ui",
@@ -1296,12 +1297,12 @@ dependencies = [
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#c222cae4e39ea5383e918e7685b9f4482587901f"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#c222cae4e39ea5383e918e7685b9f4482587901f"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fblur-lowpower-modes-yk3xx0#a094222fdcf045e7b0ed689ae9714ced58c6d6ac"
 dependencies = [
  "egui",
  "mcsapi",
