@@ -3750,7 +3750,7 @@ dependencies = [
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#9149a5100af809762dfc78d55123d53c3f90707b"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#7c6609c31b5675b997e67ba8eaa394c78caa2c07"
 dependencies = [
  "egui",
  "gpui",
@@ -3762,7 +3762,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#9149a5100af809762dfc78d55123d53c3f90707b"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#7c6609c31b5675b997e67ba8eaa394c78caa2c07"
 dependencies = [
  "egui",
  "mcsapi-ui",
@@ -3771,7 +3771,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components-gpui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#9149a5100af809762dfc78d55123d53c3f90707b"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#7c6609c31b5675b997e67ba8eaa394c78caa2c07"
 dependencies = [
  "gpui",
  "libc",
@@ -3783,7 +3783,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#9149a5100af809762dfc78d55123d53c3f90707b"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#7c6609c31b5675b997e67ba8eaa394c78caa2c07"
 dependencies = [
  "egui_glow",
  "glow 0.17.0",
@@ -3797,17 +3797,17 @@ dependencies = [
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#9149a5100af809762dfc78d55123d53c3f90707b"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#7c6609c31b5675b997e67ba8eaa394c78caa2c07"
 
 [[package]]
 name = "mcsapi-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#9149a5100af809762dfc78d55123d53c3f90707b"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#7c6609c31b5675b997e67ba8eaa394c78caa2c07"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#9149a5100af809762dfc78d55123d53c3f90707b"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fproject-thread-u4arge#7c6609c31b5675b997e67ba8eaa394c78caa2c07"
 dependencies = [
  "egui",
  "mcsapi",

@@ -11,8 +11,9 @@ repository = "https://github.com/dasmatus/derisk"
 [workspace.dependencies]
 # Until dasmatus/mcsapi#25 (the mcsapi-theme theming engine) merges, every
 # mcsapi crate comes from its branch so the apps and the compositor share one
-# mcsapi-ui. That branch must carry main's #24 too (a lock cancels the held
-# press). Then drop the `branch` keys and run `cargo update -p mcsapi`.
+# mcsapi-ui. That branch has main merged in, so it carries #24 too (a lock
+# cancels the held press). Then drop the `branch` keys and run
+# `cargo update -p mcsapi`.
 mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
 mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
 mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
