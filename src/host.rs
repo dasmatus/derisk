@@ -168,14 +168,25 @@ fn palette_entries(core: &[DesktopEntry], installed: &[DesktopEntry]) -> Vec<Ent
     core.chain(installed).collect()
 }
 
+/// Names and icons for app IDs: the core apps (with their emoji for a
+/// theme without their icon), then installed apps.
+fn app_index(core: &[DesktopEntry], installed: &[DesktopEntry]) -> derisk::apps::Apps {
+    let core = core.iter().map(|e| {
+        let glyph = derisk_apps::find(&e.id).map_or("", |app| app.icon);
+        (e, glyph)
+    });
+    derisk::apps::Apps::new(core.chain(installed.iter().map(|e| (e, ""))))
+}
+
 impl Session {
     fn new(options: &Options, pending_actions: PendingActions) -> Self {
         let (w, h) = options.size;
-        let shell = Shell::new(rect(0, 0, w, h), false);
+        let mut shell = Shell::new(rect(0, 0, w, h), false);
         let mut ui = ShellUi::new(&shell, options.reduced_motion);
         let core_apps = core_desktop_entries();
         let installed = installed_apps();
         ui.palette.extra = palette_entries(&core_apps, &installed);
+        shell.apps = app_index(&core_apps, &installed);
         Self {
             shell,
             ui,
@@ -265,6 +276,7 @@ impl Session {
         if let Some((files, installed)) = self.index.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.ui.palette.files = files;
             self.ui.palette.extra = palette_entries(&self.core_apps, &installed);
+            self.shell.apps = app_index(&self.core_apps, &installed);
             self.installed = installed;
             self.index = None;
         }

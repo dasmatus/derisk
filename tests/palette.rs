@@ -135,7 +135,7 @@ fn app_menus_become_palette_commands() {
     assert_eq!(app.len(), 2, "disabled items are left out");
     assert_eq!(app[0].title, "Save");
     assert_eq!(app[0].shortcut.as_deref(), Some("Ctrl+S"));
-    assert_eq!(app[1].detail, "editor · File › Export › As PDF");
+    assert_eq!(app[1].detail, "Editor · File › Export › As PDF");
 
     let hits = palette::search(&entries, "> export pdf", &History::default());
     let effects = shell.run(entries[hits[0]].actions.clone()).unwrap();
