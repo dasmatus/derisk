@@ -245,7 +245,10 @@ fn file_rows(
         return;
     }
     ui.label("Found");
-    ui.horizontal_wrapped(|ui| {
+    // Top-aligned: `horizontal_wrapped` centers each item on the first
+    // line's height, which pushes the tall tiles over the next grid row.
+    let tiles = egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true);
+    ui.with_layout(tiles, |ui| {
         ui.set_max_width(520.0);
         for path in found {
             let name = path.file_name().map_or_else(
