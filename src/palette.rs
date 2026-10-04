@@ -477,8 +477,8 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
 
     // Windows on every workspace.
     let focused = shell.focused();
-    for ws in shell.desktop().workspaces() {
-        for w in shell.windows_on(ws.id()) {
+    for (i, &ws) in shell.workspaces().iter().enumerate() {
+        for w in shell.windows_on(ws) {
             let (app, title) = shell.window_label(w).unwrap_or_default();
             let minimized = shell.is_minimized(w);
             let action = if minimized {
@@ -487,7 +487,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
                 Action::Focus { window: w.get() }
             };
             let name = if title.is_empty() { app } else { title };
-            let mut detail = format!("{app} · workspace {ws}", ws = ws.id());
+            let mut detail = format!("{app} · workspace {}", i + 1);
             if minimized {
                 detail.push_str(" · minimized");
             }
@@ -590,43 +590,57 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
         e.shortcut = shortcut.map(str::to_owned);
         out.push(e);
     }
-    // Workspaces.
-    let active = shell.desktop().active().id();
-    for ws in shell.desktop().workspaces() {
-        let n = ws.id().get();
-        if ws.id() != active {
-            let count = shell.windows_on(ws.id()).len();
-            out.push(
-                Entry::new(
-                    Category::Workspace,
-                    "🖥",
-                    format!("Go to Workspace {n}"),
-                    vec![Action::SwitchWorkspace { workspace: n }],
-                )
-                .detail(match count {
-                    0 => "Empty".to_owned(),
-                    1 => "1 window".to_owned(),
-                    c => format!("{c} windows"),
-                })
-                .shortcut(format!("Super+{n}"))
-                .keywords("switch desktop"),
-            );
+    // Workspaces, by position (they are dynamic; see `Shell::workspaces`).
+    let active = shell.active_workspace();
+    let shortcut = |chord: &str, n: u64| (n <= 9).then(|| format!("{chord}{n}"));
+    for (i, &ws) in shell.workspaces().iter().enumerate() {
+        let n = i as u64 + 1;
+        if n != active {
+            let count = shell.windows_on(ws).len();
+            let mut e = Entry::new(
+                Category::Workspace,
+                "🖥",
+                format!("Go to Workspace {n}"),
+                vec![Action::SwitchWorkspace { workspace: n }],
+            )
+            .detail(match count {
+                0 => "Empty".to_owned(),
+                1 => "1 window".to_owned(),
+                c => format!("{c} windows"),
+            })
+            .keywords("switch desktop");
+            e.shortcut = shortcut("Super+", n);
+            out.push(e);
             if focused.is_some() {
-                out.push(
-                    Entry::new(
-                        Category::Workspace,
-                        "⎆",
-                        format!("Move Window to Workspace {n}"),
-                        vec![Action::MoveToWorkspace {
-                            window: None,
-                            workspace: n,
-                        }],
-                    )
-                    .shortcut(format!("Super+Shift+{n}"))
-                    .keywords("send throw desktop"),
-                );
+                let mut e = Entry::new(
+                    Category::Workspace,
+                    "⎆",
+                    format!("Move Window to Workspace {n}"),
+                    vec![Action::MoveToWorkspace {
+                        window: None,
+                        workspace: n,
+                    }],
+                )
+                .keywords("send throw desktop");
+                e.shortcut = shortcut("Super+Shift+", n);
+                out.push(e);
             }
         }
+    }
+    if focused.is_some() && shell.can_add_workspace() {
+        let n = shell.workspaces().len() as u64 + 1;
+        let mut e = Entry::new(
+            Category::Workspace,
+            "⎆",
+            "Move Window to New Workspace",
+            vec![Action::MoveToWorkspace {
+                window: None,
+                workspace: n,
+            }],
+        )
+        .keywords("send throw desktop space add");
+        e.shortcut = shortcut("Super+Shift+", n);
+        out.push(e);
     }
 
     // Session.

@@ -71,9 +71,24 @@ fn fuzzy_prefers_prefixes_and_word_starts() {
     assert!(palette::fuzzy("System Monitor", "sysmon").is_some());
 }
 
+/// Opens workspaces 2 and 3 (each holding one window); workspaces are
+/// dynamic, so empty ones do not exist.
+fn open_three_workspaces(shell: &mut Shell) {
+    for n in [2, 3] {
+        let (w, _) = shell.map_window("foot", "sh");
+        shell
+            .apply(Action::MoveToWorkspace {
+                window: Some(w.get()),
+                workspace: n,
+            })
+            .unwrap();
+    }
+}
+
 #[test]
 fn search_spans_apps_windows_commands_and_workspaces() {
     let mut shell = shell();
+    open_three_workspaces(&mut shell);
     shell.map_window("kitty", "~/src");
     let entries = palette::entries(&shell, &apps(), &[]);
     let found = |q: &str| titles(&entries, &palette::search(&entries, q, &History::default()));
@@ -84,6 +99,8 @@ fn search_spans_apps_windows_commands_and_workspaces() {
     assert_eq!(found("maxim")[0], "Maximize");
     assert!(found("workspace 3").contains(&"Go to Workspace 3".to_owned()));
     assert!(found("workspace 3").contains(&"Move Window to Workspace 3".to_owned()));
+    assert!(found("workspace 4").is_empty(), "only open workspaces");
+    assert_eq!(found("new workspace")[0], "Move Window to New Workspace");
     assert_eq!(found("lock")[0], "Lock Screen");
 }
 
@@ -278,6 +295,7 @@ fn files_are_indexed_and_opened_safely() {
 #[test]
 fn close_title_matches_beat_the_assistant() {
     let mut shell = shell();
+    open_three_workspaces(&mut shell);
     shell.map_window("kitty", "~");
     let entries = palette::entries(&shell, &[], &[]);
     for query in [

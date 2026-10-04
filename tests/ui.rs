@@ -103,10 +103,22 @@ fn overview_button_in_the_top_bar_toggles_the_overview() {
     assert_eq!(actions, vec![Action::Overview { visible: None }]);
 }
 
+/// Opens workspace 2 with one window on it (workspaces are dynamic).
+fn open_second_workspace(shell: &mut Shell) {
+    let (w, _) = shell.map_window("foot", "sh");
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(w.get()),
+            workspace: 2,
+        })
+        .unwrap();
+}
+
 #[test]
 fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
     let (w, h) = (1280.0, 800.0);
     let mut shell = Shell::new(rect(0, 0, 1280, 800), false);
+    open_second_workspace(&mut shell);
     shell.map_window("editor", "notes.md");
     shell.apply(Action::Palette { visible: None }).unwrap();
     let mut ui = ShellUi::new(&shell, true);
@@ -127,7 +139,7 @@ fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
         &mut ui,
         &shell,
         (w, h),
-        vec![text("workspace 3")],
+        vec![text("workspace 2")],
         5000,
     );
     let actions = frame(
@@ -141,7 +153,7 @@ fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
     assert_eq!(
         actions,
         [
-            Action::SwitchWorkspace { workspace: 3 },
+            Action::SwitchWorkspace { workspace: 2 },
             Action::Palette {
                 visible: Some(false)
             }
@@ -157,7 +169,7 @@ fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
         &mut ui,
         &shell,
         (w, h),
-        vec![text("workspace 3")],
+        vec![text("workspace 2")],
         5000,
     );
     let actions = frame(
@@ -172,7 +184,7 @@ fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
         actions[0],
         Action::MoveToWorkspace {
             window: None,
-            workspace: 3
+            workspace: 2
         }
     );
 
@@ -323,7 +335,7 @@ fn palette_hands_requests_to_the_assistant_and_shows_the_conversation() {
         &mut ui,
         &shell,
         (w, h),
-        vec![egui::Event::Text("workspace 3".into())],
+        vec![egui::Event::Text("lock screen".into())],
         5000,
     );
     let actions = frame(
@@ -334,7 +346,7 @@ fn palette_hands_requests_to_the_assistant_and_shows_the_conversation() {
         vec![key(egui::Key::Enter)],
         5000,
     );
-    assert_eq!(actions[0], Action::SwitchWorkspace { workspace: 3 });
+    assert!(matches!(actions[0], Action::Session { .. }), "{actions:?}");
 }
 
 #[test]
