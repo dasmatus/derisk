@@ -7,7 +7,7 @@
 //! windows, and serves the agent protocol against the live desktop.
 
 use std::{
-    io::{BufRead, BufReader, Write as _},
+    io::{BufReader, Write as _},
     os::unix::{
         fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
@@ -780,6 +780,7 @@ fn agent_socket(path: Option<PathBuf>, remote: Remote<Session>) -> Result<Option
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
+        ipc::check_socket_dir(dir)?;
     }
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if !meta.file_type().is_socket() {
@@ -810,8 +811,8 @@ fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { return };
+    let mut reader = BufReader::new(stream);
+    while let Ok(Some(line)) = ipc::read_request(&mut reader) {
         if line.trim().is_empty() {
             continue;
         }

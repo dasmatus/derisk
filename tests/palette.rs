@@ -259,10 +259,27 @@ fn files_are_indexed_and_opened_safely() {
     let effects = shell.run(todo.actions.clone()).unwrap();
     assert_eq!(serde_json::to_value(&effects).unwrap()[0]["effect"], "open");
 
+    // Launchers that dodge a lowercase `.desktop` check: shared-mime-info
+    // matches globs without case and desktop entries by content.
+    fs::write(dir.join("evil.DESKTOP"), "[Desktop Entry]\n").unwrap();
+    fs::write(dir.join("README"), "# x\n[Desktop Entry]\nExec=sh\n").unwrap();
+    fs::write(dir.join("tool.Jar"), "PK").unwrap();
+    // Programs under names that match no launcher glob, found by content.
+    fs::write(dir.join("invoice"), b"MZ\x90\x00").unwrap();
+    fs::write(dir.join("photo.png"), "\x7fELF\x02").unwrap();
+    fs::write(dir.join("statement"), "PK\x03\x04").unwrap();
+    // A document that is a zip keeps opening: its glob decides its type.
+    fs::write(dir.join("report.docx"), "PK\x03\x04").unwrap();
     let mut open = |p: &str| shell.apply(Action::Open { path: p.to_owned() });
     for refused in [
         dir.join("run.sh").display().to_string(),
         dir.join("app.desktop").display().to_string(),
+        dir.join("evil.DESKTOP").display().to_string(),
+        dir.join("README").display().to_string(),
+        dir.join("tool.Jar").display().to_string(),
+        dir.join("invoice").display().to_string(),
+        dir.join("photo.png").display().to_string(),
+        dir.join("statement").display().to_string(),
         dir.join("missing").display().to_string(),
         "notes/todo.md".to_owned(),
     ] {
@@ -272,6 +289,7 @@ fn files_are_indexed_and_opened_safely() {
         );
     }
     assert!(open(&dir.join("notes").display().to_string()).is_ok());
+    assert!(open(&dir.join("report.docx").display().to_string()).is_ok());
     fs::remove_dir_all(&dir).unwrap();
 }
 
