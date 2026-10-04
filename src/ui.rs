@@ -622,6 +622,13 @@ impl ShellUi {
         // Added first, so the buttons on top keep their taps and this only
         // gets the drags they don't sense.
         let swipe = ui.interact(area, Id::new("derisk-nav-swipe"), Sense::drag());
+        swipe.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Other,
+                true,
+                "Navigation bar: swipe up for home, sideways to switch apps",
+            )
+        });
         if swipe.drag_started() {
             self.swipe_from = ui.input(|i| i.pointer.press_origin());
         }
