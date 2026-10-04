@@ -129,11 +129,23 @@ pub struct PaletteUi {
 const PALETTE_ROWS: usize = 9;
 const PALETTE_ROW_HEIGHT: f32 = 40.0;
 
-/// Sizes egui's own widgets (buttons in the widgets, the tray menu, check
-/// boxes) for fingers on phones, and back to egui's defaults elsewhere.
-fn set_touch_style(ctx: &egui::Context, touch: bool) {
+/// Sizes egui's own widgets (buttons, check boxes, text fields, menus) for
+/// fingers on phones, and back to egui's defaults elsewhere. Used for the
+/// chrome and for the in-process apps. Does nothing when already applied,
+/// so it can run every frame.
+pub fn set_touch_style(ctx: &egui::Context, touch: bool) {
     let default = egui::style::Spacing::default();
     let target = mobile::TOUCH_TARGET as f32;
+    let current = ctx.global_style().spacing.interact_size;
+    if current
+        == if touch {
+            vec2(target, target)
+        } else {
+            default.interact_size
+        }
+    {
+        return;
+    }
     ctx.all_styles_mut(|style| {
         let spacing = &mut style.spacing;
         if touch {
@@ -274,6 +286,10 @@ impl ShellUi {
     /// above covers the title bar of one below) call this per placement.
     pub fn paint_decoration(&self, painter: &Painter, shell: &Shell, p: &WindowPlacement) {
         let bar = shell.profile().title_bar;
+        // Phones have no title bars; a full-screen app needs no border.
+        if bar.height == 0 {
+            return;
+        }
         let theme = &self.theme;
         let radius = CornerRadius {
             nw: 10,
@@ -973,7 +989,50 @@ impl ShellUi {
                 FontId::proportional(13.0),
                 self.theme.border,
             );
-            if response.clicked() {
+            // Without title bars, a phone closes apps from here: a close
+            // button on each card, a full touch target in its corner.
+            let mut closed = false;
+            if shell.is_phone() {
+                let size = mobile::TOUCH_TARGET as f32;
+                let close = Rect::from_min_size(r.right_top() - vec2(size, 0.0), vec2(size, size));
+                let hit = ui.interact(
+                    close,
+                    Id::new(("derisk-win-close", w.get())),
+                    Sense::click(),
+                );
+                hit.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        true,
+                        format!("Close {app}"),
+                    )
+                });
+                ui.painter().circle_filled(
+                    close.center(),
+                    14.0,
+                    button_color(Button::Close).gamma_multiply(
+                        if hit.is_pointer_button_down_on() {
+                            0.7
+                        } else {
+                            1.0
+                        },
+                    ),
+                );
+                ui.painter().text(
+                    close.center(),
+                    Align2::CENTER_CENTER,
+                    "×",
+                    FontId::proportional(18.0),
+                    Color32::WHITE,
+                );
+                if hit.clicked() {
+                    actions.push(Action::Close {
+                        window: Some(w.get()),
+                    });
+                    closed = true;
+                }
+            }
+            if response.clicked() && !closed {
                 actions.push(if minimized {
                     Action::Restore { window: w.get() }
                 } else {

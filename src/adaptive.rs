@@ -59,13 +59,14 @@ impl Profile {
                 gap: 0,
                 top_bar: 32,
                 nav_bar: 56,
-                // Buttons 48 apart: the hit target spans a button plus the
-                // spacing, so this makes each one a full touch target.
+                // No title bars: every app fills the screen, the status bar
+                // names it, and Back, the overview and its close buttons do
+                // what the title bar buttons did.
                 title_bar: TitleBar {
-                    height: 48,
-                    button: 22,
-                    spacing: 26,
-                    padding: 13,
+                    height: 0,
+                    button: 0,
+                    spacing: 0,
+                    padding: 0,
                 },
                 snap: SnapConfig {
                     edge: 24,

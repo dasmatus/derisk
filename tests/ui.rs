@@ -780,10 +780,28 @@ fn navigation_bar_stays_usable_over_the_palette() {
 }
 
 #[test]
-fn phone_title_bar_buttons_are_touch_sized() {
-    let phone = Shell::new(rect(0, 0, 392, 872), true);
-    let bar = phone.profile().title_bar;
-    assert!(bar.height >= derisk::mobile::TOUCH_TARGET);
-    // A button's target spans the button and the spacing beside it.
-    assert!(bar.button + bar.spacing >= derisk::mobile::TOUCH_TARGET);
+fn phones_show_one_window_without_a_title_bar() {
+    let mut phone = Shell::new(rect(0, 0, 392, 872), true);
+    let (a, _) = phone.map_window("a", "A");
+    let (b, _) = phone.map_window("b", "B");
+    // Even a floating window, or a workspace switched to tall, fills the
+    // work area alone.
+    phone
+        .apply(Action::Float {
+            window: Some(a.get()),
+        })
+        .unwrap();
+    phone
+        .apply(Action::SetLayout {
+            layout: derisk::action::LayoutKind::Tall,
+        })
+        .unwrap();
+    phone.apply(Action::Focus { window: a.get() }).unwrap();
+    let placements = phone.placements();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].window, a);
+    assert_eq!(placements[0].frame, phone.work_area());
+    assert_eq!(placements[0].client, phone.work_area());
+    phone.apply(Action::Focus { window: b.get() }).unwrap();
+    assert_eq!(phone.placements()[0].window, b);
 }

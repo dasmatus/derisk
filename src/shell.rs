@@ -968,8 +968,21 @@ impl Shell {
             .filter(visible)
             .filter(|w| self.windows[w].mode == Mode::Tiled)
             .collect();
-        let topmost_tiled = self.stack.iter().rev().find(|w| tiled.contains(w)).copied();
         let tile_area = inset(area, gap / 2);
+        // Phones are monocle whatever the workspace's layout and the
+        // window's mode: the topmost window fills the work area, floating
+        // and snapped ones included, since there is no room to show two.
+        if self.is_phone() {
+            return self
+                .stack
+                .iter()
+                .rev()
+                .find(|w| members.contains(w) && visible(w))
+                .map(|&w| place(w, tile_area))
+                .into_iter()
+                .collect();
+        }
+        let topmost_tiled = self.stack.iter().rev().find(|w| tiled.contains(w)).copied();
         let layout = ws.layout();
         let mut out: Vec<WindowPlacement> = match layout.arrange(tile_area, tiled.iter().copied()) {
             Ok(placements) if layout != Layout::Monocle => placements

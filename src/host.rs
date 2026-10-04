@@ -13,7 +13,11 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -31,7 +35,7 @@ use derisk::{
     snap::{Direction, SnapZone},
     systemd::{self, Priority},
     time::Clock,
-    ui::{ShellUi, paint_wallpaper},
+    ui::{ShellUi, paint_wallpaper, set_touch_style},
 };
 use mcsapi::WindowId;
 use mcsapi_compositor::{
@@ -73,6 +77,9 @@ pub struct Session {
     installed: Vec<DesktopEntry>,
     pending_actions: PendingActions,
     settings: SettingsWatch,
+    /// Whether the output is phone-sized, shared with [`CoreApps`] so the
+    /// apps get touch-sized widgets too.
+    phone: Arc<AtomicBool>,
 }
 
 /// Core-app actions waiting for the compositor to launch their app, shared
@@ -112,9 +119,10 @@ fn palette_entries(core: &[DesktopEntry], installed: &[DesktopEntry]) -> Vec<Ent
 }
 
 impl Session {
-    fn new(options: &Options, pending_actions: PendingActions) -> Self {
+    fn new(options: &Options, pending_actions: PendingActions, phone: Arc<AtomicBool>) -> Self {
         let (w, h) = options.size;
         let shell = Shell::new(rect(0, 0, w, h), false);
+        phone.store(shell.is_phone(), Ordering::Relaxed);
         let mut ui = ShellUi::new(&shell, options.reduced_motion);
         let core_apps = core_desktop_entries();
         let installed = installed_apps();
@@ -135,6 +143,7 @@ impl Session {
             installed,
             pending_actions,
             settings: SettingsWatch::new(derisk_settings::default_path()),
+            phone,
         }
     }
 
@@ -296,6 +305,7 @@ impl compositor::Shell for Session {
 
     fn set_output(&mut self, (w, h): (i32, i32)) {
         self.shell.set_output(rect(0, 0, w, h), false);
+        self.phone.store(self.shell.is_phone(), Ordering::Relaxed);
     }
 
     fn focused(&self) -> Option<WindowId> {
@@ -544,6 +554,7 @@ impl compositor::Shell for Session {
 struct CoreApps {
     session: derisk_apps::Session,
     pending_actions: PendingActions,
+    phone: Arc<AtomicBool>,
 }
 
 impl Apps for CoreApps {
@@ -589,16 +600,19 @@ impl Apps for CoreApps {
 
     fn prepare(&mut self, ctx: &egui::Context, theme: &Theme) {
         ctx.set_visuals(derisk_apps::visuals(theme));
+        set_touch_style(ctx, self.phone.load(Ordering::Relaxed));
     }
 }
 
 /// Runs the session until the window is closed.
 pub fn run(options: Options) -> Result {
     let pending_actions = PendingActions::default();
-    let session = Session::new(&options, pending_actions.clone());
+    let phone = Arc::new(AtomicBool::new(false));
+    let session = Session::new(&options, pending_actions.clone(), phone.clone());
     let apps = CoreApps {
         session: derisk_apps::Session::new()?,
         pending_actions,
+        phone,
     };
     let (w, h) = options.size;
     let mut compositor = Compositor::new(session)

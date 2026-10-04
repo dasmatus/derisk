@@ -332,40 +332,52 @@ impl CalculatorApp {
     }
 }
 
+/// Below this width the history moves from a side column to the bottom.
+const NARROW: f32 = 560.0;
+
 impl App for CalculatorApp {
     fn title(&self) -> &str {
         "Calculator"
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
-        egui::Panel::right("calculator-history")
-            .default_size(220.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("History");
-                    if ui.small_button("Clear").clicked() {
-                        self.history.clear();
+        let history = |ui: &mut egui::Ui| {
+            ui.horizontal(|ui| {
+                ui.strong("History");
+                if ui.small_button("Clear").clicked() {
+                    self.history.clear();
+                }
+            });
+            egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    let mut reuse = None;
+                    for (expression, value) in &self.history {
+                        let text = format!("{expression}\n= {}", format_number(*value));
+                        if ui
+                            .selectable_label(false, text)
+                            .on_hover_text("Use again")
+                            .clicked()
+                        {
+                            reuse = Some(expression.clone());
+                        }
+                    }
+                    if let Some(expression) = reuse {
+                        self.input = expression;
                     }
                 });
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        let mut reuse = None;
-                        for (expression, value) in &self.history {
-                            let text = format!("{expression}\n= {}", format_number(*value));
-                            if ui
-                                .selectable_label(false, text)
-                                .on_hover_text("Use again")
-                                .clicked()
-                            {
-                                reuse = Some(expression.clone());
-                            }
-                        }
-                        if let Some(expression) = reuse {
-                            self.input = expression;
-                        }
-                    });
-            });
+        };
+        if ui.available_width() < NARROW {
+            // A phone has no width for a side column; the history goes under
+            // the keypad instead, a few lines tall.
+            egui::Panel::bottom("calculator-history")
+                .exact_size(160.0)
+                .show(ui, history);
+        } else {
+            egui::Panel::right("calculator-history")
+                .default_size(220.0)
+                .show(ui, history);
+        }
         egui::CentralPanel::default_margins().show(ui, |ui| {
             let field = ui.add(
                 egui::TextEdit::singleline(&mut self.input)
