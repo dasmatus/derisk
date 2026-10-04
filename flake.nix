@@ -127,6 +127,9 @@
                 doCheck = false;
                 postInstall = ''
                   install -Dm644 -t $out/share/systemd/user data/systemd/user/*
+                  # Run this build's derisk, not whichever one is on the manager's PATH.
+                  substituteInPlace $out/share/systemd/user/derisk-agent.service \
+                    --replace-fail "ExecStart=derisk " "ExecStart=$out/bin/derisk "
                 '';
                 postFixup = withRuntimeRpath;
                 meta.mainProgram = "derisk";
@@ -152,7 +155,10 @@
           checks =
             variantChecks
             // {
-              fmt = craneLib.cargoFmt { inherit (commonArgs) src pname version; };
+              fmt = craneLib.cargoFmt {
+                inherit (commonArgs) src pname version;
+                cargoExtraArgs = "--all";
+              };
             }
             // lib.mapAttrs' (name: lib.nameValuePair "package-${name}") (removeAttrs packages [ "default" ]);
 
