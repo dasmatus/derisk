@@ -166,9 +166,17 @@ fn copy_into(from: &Path, to: &Path) -> io::Result<()> {
             .open(to)?;
         let held =
             Path::new("/proc/self/fd").join(std::os::fd::AsRawFd::as_raw_fd(&dir).to_string());
-        for item in fs::read_dir(from)? {
-            let item = item?;
-            copy_into(&item.path(), &held.join(item.file_name()))?;
+        // The source is held the same way, so a swap of `from` for a link
+        // after the check above cannot redirect the walk.
+        let source = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(from)?;
+        let source_held =
+            Path::new("/proc/self/fd").join(std::os::fd::AsRawFd::as_raw_fd(&source).to_string());
+        for item in fs::read_dir(&source_held)? {
+            let name = item?.file_name();
+            copy_into(&source_held.join(&name), &held.join(&name))?;
         }
         dir.set_permissions(fs::Permissions::from_mode(mode))
     } else {
@@ -268,6 +276,9 @@ impl Trash {
         for dir in [&self.root, &files, &info] {
             std::os::unix::fs::DirBuilderExt::mode(fs::DirBuilder::new().recursive(true), 0o700)
                 .create(dir)?;
+            // `mode` only applies to directories made just now; tighten
+            // trash trees an earlier version created world-readable.
+            fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
         }
         // Reserve the info file first with create_new, as the spec requires,
         // so two trashers cannot pick the same name.

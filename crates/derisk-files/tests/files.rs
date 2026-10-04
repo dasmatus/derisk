@@ -119,6 +119,24 @@ fn copies_trees_and_keeps_links() {
 }
 
 #[test]
+fn trash_tightens_directories_an_earlier_version_made() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("trash-upgrade");
+    for sub in ["Trash/files", "Trash/info"] {
+        fs::create_dir_all(dir.0.join(sub)).unwrap();
+    }
+    for sub in ["Trash", "Trash/files", "Trash/info"] {
+        fs::set_permissions(dir.0.join(sub), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let file = dir.file("a.txt", 1);
+    Trash::at(dir.0.join("Trash")).put(&file).unwrap();
+    for sub in ["Trash", "Trash/files", "Trash/info"] {
+        let mode = fs::metadata(dir.0.join(sub)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{sub}");
+    }
+}
+
+#[test]
 fn trash_records_the_original_path() {
     let dir = TempDir::new("trash");
     let trash = Trash::at(dir.0.join("Trash"));
