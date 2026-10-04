@@ -3847,6 +3847,7 @@ dependencies = [
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Faccessibility-computer-use-yl6pzm#e394095c97c33202959eee2785332550bee834eb"
 dependencies = [
  "egui",
  "gpui",
@@ -3858,6 +3859,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components"
 version = "0.1.0"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Faccessibility-computer-use-yl6pzm#e394095c97c33202959eee2785332550bee834eb"
 dependencies = [
  "egui",
  "mcsapi-ui",
@@ -3866,6 +3868,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components-gpui"
 version = "0.1.0"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Faccessibility-computer-use-yl6pzm#e394095c97c33202959eee2785332550bee834eb"
 dependencies = [
  "gpui",
  "libc",
@@ -3877,6 +3880,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Faccessibility-computer-use-yl6pzm#e394095c97c33202959eee2785332550bee834eb"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3892,14 +3896,17 @@ dependencies = [
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Faccessibility-computer-use-yl6pzm#e394095c97c33202959eee2785332550bee834eb"
 
 [[package]]
 name = "mcsapi-theme"
 version = "0.1.0"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Faccessibility-computer-use-yl6pzm#e394095c97c33202959eee2785332550bee834eb"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
+source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Faccessibility-computer-use-yl6pzm#e394095c97c33202959eee2785332550bee834eb"
 dependencies = [
  "egui",
  "mcsapi",
