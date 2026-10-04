@@ -260,6 +260,31 @@ To try them in one window without the compositor:
 $ cargo run -p derisk-apps --features preview --bin derisk-preview -- org.derisk.files
 ```
 
+### GPUI
+
+derisk is moving from egui to [GPUI](https://www.gpui.rs). `derisk-gpui`
+draws the ported apps (so far the Calculator) as their own Wayland clients,
+in the desktop theme, and follows theme changes while running. When the
+`derisk-gpui` binary sits next to `derisk`, the session opens ported apps
+with it; otherwise they run in-process with egui as before.
+
+```console
+$ cargo build -p derisk-gpui --features gpui
+$ cargo run -p derisk-gpui --features gpui -- org.derisk.calculator
+```
+
+GPUI cannot draw inside the compositor, so the shell's chrome is still egui.
+GPUI panels and overlays run as the compositor's runtime clients: it starts
+them on a private connection and places their windows by the role given on
+the command line, which a client cannot choose for itself. Panels keep
+windows out of their strip; an overlay covers the screen and takes every key.
+Both come back if they exit.
+
+```console
+$ derisk session --runtime panel:bottom:48 "my-gpui-dock"
+$ derisk session --runtime overlay "my-gpui-launcher"
+```
+
 ## Building
 
 Requires Rust 1.95 and the system libraries mcsapi links against, for
