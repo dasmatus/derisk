@@ -132,12 +132,14 @@ first); unit actions only apply to units that are currently failed.
   unlocks a homed home area, and runs the session command as the user. When
   the session ends the greeter comes back. The root half draws nothing; the
   greeter talks to it over greetd's protocol on a socket only the greeter
-  user can open, so `derisk greeter` also runs unchanged under greetd. Both
-  run nested for now, so each runs inside cage:
+  user can open, so `derisk greeter` also runs unchanged under greetd. The
+  greeter and the session each drive the display themselves, through
+  DRM/KMS, libinput and logind, whenever there is no Wayland or X11 session
+  to nest in (`MCSAPI_BACKEND=kms` or `=winit` decides instead):
 
   ```console
   # derisk display-manager --vt 1 -- \
-      cage -s -- derisk greeter -- cage -s -- derisk session --execute
+      derisk greeter -- derisk session --execute
   ```
 
   It needs a `derisk-greeter` system user and the two PAM services in

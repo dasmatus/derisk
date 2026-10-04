@@ -1,7 +1,8 @@
 //! `derisk greeter`: the lock screen as a login screen, for greetd.
 //!
-//! greetd runs this as its greeter (inside cage, until derisk drives a TTY on
-//! its own). It shows the lock screen's look over an empty output, asks who
+//! greetd, or `derisk display-manager`, runs this as its greeter, straight on
+//! the seat's VT (mcsapi-compositor drives the display itself when there is no
+//! session to nest in). It shows the lock screen's look over an empty output, asks who
 //! is logging in, relays PAM's questions from greetd, and once greetd has
 //! authenticated the user asks it to start the session command and exits;
 //! greetd starts the session when the greeter is gone.

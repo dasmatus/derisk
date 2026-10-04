@@ -4,8 +4,9 @@
 //! It runs as root from a system service, one per seat, and does only what
 //! needs root: PAM and starting sessions. It draws nothing. Each round it
 //!
-//! 1. starts the greeter (`derisk greeter`, in cage) as an unprivileged user,
-//!    in a logind session of class `greeter` on the seat's VT;
+//! 1. starts the greeter (`derisk greeter`) as an unprivileged user, in a
+//!    logind session of class `greeter` on the seat's VT, where it takes the
+//!    display and input devices from logind;
 //! 2. serves greetd's protocol to it over a socket only that user can open
 //!    (`$GREETD_SOCK`), running `pam_authenticate` for whoever it names and
 //!    relaying PAM's prompts as the conversation;

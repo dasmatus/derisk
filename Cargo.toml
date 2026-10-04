@@ -9,14 +9,14 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#24 (a lock cancels the held press; it builds on #23's
-# frame pacing by refresh rate and VRR) merges, every mcsapi crate comes from
-# its branch so the apps and the compositor share one mcsapi-ui. Then drop the
-# `branch` keys and run `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-cancels-pointer" }
+# Until dasmatus/mcsapi#31 (the compositor on the bare seat, DRM/KMS; it builds
+# on #24's lock cancelling the held press and #23's frame pacing) merges, every
+# mcsapi crate comes from its branch so the apps and the compositor share one
+# mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
+mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-screen-greeter-9i89ht" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-screen-greeter-9i89ht" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-screen-greeter-9i89ht" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-screen-greeter-9i89ht" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
@@ -53,6 +53,9 @@ host = [
     "dep:derisk-apps",
     "dep:libc",
     "dep:mcsapi-compositor",
+    # The display manager starts the login screen and the session on the
+    # bare seat, with no compositor underneath to nest in.
+    "mcsapi-compositor/kms",
     "dep:mcsapi-runtime",
 ]
 
