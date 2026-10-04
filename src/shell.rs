@@ -1,7 +1,10 @@
 //! Shell state on top of mcsapi: tiling plus floating, snapped and minimized
 //! windows, Windows-style dragging, and the overview, menu and tray models.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use mcsapi::{Desktop, Geometry, Layout, WindowId, WorkspaceId};
 use serde::Serialize;
@@ -9,6 +12,8 @@ use serde::Serialize;
 use crate::{
     action::{Action, Effect, LayoutKind},
     adaptive::{FormFactor, Habits, Profile},
+    assistant,
+    conversation::{Conversation, Source, StepRef, StepStatus},
     decorations::{Button, ClickTracker, Hit},
     effects::{Effects, Look},
     geom::{Point, Rect, centered, contains, inset, rect},
@@ -20,12 +25,12 @@ use crate::{
     tray::Tray,
 };
 
-/// Most workspaces open at once (macOS allows 16 desktops too).
-///
-/// Workspaces are dynamic: the shell starts with one, a number one past the
-/// last opens a new one, and workspaces left empty are closed, renumbering
-/// the rest like macOS Spaces.
-pub const MAX_WORKSPACES: u64 = 16;
+/// A window action waiting for a launched app's window, with the
+/// conversation step it reports to.
+type Deferred = (Action, Option<StepRef>);
+
+/// Maximum number of workspaces.
+pub const MAX_WORKSPACES: u64 = 9;
 
 /// Pointer travel, in logical pixels, before a title bar press becomes a drag.
 pub const DRAG_THRESHOLD: i32 = 6;
@@ -49,6 +54,13 @@ pub enum Error {
     UnknownTrayItem(String),
     /// Unit actions only apply to currently failed user units.
     UnknownUnit(String),
+    /// The path is not an absolute path to an existing, non-executable file
+    /// or folder.
+    NotOpenable(String),
+    /// The assistant did not understand this request.
+    NotUnderstood(String),
+    /// Not a valid desktop action ID.
+    UnknownAction(String),
 }
 
 impl std::fmt::Display for Error {
@@ -67,6 +79,9 @@ impl std::fmt::Display for Error {
             Self::NotLaunchable(app) => write!(f, "not a launchable app name: {app:?}"),
             Self::UnknownTrayItem(id) => write!(f, "unknown tray item: {id:?}"),
             Self::UnknownUnit(unit) => write!(f, "not a failed user unit: {unit:?}"),
+            Self::NotOpenable(path) => write!(f, "cannot open {path:?}"),
+            Self::NotUnderstood(text) => write!(f, "I don't know how to \"{text}\""),
+            Self::UnknownAction(id) => write!(f, "not a desktop action ID: {id:?}"),
         }
     }
 }
@@ -189,6 +204,7 @@ pub enum PointerOutcome {
 #[derive(Debug)]
 pub struct Shell {
     desktop: Desktop,
+    open: Vec<WorkspaceId>,
     windows: BTreeMap<WindowId, WindowInfo>,
     stack: Vec<WindowId>,
     next_id: u64,
@@ -197,11 +213,9 @@ pub struct Shell {
     drag: Option<Drag>,
     clicks: ClickTracker,
     overview: bool,
-    /// Open workspaces in display order; workspace number `n` is `open[n - 1]`.
-    /// The other policy workspaces are empty and unused.
-    open: Vec<WorkspaceId>,
+    palette: bool,
     snap_assist: Option<SnapAssist>,
-    pending: Vec<(String, Vec<Action>)>,
+    pending: Vec<(String, Vec<Deferred>)>,
     /// Global menus registered by apps.
     pub menus: GlobalMenu,
     /// System tray items.
@@ -212,10 +226,29 @@ pub struct Shell {
     pub clock: Clock,
     /// Battery state, updated by the host.
     pub battery: Option<Battery>,
+    /// Natural-language requests and their progress (the palette's agent
+    /// conversation).
+    pub conversation: Conversation,
     /// Failed user units, updated by the host (see [`systemd::failed_units`]).
     pub failed_units: Vec<String>,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
+}
+
+/// Whether `path` is safe to hand to `xdg-open`: absolute, existing, and
+/// neither executable nor a `.desktop` launcher, so opening it cannot run a
+/// program.
+fn openable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    path.is_absolute()
+        && (meta.is_dir()
+            || (meta.is_file()
+                && meta.permissions().mode() & 0o111 == 0
+                && path.extension().is_none_or(|e| e != "desktop")))
 }
 
 impl Shell {
@@ -226,6 +259,7 @@ impl Shell {
         let first = desktop.active().id();
         let mut shell = Self {
             desktop,
+            open: vec![first],
             windows: BTreeMap::new(),
             stack: Vec::new(),
             next_id: 1,
@@ -234,9 +268,10 @@ impl Shell {
             drag: None,
             clicks: ClickTracker::default(),
             overview: false,
-            open: vec![first],
+            palette: false,
             snap_assist: None,
             pending: Vec::new(),
+            conversation: Conversation::default(),
             menus: GlobalMenu::default(),
             tray: Tray::default(),
             habits: Habits::default(),
@@ -367,6 +402,11 @@ impl Shell {
         self.overview
     }
 
+    /// Whether the command palette is showing.
+    pub fn palette_visible(&self) -> bool {
+        self.palette
+    }
+
     /// The pending Snap Assist offer, if any.
     pub fn snap_assist(&self) -> Option<&SnapAssist> {
         self.snap_assist.as_ref()
@@ -438,10 +478,17 @@ impl Shell {
             .position(|(app, _)| *app == key || key.contains(app.as_str()))
         {
             let (_, actions) = self.pending.remove(i);
-            for action in actions {
+            for (action, step) in actions {
                 // Queued actions are best-effort: the window may already be gone.
-                if let Ok(more) = self.apply(action) {
-                    effects.extend(more);
+                let status = match self.apply(action) {
+                    Ok(more) => {
+                        effects.extend(more);
+                        StepStatus::Done
+                    }
+                    Err(e) => StepStatus::Failed(e.to_string()),
+                };
+                if let Some(step) = step {
+                    self.conversation.set(step, status);
                 }
             }
         }
@@ -631,6 +678,16 @@ impl Shell {
                 self.habits.record(&app, self.clock.hour);
                 return Ok(vec![Effect::Launch { app }]);
             }
+            Action::LaunchAction { app, id } => {
+                if !systemd::is_launchable(&app) {
+                    return Err(Error::NotLaunchable(app));
+                }
+                if !crate::desktop::is_action_id(&id) {
+                    return Err(Error::UnknownAction(id));
+                }
+                self.habits.record(&app, self.clock.hour);
+                return Ok(vec![Effect::LaunchAction { app, id }]);
+            }
             Action::Close { window } => {
                 let window = self.target(window)?.get();
                 return Ok(vec![Effect::Close { window }]);
@@ -728,6 +785,16 @@ impl Shell {
                 self.overview = visible.unwrap_or(!self.overview);
                 self.drag = None;
             }
+            Action::Palette { visible } => {
+                self.palette = visible.unwrap_or(!self.palette);
+                self.drag = None;
+            }
+            Action::Open { path } => {
+                if !openable(Path::new(&path)) {
+                    return Err(Error::NotOpenable(path));
+                }
+                return Ok(vec![Effect::Open { path }]);
+            }
             Action::ActivateMenu { window, item } => {
                 let w = self.target(window)?;
                 if let Some(action) = menu::shell_action(&item, w.get()) {
@@ -770,21 +837,94 @@ impl Shell {
     /// left" acts on Firefox. Stops at the first error; earlier actions stay
     /// applied.
     pub fn run(&mut self, actions: impl IntoIterator<Item = Action>) -> Result<Vec<Effect>, Error> {
+        self.run_steps(actions.into_iter().collect(), None)
+    }
+
+    /// Interprets a natural-language request with the built-in assistant
+    /// and runs it, recording it in [`Shell::conversation`] with each
+    /// step's progress.
+    ///
+    /// `confirmed` confirms destructive session operations; only pass it
+    /// when the person explicitly confirmed this request (the palette asks
+    /// again first). Agents never do.
+    pub fn ask(
+        &mut self,
+        text: &str,
+        source: Source,
+        confirmed: bool,
+    ) -> Result<Vec<Effect>, Error> {
+        match assistant::interpret(text) {
+            Ok(actions) => {
+                let actions = actions
+                    .into_iter()
+                    .map(|a| match a {
+                        Action::Session { op, .. } => Action::Session {
+                            op,
+                            confirmed: confirmed || !op.is_destructive(),
+                        },
+                        other => other,
+                    })
+                    .collect();
+                self.run_recorded(text, source, actions)
+            }
+            Err(e) => {
+                self.conversation
+                    .not_understood(source, text, &e.to_string());
+                Err(Error::NotUnderstood(e.0))
+            }
+        }
+    }
+
+    /// Runs `actions` like [`Shell::run`], recording them as one turn of
+    /// the conversation under `request`.
+    pub fn run_recorded(
+        &mut self,
+        request: &str,
+        source: Source,
+        actions: Vec<Action>,
+    ) -> Result<Vec<Effect>, Error> {
+        let turn = self.conversation.start(source, request, &actions);
+        self.run_steps(actions, Some(turn))
+    }
+
+    fn run_steps(&mut self, actions: Vec<Action>, turn: Option<u64>) -> Result<Vec<Effect>, Error> {
+        let step = |i: usize| turn.map(|t| (t, i));
+        let total = actions.len();
         let mut effects = Vec::new();
-        let mut actions = actions.into_iter().peekable();
-        while let Some(action) = actions.next() {
-            if let Action::Launch { app } = &action {
-                let key = app.to_lowercase();
-                effects.extend(self.apply(action)?);
+        let mut actions = actions.into_iter().enumerate().peekable();
+        while let Some((i, action)) = actions.next() {
+            let launched = match &action {
+                Action::Launch { app } | Action::LaunchAction { app, .. } => {
+                    Some(app.strip_suffix(".desktop").unwrap_or(app).to_lowercase())
+                }
+                _ => None,
+            };
+            match self.apply(action) {
+                Ok(more) => {
+                    effects.extend(more);
+                    if let Some(s) = step(i) {
+                        self.conversation.set(s, StepStatus::Done);
+                    }
+                }
+                Err(e) => {
+                    if let Some(t) = turn {
+                        self.conversation
+                            .set((t, i), StepStatus::Failed(e.to_string()));
+                        for rest in i + 1..total {
+                            self.conversation.set((t, rest), StepStatus::Skipped);
+                        }
+                    }
+                    return Err(e);
+                }
+            }
+            if let Some(key) = launched {
                 let mut deferred = Vec::new();
-                while let Some(next) = actions.next_if(Action::targets_new_window) {
-                    deferred.push(next);
+                while let Some((j, next)) = actions.next_if(|(_, a)| a.targets_new_window()) {
+                    deferred.push((next, step(j)));
                 }
                 if !deferred.is_empty() {
                     self.pending.push((key, deferred));
                 }
-            } else {
-                effects.extend(self.apply(action)?);
             }
         }
         Ok(effects)

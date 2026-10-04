@@ -9,11 +9,16 @@
 //! - [`decorations`]: server-side title bars with the buttons on the left.
 //! - [`adaptive`]: phone/tablet/desktop profiles and learned app suggestions.
 //! - [`overview`]: the overview grid and its widgets.
+//! - [`desktop`]: installed apps and their actions from `.desktop` files.
 //! - [`menu`]: the global menu.
+//! - [`palette`]: the command palette (Super+Space), the center of the
+//!   workflow: apps, windows, commands, settings and files in one search,
+//!   with the assistant as the fallback.
 //! - [`tray`]: monochrome system tray icons.
 //! - [`animation`]: the startup animation.
 //! - [`effects`]: translucent, blurred panels and low power mode.
 //! - [`assistant`] and [`ipc`]: natural-language and agent control.
+//! - [`conversation`]: requests and their progress, shown in the palette.
 //! - [`keys`]: keyboard shortcuts.
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
 //!   journald, logind session actions and focus-aware resource weights.
@@ -37,13 +42,16 @@ pub mod action;
 pub mod adaptive;
 pub mod animation;
 pub mod assistant;
+pub mod conversation;
 pub mod decorations;
+pub mod desktop;
 pub mod effects;
 pub mod geom;
 pub mod ipc;
 pub mod keys;
 pub mod menu;
 pub mod overview;
+pub mod palette;
 pub mod shell;
 pub mod snap;
 pub mod systemd;

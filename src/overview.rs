@@ -24,16 +24,13 @@ pub enum Widget {
     Suggestions,
     /// A scratch pad.
     Notes,
-    /// Natural-language prompt for the built-in assistant.
-    Assistant,
     /// Failed systemd user units, with restart/reset buttons.
     Units,
 }
 
 impl Widget {
     /// The default widget board.
-    pub const DEFAULT: [Self; 7] = [
-        Self::Assistant,
+    pub const DEFAULT: [Self; 6] = [
         Self::Clock,
         Self::Suggestions,
         Self::Units,

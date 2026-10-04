@@ -1,0 +1,34 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+GenericName=System Settings
+Comment=Appearance, desktop, input, notifications, and power
+Keywords=preferences;theme;accent;keyboard;power;
+Icon=preferences-system
+Exec=derisk launch org.derisk.settings
+Categories=Settings;
+Actions=appearance;desktop;input;notifications;power;about;
+
+[Desktop Action appearance]
+Name=Appearance
+Exec=derisk launch org.derisk.settings --action appearance
+
+[Desktop Action desktop]
+Name=Desktop
+Exec=derisk launch org.derisk.settings --action desktop
+
+[Desktop Action input]
+Name=Keyboard & Pointer
+Exec=derisk launch org.derisk.settings --action input
+
+[Desktop Action notifications]
+Name=Notifications
+Exec=derisk launch org.derisk.settings --action notifications
+
+[Desktop Action power]
+Name=Power
+Exec=derisk launch org.derisk.settings --action power
+
+[Desktop Action about]
+Name=About
+Exec=derisk launch org.derisk.settings --action about

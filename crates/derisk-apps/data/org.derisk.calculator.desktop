@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Calculator
+Comment=Arithmetic and scientific functions
+Keywords=math;calc;numbers;
+Icon=accessories-calculator
+Exec=derisk launch org.derisk.calculator
+Categories=Utility;Calculator;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=derisk launch org.derisk.calculator --action new-window

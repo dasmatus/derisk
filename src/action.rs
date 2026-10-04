@@ -27,6 +27,14 @@ pub enum Action {
         /// App ID or command name.
         app: String,
     },
+    /// Run one of an app's desktop actions (performed by the host), such as
+    /// Firefox's `new-private-window`.
+    LaunchAction {
+        /// Desktop file ID (`firefox.desktop`) or core app ID.
+        app: String,
+        /// Action ID from the app's `.desktop` file.
+        id: String,
+    },
     /// Ask a window to close (performed by the host).
     Close {
         /// Target window.
@@ -113,6 +121,20 @@ pub enum Action {
         #[serde(default)]
         visible: Option<bool>,
     },
+    /// Show, hide (`Some`) or toggle (`None`) the command palette.
+    Palette {
+        /// Desired visibility.
+        #[serde(default)]
+        visible: Option<bool>,
+    },
+    /// Open a file or folder with its default application.
+    ///
+    /// Only absolute paths to existing, non-executable files and folders are
+    /// accepted, so this cannot be used to run programs.
+    Open {
+        /// Absolute path.
+        path: String,
+    },
     /// Choose a global-menu item.
     ActivateMenu {
         /// Window owning the menu.
@@ -151,6 +173,66 @@ pub enum Action {
 }
 
 impl Action {
+    /// A short human description, for the palette's agent conversation.
+    pub fn label(&self) -> String {
+        let which = |window: &Option<u64>| match window {
+            Some(w) => format!("window {w}"),
+            None => "the window".to_owned(),
+        };
+        let zone = |z: SnapZone| match z {
+            SnapZone::Left => "left",
+            SnapZone::Right => "right",
+            SnapZone::TopLeft => "top left",
+            SnapZone::TopRight => "top right",
+            SnapZone::BottomLeft => "bottom left",
+            SnapZone::BottomRight => "bottom right",
+            SnapZone::Maximize => "full screen",
+        };
+        match self {
+            Self::Launch { app } => format!("Open {app}"),
+            Self::LaunchAction { app, id } => format!("Run {app} action {id}"),
+            Self::Close { window } => format!("Close {}", which(window)),
+            Self::Focus { window } => format!("Focus window {window}"),
+            Self::FocusNext => "Focus the next window".into(),
+            Self::FocusPrevious => "Focus the previous window".into(),
+            Self::Promote => "Make the window the main tile".into(),
+            Self::Snap { window, zone: z } => format!("Snap {} {}", which(window), zone(*z)),
+            Self::Nudge { window, direction } => {
+                format!(
+                    "Nudge {} {}",
+                    which(window),
+                    format!("{direction:?}").to_lowercase()
+                )
+            }
+            Self::Tile { window } => format!("Tile {}", which(window)),
+            Self::Float { window } => format!("Float {}", which(window)),
+            Self::ToggleMaximize { window } => format!("Maximize or restore {}", which(window)),
+            Self::Minimize { window } => format!("Minimize {}", which(window)),
+            Self::Restore { window } => format!("Restore window {window}"),
+            Self::SwitchWorkspace { workspace } => format!("Go to workspace {workspace}"),
+            Self::MoveToWorkspace { window, workspace } => {
+                format!("Move {} to workspace {workspace}", which(window))
+            }
+            Self::SetLayout { layout } => {
+                format!("Use the {} layout", format!("{layout:?}").to_lowercase())
+            }
+            Self::Overview {
+                visible: Some(true),
+            } => "Show the overview".into(),
+            Self::Overview {
+                visible: Some(false),
+            } => "Hide the overview".into(),
+            Self::Overview { visible: None } => "Toggle the overview".into(),
+            Self::Palette { .. } => "Toggle the command palette".into(),
+            Self::Open { path } => format!("Open {path}"),
+            Self::ActivateMenu { item, .. } => format!("Choose menu item {item}"),
+            Self::Session { op, .. } => format!("{op:?}"),
+            Self::ActivateTray { id, .. } => format!("Activate tray item {id}"),
+            Self::RestartUnit { unit } => format!("Restart {unit}"),
+            Self::ResetFailed { unit } => format!("Dismiss {unit}"),
+        }
+    }
+
     /// Whether this action operates on "the focused window" implicitly, so
     /// after a `Launch` it should wait for the launched app's window.
     pub fn targets_new_window(&self) -> bool {
@@ -178,10 +260,22 @@ pub enum Effect {
         /// App ID or command name.
         app: String,
     },
+    /// Run an app's desktop action.
+    LaunchAction {
+        /// Desktop file ID or core app ID.
+        app: String,
+        /// Action ID.
+        id: String,
+    },
     /// Send the client a close request (e.g. `xdg_toplevel.close`).
     Close {
         /// Window.
         window: u64,
+    },
+    /// Open a file or folder with its default application (`xdg-open`).
+    Open {
+        /// Absolute path, checked by the shell.
+        path: String,
     },
     /// Forward a global-menu activation to the app (e.g. dbusmenu `Event`).
     MenuActivated {

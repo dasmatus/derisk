@@ -5,29 +5,32 @@
 //! 1. [`ShellUi::paint_decorations`] below client surfaces (title bars).
 //! 2. Client surfaces, at [`crate::shell::WindowPlacement::client`].
 //! 3. [`ShellUi::show`] above them: top bar with global menu and tray, snap
-//!    preview and Snap Assist, the overview with widgets, and the startup
-//!    animation.
+//!    preview and Snap Assist, the overview with widgets, the command
+//!    palette, and the startup animation.
 //!
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
 
+use std::path::PathBuf;
+
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Id, Layout, Order, Painter, Pos2, Rect, RichText,
-    Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, pos2, vec2,
+    Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
+    Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, pos2,
+    vec2,
 };
 use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 
 use crate::{
     action::Action,
     animation::{StartupAnimation, StartupFrame},
-    assistant,
+    conversation::{Source, StepStatus, Turn},
     decorations::Button,
     effects::{BlurArea, Look},
     geom::inset,
     menu::{Menu, MenuEntry},
     overview::{OverviewLayout, Widget, fit, grid, row},
+    palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
-    systemd::SessionOp,
 };
 
 /// Converts a logical geometry to an egui rectangle.
@@ -76,16 +79,92 @@ pub struct ShellUi {
     pub theme: Theme,
     /// The startup animation.
     pub startup: StartupAnimation,
-    assistant: String,
-    reply: Option<String>,
     notes: String,
     overview_open: bool,
     /// Window being dragged in the overview, toward a workspace.
     overview_drag: Option<WindowId>,
     tray: Option<(u64, Vec<TextureHandle>)>,
+    /// The command palette.
+    pub palette: PaletteUi,
+    reply: Option<String>,
     reduced_motion: bool,
     look: Look,
     blurs: Vec<BlurArea>,
+}
+
+/// Command palette state. The host fills [`PaletteUi::extra`] and
+/// [`PaletteUi::files`]; the rest is kept between openings.
+#[derive(Default)]
+pub struct PaletteUi {
+    /// Host-provided entries: apps, settings pages.
+    pub extra: Vec<Entry>,
+    /// Indexed files (see [`palette::index_files`]).
+    pub files: Vec<PathBuf>,
+    /// What was chosen before, for ranking.
+    pub history: History,
+    /// Text to start the next opening with, instead of an empty query.
+    pub preset: Option<String>,
+    /// Open on the conversation next time instead of the search.
+    pub chat_next: bool,
+    chat: bool,
+    seen: u64,
+    cleared: u64,
+    asks: Vec<Ask>,
+    query: String,
+    shown_query: String,
+    selected: usize,
+    armed: Option<String>,
+    message: Option<String>,
+    open: bool,
+}
+
+/// Rows the palette shows at once before scrolling.
+const PALETTE_ROWS: usize = 9;
+const PALETTE_ROW_HEIGHT: f32 = 40.0;
+
+fn limit_palette_hits(entries: &[Entry], hits: &[usize], limit: usize) -> Vec<usize> {
+    if hits.len() <= limit {
+        return hits.to_vec();
+    }
+
+    let mut categories: Vec<(Category, Vec<usize>)> = Vec::new();
+    for &hit in hits {
+        let category = entries[hit].category;
+        if let Some((_, category_hits)) = categories
+            .iter_mut()
+            .find(|(existing, _)| *existing == category)
+        {
+            category_hits.push(hit);
+        } else {
+            categories.push((category, vec![hit]));
+        }
+    }
+
+    let base_quota = limit / categories.len();
+    let extra_quota = limit % categories.len();
+    let mut included = vec![false; entries.len()];
+    let mut included_count = 0;
+    for (index, (_, category_hits)) in categories.iter().enumerate() {
+        let quota = base_quota + usize::from(index < extra_quota);
+        for &hit in category_hits.iter().take(quota) {
+            included[hit] = true;
+            included_count += 1;
+        }
+    }
+    for &hit in hits {
+        if included_count == limit {
+            break;
+        }
+        if !included[hit] {
+            included[hit] = true;
+            included_count += 1;
+        }
+    }
+
+    categories
+        .into_iter()
+        .flat_map(|(_, category_hits)| category_hits.into_iter().filter(|&hit| included[hit]))
+        .collect()
 }
 
 impl ShellUi {
@@ -98,12 +177,12 @@ impl ShellUi {
                 reduced_motion,
                 bar_height: shell.profile().top_bar as f32,
             },
-            assistant: String::new(),
-            reply: None,
             notes: String::new(),
             overview_open: false,
             overview_drag: None,
             tray: None,
+            palette: PaletteUi::default(),
+            reply: None,
             reduced_motion,
             look: shell.look(),
             blurs: Vec::new(),
@@ -235,6 +314,10 @@ impl ShellUi {
             self.overview_drag = None;
         }
         self.top_bar(ui, shell, frame, &mut actions);
+        if shell.palette_visible() {
+            self.palette(ui, shell, &mut actions);
+        }
+        self.palette.open = shell.palette_visible();
         if !frame.done {
             let painter = ui.ctx().layer_painter(egui::LayerId::new(
                 Order::Foreground,
@@ -343,7 +426,20 @@ impl ShellUi {
                 {
                     actions.push(Action::Overview { visible: None });
                 }
-                ui.menu_button("derisk", |ui| system_menu(ui, actions));
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("🔍  Search or ask…").color(self.theme.border),
+                        )
+                        .fill(self.theme.surface)
+                        .stroke(Stroke::new(1.0, self.theme.border))
+                        .corner_radius(8),
+                    )
+                    .on_hover_text("Command palette (Super+Space)")
+                    .clicked()
+                {
+                    actions.push(Action::Palette { visible: None });
+                }
                 if let Some(w) = focused {
                     let (app, title) = shell.window_label(w).unwrap_or_default();
                     // Reverse-DNS app IDs (org.derisk.files) read better as the title.
@@ -370,9 +466,51 @@ impl ShellUi {
                             b.percent
                         ));
                     }
-                    if !shell.failed_units.is_empty() {
-                        ui.label(format!("⚠ {}", shell.failed_units.len()))
-                            .on_hover_text("Failed user services, see the overview");
+                    if !shell.failed_units.is_empty()
+                        && ui
+                            .add(
+                                egui::Button::new(format!("⚠ {}", shell.failed_units.len()))
+                                    .frame(false),
+                            )
+                            .on_hover_text("Failed user services: restart or dismiss them")
+                            .clicked()
+                    {
+                        self.palette.preset = Some("> failed".to_owned());
+                        actions.push(Action::Palette {
+                            visible: Some(true),
+                        });
+                    }
+                    // Agent activity the person has not looked at yet.
+                    let unseen = shell
+                        .conversation
+                        .turns()
+                        .filter(|t| t.id > self.palette.seen && t.source == Source::Agent)
+                        .count();
+                    let working = shell.conversation.turns().any(|t| !t.is_settled());
+                    if (unseen > 0 || working)
+                        && ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(if unseen > 0 {
+                                        format!("✨ {unseen}")
+                                    } else {
+                                        "✨".to_owned()
+                                    })
+                                    .color(self.theme.accent),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text(if working {
+                                "derisk is working on a request"
+                            } else {
+                                "Agent activity: open the conversation"
+                            })
+                            .clicked()
+                    {
+                        self.palette.chat_next = true;
+                        actions.push(Action::Palette {
+                            visible: Some(true),
+                        });
                     }
                     self.tray_icons(ui, shell, height, actions);
                 });
@@ -437,6 +575,25 @@ impl ShellUi {
     }
 
     fn overview(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        // Typing on the overview (outside the notes) asks or searches in the
+        // palette, which is where the assistant lives.
+        if !shell.palette_visible() && ui.ctx().memory(|m| m.focused().is_none()) {
+            let typed: String = ui.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Text(t) => Some(t.as_str()),
+                        _ => None,
+                    })
+                    .collect()
+            });
+            if !typed.trim().is_empty() {
+                self.palette.preset = Some(typed);
+                actions.push(Action::Palette {
+                    visible: Some(true),
+                });
+            }
+        }
         let area = shell.work_area();
         self.frost(to_rect(area), 0);
         ui.painter().rect_filled(
@@ -682,23 +839,6 @@ impl ShellUi {
     fn widget(&mut self, ui: &mut Ui, shell: &Shell, widget: Widget, actions: &mut Vec<Action>) {
         let theme = self.theme;
         match widget {
-            Widget::Assistant => card(ui, &theme, |ui| {
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.assistant)
-                        .hint_text("Ask derisk… e.g. \"open firefox and snap it left\"")
-                        .desired_width(f32::INFINITY),
-                );
-                // Opening the overview focuses the assistant, so typing just works.
-                if !self.overview_open {
-                    response.request_focus();
-                }
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    self.submit(actions);
-                }
-                if let Some(reply) = &self.reply {
-                    ui.label(RichText::new(reply).color(theme.border));
-                }
-            }),
             Widget::Clock => card(ui, &theme, |ui| {
                 ui.label(RichText::new(shell.clock.time_label()).size(44.0).strong());
                 ui.label(shell.clock.date_label());
@@ -764,33 +904,491 @@ impl ShellUi {
         ui.add_space(10.0);
     }
 
-    /// Interprets the assistant prompt typed at the console.
-    fn submit(&mut self, actions: &mut Vec<Action>) {
-        match assistant::interpret(&self.assistant) {
-            Ok(parsed) => {
-                self.reply = Some(format!("On it ({} step(s)).", parsed.len()));
-                // Get out of the way so the result is visible, unless the
-                // request was about the overview itself.
-                let close = !parsed.iter().any(|a| matches!(a, Action::Overview { .. }));
-                // Typed by the user at the console, so session operations count
-                // as confirmed. Agents over IPC must confirm explicitly.
-                actions.extend(parsed.into_iter().map(|a| match a {
-                    Action::Session { op, .. } => Action::Session {
-                        op,
-                        confirmed: true,
-                    },
-                    other => other,
-                }));
-                if close {
-                    actions.push(Action::Overview {
-                        visible: Some(false),
-                    });
-                }
-                self.assistant.clear();
+    /// The command palette: a search box over [`palette::entries`] with the
+    /// assistant as fallback, and the agent conversation (chat view).
+    fn palette(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        let theme = self.theme;
+        let state = &mut self.palette;
+        let mut cursor_to_end = false;
+        if !state.open {
+            state.query = state.preset.take().unwrap_or_default();
+            // The field only gets focus next frame; keep what is typed now.
+            let typed: String = ui.input_mut(|i| {
+                let mut typed = String::new();
+                i.events.retain(|e| match e {
+                    egui::Event::Text(t) => {
+                        typed.push_str(t);
+                        false
+                    }
+                    _ => true,
+                });
+                typed
+            });
+            state.query.push_str(&typed);
+            cursor_to_end = !state.query.is_empty();
+            state.chat = std::mem::take(&mut state.chat_next);
+            state.shown_query.clear();
+            state.selected = 0;
+            state.armed = None;
+            state.message = None;
+        }
+        // `?` switches to the conversation; the rest is the request.
+        if !state.chat
+            && let Some(rest) = state.query.trim_start().strip_prefix('?')
+        {
+            state.query = rest.trim_start().to_owned();
+            state.chat = true;
+        }
+
+        let (entries, hits, ask) = if state.chat {
+            (Vec::new(), Vec::new(), None)
+        } else {
+            let entries = palette::entries(shell, &state.extra, &state.files);
+            let hits = palette::search(&entries, &state.query, &state.history);
+            let (scope, text) = palette::scope(&state.query);
+            // The assistant joins everything-searches; a request it does not
+            // understand only shows when nothing else matched, to say why.
+            let ask = (!text.is_empty() && scope == palette::Scope::All)
+                .then(|| palette::ask(&state.query))
+                .filter(|ask| !ask.actions.is_empty() || hits.is_empty());
+            (entries, hits, ask)
+        };
+        let mut rows: Vec<&Entry> = limit_palette_hits(&entries, &hits, 60)
+            .iter()
+            .map(|&i| &entries[i])
+            .collect();
+        if let Some(ask) = &ask {
+            if palette::prefer_assistant(&entries, &hits, &state.query) {
+                rows.insert(0, ask);
+            } else {
+                rows.push(ask);
             }
-            Err(e) => self.reply = Some(e.to_string()),
+        }
+        if state.query != state.shown_query {
+            state.shown_query = state.query.clone();
+            state.selected = 0;
+            state.armed = None;
+            if !state.chat {
+                state.message = None;
+            }
+        }
+        state.selected = state.selected.min(rows.len().saturating_sub(1));
+
+        // Keys the text field would otherwise eat.
+        let empty = state.query.is_empty();
+        let (down, up, enter, escape, back) = ui.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::NONE, Key::ArrowDown)
+                    || i.consume_key(Modifiers::NONE, Key::Tab)
+                    || i.consume_key(Modifiers::CTRL, Key::N),
+                i.consume_key(Modifiers::NONE, Key::ArrowUp)
+                    || i.consume_key(Modifiers::SHIFT, Key::Tab)
+                    || i.consume_key(Modifiers::CTRL, Key::P),
+                i.consume_key(Modifiers::NONE, Key::Enter),
+                i.consume_key(Modifiers::NONE, Key::Escape),
+                state.chat && empty && i.consume_key(Modifiers::NONE, Key::Backspace),
+            )
+        });
+        if back {
+            state.chat = false;
+            state.message = None;
+        }
+        if !rows.is_empty() {
+            if down {
+                state.selected = (state.selected + 1) % rows.len();
+            }
+            if up {
+                state.selected = (state.selected + rows.len() - 1) % rows.len();
+            }
+        }
+        if escape {
+            actions.push(Action::Palette {
+                visible: Some(false),
+            });
+            return;
+        }
+
+        let screen = to_rect(shell.output());
+        // Dim the desktop; clicking it closes the palette.
+        let backdrop = egui::Area::new(Id::new("derisk-palette-backdrop"))
+            .order(Order::Middle)
+            .fixed_pos(screen.min)
+            .show(ui.ctx(), |ui| {
+                let (r, response) = ui.allocate_exact_size(screen.size(), Sense::click());
+                ui.painter()
+                    .rect_filled(r, 0, Color32::from_black_alpha(110));
+                response.clicked()
+            })
+            .inner;
+        if backdrop {
+            actions.push(Action::Palette {
+                visible: Some(false),
+            });
+            return;
+        }
+
+        let width = (screen.width() - 32.0).clamp(240.0, 680.0);
+        let top =
+            screen.top() + (screen.height() * 0.14).max(shell.profile().top_bar as f32 + 16.0);
+        let mut chosen = (enter && !state.chat).then_some(state.selected);
+        let mut new_conversation = false;
+        egui::Area::new(Id::new("derisk-palette"))
+            .order(Order::Foreground)
+            .fixed_pos(pos2(screen.center().x - width / 2.0, top))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(theme.surface)
+                    .stroke(Stroke::new(1.0, theme.border))
+                    .corner_radius(14)
+                    .inner_margin(10)
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 12],
+                        blur: 40,
+                        spread: 0,
+                        color: Color32::from_black_alpha(140),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_width(width - 20.0);
+                        ui.visuals_mut().override_text_color = Some(theme.foreground);
+                        ui.horizontal(|ui| {
+                            if state.chat {
+                                ui.label(RichText::new("✨").size(18.0).color(theme.accent));
+                            }
+                            let input = ui.add(
+                                egui::TextEdit::singleline(&mut state.query)
+                                    .hint_text(if state.chat {
+                                        "Ask derisk to do something…"
+                                    } else {
+                                        "Search apps, windows, commands, files… or ask derisk"
+                                    })
+                                    .font(FontId::proportional(18.0))
+                                    .frame(egui::Frame::NONE)
+                                    .margin(vec2(6.0, 8.0))
+                                    .desired_width(f32::INFINITY),
+                            );
+                            input.request_focus();
+                            // Preset text (typed on the overview, or a
+                            // filter) continues where it ends.
+                            if cursor_to_end
+                                && let Some(mut edit) =
+                                    egui::text_edit::TextEditState::load(ui.ctx(), input.id)
+                            {
+                                let end = egui::text::CCursor::new(state.query.chars().count());
+                                edit.cursor.set_char_range(Some(
+                                    egui::text_selection::CCursorRange::one(end),
+                                ));
+                                edit.store(ui.ctx(), input.id);
+                            }
+                        });
+                        ui.add_space(4.0);
+                        ui.painter().hline(
+                            ui.min_rect().x_range(),
+                            ui.cursor().top(),
+                            Stroke::new(1.0, theme.border),
+                        );
+                        ui.add_space(6.0);
+                        if state.chat {
+                            new_conversation = conversation(ui, &theme, shell, state.cleared);
+                        } else {
+                            if rows.is_empty() {
+                                ui.label(
+                                    RichText::new("Type to search, or ask in plain words.")
+                                        .color(theme.border),
+                                );
+                            }
+                            let selected = state.selected;
+                            egui::ScrollArea::vertical()
+                                .max_height(PALETTE_ROWS as f32 * PALETTE_ROW_HEIGHT + 40.0)
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    let mut heading = None;
+                                    for (i, entry) in rows.iter().enumerate() {
+                                        if heading != Some(entry.category) {
+                                            heading = Some(entry.category);
+                                            ui.label(
+                                                RichText::new(entry.category.heading())
+                                                    .size(11.0)
+                                                    .color(theme.border),
+                                            );
+                                        }
+                                        let response =
+                                            palette_row(ui, &theme, entry, i == selected);
+                                        if i == selected && (up || down) {
+                                            response.scroll_to_me(None);
+                                        }
+                                        if response.clicked() {
+                                            chosen = Some(i);
+                                        }
+                                    }
+                                });
+                        }
+                        if let Some(message) = &state.message {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(message).color(theme.accent));
+                        }
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(if state.chat {
+                                "Enter ask   Backspace back to search   Esc close"
+                            } else {
+                                "⬆⬇ select   Enter run   Esc close   > commands   @ windows   / files   ? ask"
+                            })
+                            .size(11.0)
+                            .color(theme.border),
+                        );
+                    });
+            });
+
+        if state.chat {
+            state.seen = shell.conversation.last_id().unwrap_or(0).max(state.seen);
+            if new_conversation {
+                state.cleared = state.seen;
+            }
+            if enter && !state.query.trim().is_empty() {
+                let text = state.query.trim().to_owned();
+                let preview = palette::ask(&text);
+                if preview.confirm && state.armed.as_deref() != Some(text.as_str()) {
+                    state.armed = Some(text);
+                    state.message =
+                        Some("This ends your session. Press Enter again to go ahead.".into());
+                    return;
+                }
+                let confirmed = preview.confirm;
+                Self::send_ask(state, shell, &preview, text, confirmed, actions);
+            }
+            return;
+        }
+
+        let Some(entry) = chosen.and_then(|i| rows.get(i)).map(|e| (*e).clone()) else {
+            return;
+        };
+        if entry.actions.is_empty() {
+            // The assistant did not understand; say why and keep the text.
+            state.message = Some(entry.detail.clone());
+            return;
+        }
+        if entry.confirm && state.armed.as_deref() != Some(&entry.key()) {
+            state.armed = Some(entry.key());
+            state.message = Some(format!(
+                "Press Enter again to {}.",
+                entry.title.to_lowercase()
+            ));
+            return;
+        }
+        if entry.category == Category::Ask {
+            // Requests run in the conversation, which stays open to show
+            // their progress.
+            let text = palette::scope(&state.query).1.to_owned();
+            Self::send_ask(state, shell, &entry, text, entry.confirm, actions);
+            state.chat = true;
+            return;
+        }
+        state.history.record(&entry);
+        let touches_overview = entry
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::Overview { .. }));
+        actions.extend(entry.actions);
+        actions.push(Action::Palette {
+            visible: Some(false),
+        });
+        if shell.overview_visible() && !touches_overview {
+            actions.push(Action::Overview {
+                visible: Some(false),
+            });
         }
     }
+
+    /// Queues a request for the assistant and clears the field.
+    fn send_ask(
+        state: &mut PaletteUi,
+        shell: &Shell,
+        preview: &Entry,
+        text: String,
+        confirmed: bool,
+        actions: &mut Vec<Action>,
+    ) {
+        // Get the overview out of the way so results are visible, unless
+        // the request is about the overview itself.
+        if shell.overview_visible()
+            && !preview
+                .actions
+                .iter()
+                .any(|a| matches!(a, Action::Overview { .. }))
+        {
+            actions.push(Action::Overview {
+                visible: Some(false),
+            });
+        }
+        state.asks.push(Ask { text, confirmed });
+        state.query.clear();
+        state.shown_query.clear();
+        state.armed = None;
+        state.message = None;
+    }
+
+    /// Requests typed in the palette since the last call, for the host to
+    /// run with [`Shell::ask`] as [`Source::User`].
+    pub fn take_asks(&mut self) -> Vec<Ask> {
+        std::mem::take(&mut self.palette.asks)
+    }
+}
+
+/// A natural-language request typed in the palette.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Ask {
+    /// The request.
+    pub text: String,
+    /// The person confirmed a destructive session operation in it.
+    pub confirmed: bool,
+}
+
+/// The conversation transcript, newest at the bottom. Returns whether
+/// "New conversation" was clicked.
+fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool {
+    let turns: Vec<&Turn> = shell
+        .conversation
+        .turns()
+        .filter(|t| t.id > cleared)
+        .collect();
+    let mut clear = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Conversation").size(11.0).color(theme.border));
+        if !turns.is_empty() {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                clear = ui
+                    .add(egui::Button::new(RichText::new("New").size(11.0)).frame(false))
+                    .on_hover_text("Start a new conversation")
+                    .clicked();
+            });
+        }
+    });
+    if turns.is_empty() {
+        ui.label(
+            RichText::new(
+                "Ask in plain words, e.g. \"open calculator and snap it right, then go to workspace 2\". \
+                 Requests from other agents show up here too.",
+            )
+            .color(theme.border),
+        );
+        return clear;
+    }
+    egui::ScrollArea::vertical()
+        .max_height(PALETTE_ROWS as f32 * PALETTE_ROW_HEIGHT)
+        .auto_shrink([false, true])
+        .stick_to_bottom(true)
+        .show(ui, |ui| {
+            for turn in turns {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    let who = match turn.source {
+                        Source::User => "You",
+                        Source::Agent => "Agent",
+                    };
+                    ui.label(RichText::new(who).size(11.0).color(theme.accent));
+                    ui.label(RichText::new(&turn.request).strong());
+                });
+                for step in &turn.steps {
+                    let (icon, color) = match &step.status {
+                        StepStatus::Done => ("✔", theme.accent),
+                        StepStatus::Waiting => ("⟳", theme.border),
+                        StepStatus::Failed(_) => ("✖", button_color(Button::Close)),
+                        StepStatus::Skipped => ("·", theme.border),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0);
+                        ui.label(RichText::new(icon).color(color));
+                        ui.label(RichText::new(&step.label).color(
+                            if step.status == StepStatus::Skipped {
+                                theme.border
+                            } else {
+                                theme.foreground
+                            },
+                        ));
+                    });
+                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(12.0);
+                    let failed = turn.error.is_some()
+                        || turn
+                            .steps
+                            .iter()
+                            .any(|s| matches!(s.status, StepStatus::Failed(_)));
+                    ui.label(RichText::new(turn.reply()).color(if failed {
+                        button_color(Button::Close)
+                    } else {
+                        theme.border
+                    }));
+                });
+            }
+        });
+    clear
+}
+
+/// One palette row: icon, title, detail and shortcut hint.
+fn palette_row(ui: &mut Ui, theme: &Theme, entry: &Entry, selected: bool) -> egui::Response {
+    let (r, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), PALETTE_ROW_HEIGHT),
+        Sense::click(),
+    );
+    let painter = ui.painter_at(r);
+    if selected || response.hovered() {
+        painter.rect_filled(
+            r,
+            8,
+            theme
+                .accent
+                .gamma_multiply(if selected { 0.22 } else { 0.1 }),
+        );
+    }
+    let mid = r.center().y;
+    painter.text(
+        pos2(r.left() + 18.0, mid),
+        Align2::CENTER_CENTER,
+        &entry.icon,
+        FontId::proportional(16.0),
+        theme.foreground,
+    );
+    let shortcut_width = entry
+        .shortcut
+        .as_ref()
+        .map_or(0.0, |s| s.len() as f32 * 7.0 + 16.0);
+    let text_left = r.left() + 40.0;
+    let title_galley = painter.layout_no_wrap(
+        elide(
+            &entry.title,
+            (r.width() - 56.0 - shortcut_width) * 0.6,
+            15.0,
+        ),
+        FontId::proportional(15.0),
+        theme.foreground,
+    );
+    let title_width = title_galley.size().x;
+    painter.galley(
+        pos2(text_left, mid - title_galley.size().y / 2.0),
+        title_galley,
+        theme.foreground,
+    );
+    if !entry.detail.is_empty() {
+        let room = r.right() - shortcut_width - (text_left + title_width + 12.0);
+        painter.text(
+            pos2(text_left + title_width + 12.0, mid),
+            Align2::LEFT_CENTER,
+            elide(&entry.detail, room, 13.0),
+            FontId::proportional(13.0),
+            theme.border,
+        );
+    }
+    if let Some(shortcut) = &entry.shortcut {
+        painter.text(
+            pos2(r.right() - 10.0, mid),
+            Align2::RIGHT_CENTER,
+            shortcut,
+            FontId::monospace(12.0),
+            theme.border,
+        );
+    }
+    response
 }
 
 fn calendar(ui: &mut Ui, shell: &Shell, theme: &Theme) {
@@ -819,39 +1417,6 @@ fn calendar(ui: &mut Ui, shell: &Shell, theme: &Theme) {
                 }
             }
         });
-}
-
-fn system_menu(ui: &mut Ui, actions: &mut Vec<Action>) {
-    for (label, op) in [
-        ("Lock Screen", SessionOp::Lock),
-        ("Suspend", SessionOp::Suspend),
-        ("Hibernate", SessionOp::Hibernate),
-    ] {
-        if ui.button(label).clicked() {
-            actions.push(Action::Session {
-                op,
-                confirmed: false,
-            });
-            ui.close();
-        }
-    }
-    ui.separator();
-    for (label, op) in [
-        ("Log Out", SessionOp::Logout),
-        ("Restart", SessionOp::Reboot),
-        ("Shut Down", SessionOp::PowerOff),
-    ] {
-        // A nested confirmation keeps one stray click from ending the session.
-        ui.menu_button(label, |ui| {
-            if ui.button(format!("{label} now")).clicked() {
-                actions.push(Action::Session {
-                    op,
-                    confirmed: true,
-                });
-                ui.close();
-            }
-        });
-    }
 }
 
 fn menu_button(ui: &mut Ui, menu: &Menu, window: Option<u64>, actions: &mut Vec<Action>) {
@@ -952,5 +1517,30 @@ pub fn paint_startup(painter: &Painter, screen: Rect, frame: StartupFrame, theme
             })
             .collect();
         painter.line(points, Stroke::new(4.0, accent));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn palette_result_limit_keeps_each_matching_category() {
+        let mut entries: Vec<_> = (0..61)
+            .map(|n| Entry::new(Category::App, "", format!("App {n}"), vec![]))
+            .collect();
+        entries.push(Entry::new(Category::Window, "", "Window", vec![]));
+        entries.push(Entry::new(Category::Command, "", "Command", vec![]));
+
+        let hits: Vec<_> = (0..entries.len()).collect();
+        let limited = limit_palette_hits(&entries, &hits, 60);
+
+        assert_eq!(limited.len(), 60);
+        for category in [Category::App, Category::Window, Category::Command] {
+            assert!(
+                limited.iter().any(|&hit| entries[hit].category == category),
+                "{category:?} results should remain available"
+            );
+        }
     }
 }

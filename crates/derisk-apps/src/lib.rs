@@ -21,7 +21,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use mcsapi_runtime::{AppId, Error, InstanceId, Manifest, Runtime};
 use mcsapi_ui::{App, Theme, egui};
@@ -50,7 +50,11 @@ pub struct AppInfo {
     pub icon: &'static str,
     /// Search keywords.
     pub keywords: &'static [&'static str],
+    /// The app's `.desktop` file. Its `[Desktop Action]` groups are the
+    /// actions [`AppInfo::create_action`] accepts.
+    pub desktop_file: &'static str,
     create: fn() -> Box<dyn App>,
+    action: fn(&str) -> Option<Box<dyn App>>,
 }
 
 impl AppInfo {
@@ -67,6 +71,17 @@ impl AppInfo {
     /// Creates a fresh app object with its default state.
     pub fn create(&self) -> Box<dyn App> {
         (self.create)()
+    }
+
+    /// The desktop file ID (`org.derisk.files.desktop`).
+    pub fn desktop_id(&self) -> String {
+        format!("{}.desktop", self.id)
+    }
+
+    /// Creates the app opened by one of its desktop actions, or `None` for
+    /// an unknown action.
+    pub fn create_action(&self, action: &str) -> Option<Box<dyn App>> {
+        (self.action)(action)
     }
 
     /// Whether the app matches a case-insensitive search.
@@ -87,7 +102,9 @@ pub const APPS: [AppInfo; 5] = [
         summary: "Browse, copy, rename, and trash files",
         icon: "🗀",
         keywords: &["file manager", "folders", "browse", "trash"],
+        desktop_file: include_str!("../data/org.derisk.files.desktop"),
         create: || Box::new(derisk_files::FilesApp::default()),
+        action: files_action,
     },
     AppInfo {
         id: SETTINGS,
@@ -95,7 +112,9 @@ pub const APPS: [AppInfo; 5] = [
         summary: "Appearance, desktop, input, notifications, and power",
         icon: "⚙",
         keywords: &["preferences", "theme", "accent", "keyboard", "power"],
+        desktop_file: include_str!("../data/org.derisk.settings.desktop"),
         create: || Box::new(derisk_settings::SettingsApp::default()),
+        action: settings_action,
     },
     AppInfo {
         id: EDITOR,
@@ -103,7 +122,13 @@ pub const APPS: [AppInfo; 5] = [
         summary: "Edit plain-text files",
         icon: "📝",
         keywords: &["notepad", "text", "code", "write"],
+        desktop_file: include_str!("../data/org.derisk.editor.desktop"),
         create: || Box::new(derisk_editor::EditorApp::new()),
+        action: |a| {
+            new_window(a, "new-document", || {
+                Box::new(derisk_editor::EditorApp::new())
+            })
+        },
     },
     AppInfo {
         id: MONITOR,
@@ -111,7 +136,13 @@ pub const APPS: [AppInfo; 5] = [
         summary: "CPU, memory, and running processes",
         icon: "📈",
         keywords: &["task manager", "processes", "cpu", "memory", "kill"],
+        desktop_file: include_str!("../data/org.derisk.monitor.desktop"),
         create: || Box::new(derisk_monitor::MonitorApp::default()),
+        action: |a| {
+            new_window(a, "new-window", || {
+                Box::new(derisk_monitor::MonitorApp::default())
+            })
+        },
     },
     AppInfo {
         id: CALCULATOR,
@@ -119,12 +150,56 @@ pub const APPS: [AppInfo; 5] = [
         summary: "Arithmetic and scientific functions",
         icon: "🖩",
         keywords: &["math", "calc", "numbers"],
+        desktop_file: include_str!("../data/org.derisk.calculator.desktop"),
         create: || Box::new(derisk_calculator::CalculatorApp::default()),
+        action: |a| {
+            new_window(a, "new-window", || {
+                Box::new(derisk_calculator::CalculatorApp::default())
+            })
+        },
     },
 ];
 
-/// Looks up a core app by ID.
+/// An app whose only action opens a fresh instance.
+fn new_window(action: &str, id: &str, create: fn() -> Box<dyn App>) -> Option<Box<dyn App>> {
+    (action == id).then(create)
+}
+
+fn files_action(action: &str) -> Option<Box<dyn App>> {
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
+    let dir = match action {
+        "new-window" => home,
+        "documents" => home.join("Documents"),
+        "downloads" => home.join("Downloads"),
+        _ => return None,
+    };
+    Some(Box::new(derisk_files::FilesApp::new(
+        derisk_files::Browser::new(dir),
+        Box::new(derisk_files::xdg_open),
+    )))
+}
+
+fn settings_action(action: &str) -> Option<Box<dyn App>> {
+    use derisk_settings::{Page, SettingsApp};
+
+    let page = match action {
+        "appearance" => Page::Appearance,
+        "desktop" => Page::Desktop,
+        "input" => Page::Input,
+        "notifications" => Page::Notifications,
+        "power" => Page::Power,
+        "about" => Page::About,
+        _ => return None,
+    };
+    let mut app = SettingsApp::default();
+    app.page = page;
+    Some(Box::new(app))
+}
+
+/// Looks up a core app by ID (`org.derisk.files`) or desktop file ID
+/// (`org.derisk.files.desktop`).
 pub fn find(id: &str) -> Option<&'static AppInfo> {
+    let id = id.strip_suffix(".desktop").unwrap_or(id);
     APPS.iter().find(|app| app.id == id)
 }
 
@@ -204,6 +279,19 @@ impl Session {
         let info = find(id.as_str()).ok_or_else(|| Error::UnknownApp(id.clone()))?;
         let instance = self.runtime.launch(id)?;
         self.apps.insert(instance, info.create());
+        Ok(instance)
+    }
+
+    /// Starts a core app through one of its desktop actions, for example
+    /// Settings on its Appearance page. An unknown action is reported as
+    /// an unknown app.
+    pub fn launch_action(&mut self, id: &AppId, action: &str) -> Result<InstanceId, Error> {
+        let info = find(id.as_str()).ok_or_else(|| Error::UnknownApp(id.clone()))?;
+        let app = info
+            .create_action(action)
+            .ok_or_else(|| Error::UnknownApp(id.clone()))?;
+        let instance = self.runtime.launch(id)?;
+        self.apps.insert(instance, app);
         Ok(instance)
     }
 

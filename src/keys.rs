@@ -6,6 +6,7 @@
 //!
 //! | Chord | Action |
 //! | --- | --- |
+//! | Super+Space | Toggle the command palette |
 //! | Super (tap), Super+A | Toggle the overview |
 //! | Super+←/→/↑/↓ | Snap, maximize, restore or minimize (Windows-style) |
 //! | Super+1…9 | Switch workspace |
@@ -49,6 +50,8 @@ pub enum Key {
     Tab,
     /// Escape.
     Escape,
+    /// The space bar.
+    Space,
 }
 
 /// The action bound to a chord, if any.
@@ -88,6 +91,7 @@ pub fn binding(mods: Mods, key: Key) -> Option<Action> {
             layout: LayoutKind::Tall,
         },
         (false, Key::Letter('a')) => Action::Overview { visible: None },
+        (false, Key::Space) => Action::Palette { visible: None },
         _ => return None,
     })
 }

@@ -105,24 +105,36 @@ pub fn launch_argv(app: &str, instance: u64) -> Option<Vec<String>> {
         return None;
     }
     let exec = app.strip_suffix(".desktop").unwrap_or(app);
-    Some(
-        [
-            "systemd-run",
-            "--user",
-            "--no-block",
-            "--collect",
-            "--quiet",
-            &format!("--unit={}", app_unit(app, instance)),
-            &format!("--slice={APP_SLICE}"),
-            "--property=Type=exec",
-            "--property=ExitType=cgroup",
-            &format!("--description={exec} (derisk)"),
-            "--",
-            exec,
-        ]
-        .map(str::to_owned)
-        .to_vec(),
-    )
+    launch_command_argv(app, instance, &[exec.to_owned()])
+}
+
+/// `systemd-run` arguments that run `command` (already split, for example
+/// from a `.desktop` file's `Exec`) as a transient user service for `app`.
+///
+/// Returns `None` if `app` is rejected by [`is_launchable`] or `command` is
+/// empty.
+pub fn launch_command_argv(app: &str, instance: u64, command: &[String]) -> Option<Vec<String>> {
+    if !is_launchable(app) || command.is_empty() {
+        return None;
+    }
+    let exec = app.strip_suffix(".desktop").unwrap_or(app);
+    let mut argv: Vec<String> = [
+        "systemd-run",
+        "--user",
+        "--no-block",
+        "--collect",
+        "--quiet",
+        &format!("--unit={}", app_unit(app, instance)),
+        &format!("--slice={APP_SLICE}"),
+        "--property=Type=exec",
+        "--property=ExitType=cgroup",
+        &format!("--description={exec} (derisk)"),
+        "--",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    argv.extend_from_slice(command);
+    Some(argv)
 }
 
 /// Command line for a session operation.
@@ -156,6 +168,12 @@ pub fn effect_argv(
     match effect {
         Effect::Launch { app } => launch_argv(app, instance),
         Effect::Session { op } => Some(session_argv(*op, session_id)),
+        // The shell only emits absolute paths, so the path cannot be read as
+        // an option.
+        Effect::Open { path } => launch_argv("xdg-open", instance).map(|mut argv| {
+            argv.push(path.clone());
+            argv
+        }),
         Effect::ResetFailed { unit } => Some(
             ["systemctl", "--user", "reset-failed", "--", unit.as_str()]
                 .map(str::to_owned)
@@ -173,7 +191,12 @@ pub fn effect_argv(
             .map(str::to_owned)
             .to_vec(),
         ),
-        Effect::Close { .. } | Effect::MenuActivated { .. } | Effect::TrayActivated { .. } => None,
+        // The host resolves the action's command from the app's .desktop
+        // file and uses `launch_command_argv`.
+        Effect::LaunchAction { .. }
+        | Effect::Close { .. }
+        | Effect::MenuActivated { .. }
+        | Effect::TrayActivated { .. } => None,
     }
 }
 

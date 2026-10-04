@@ -11,14 +11,59 @@ derisk takes the good parts from many desktops:
 | Drag a title bar to an edge or corner to snap; top edge maximizes; Super+arrows; Snap Assist offers the other half | Windows |
 | Window buttons (close, minimize, maximize) on the **left** of the title bar | macOS |
 | Global menu in the top bar (app menus + a Window menu) | macOS, KDE |
-| Overview with workspaces, an exposé grid and widgets (assistant, clock, suggestions, failed units, calendar, battery, notes) | GNOME, iPadOS |
-| Dynamic workspaces: drag a window in the overview onto a workspace to move it, or onto **+** for a new one; empty workspaces close and the rest renumber | macOS Mission Control |
+| Overview with workspaces, an exposé grid and widgets (clock, suggestions, failed units, calendar, battery, notes) | GNOME, iPadOS |
 | Monochrome systray icons recolored to the theme | macOS, GNOME |
 | Adaptive profiles: phone (monocle, no gaps), tablet, desktop | mobile shells |
 | App suggestions learned from when you launch apps | Android, iOS |
 | Startup animation: logo pops in, ring sweeps, then blooms into the desktop (cross-fade with reduced motion) | — |
+| Command palette (Super+Space) for apps, app actions, windows, commands, system actions and files, hosting the agent conversation | Raycast, Spotlight, VS Code |
 | Built-in assistant and an agent protocol | agent-first |
 | Deep systemd integration | — |
+
+## Command palette
+
+Super+Space (or the search field in the top bar) opens one box for
+everything. Type to search, in a single ranked list:
+
+- **Apps** from their `.desktop` files: every installed application
+  (XDG data dirs, user files first, `Hidden`/`NoDisplay`/`OnlyShowIn`
+  respected) and the core apps, plus suggestions learned from your habits.
+- **App actions** from each `.desktop` file's `[Desktop Action]` groups,
+  such as Firefox's "New Private Window". The core apps ship their own
+  `.desktop` files (`crates/derisk-apps/data`), so "Appearance" opens
+  Settings on that page and "Downloads" opens Files there. From a terminal:
+  `derisk launch org.derisk.settings --action power`.
+- **Windows** on every workspace; choosing one switches there and focuses it.
+- **App commands**: every item in the focused app's global menus
+  (`register_menu`), so apps get palette commands for free.
+- **Commands**: window management (snap, maximize, float, tile, close),
+  overview, layouts, focus, workspaces and moving the window between them.
+- **System actions**: lock, suspend, hibernate, log out, reboot, power off
+  (destructive ones need a second Enter), tray items and failed units
+  (restart or dismiss). The palette is their home: there is no separate
+  system menu, and the top bar's ⚠ count opens the palette on them.
+- **Files** under your home folder.
+
+Anything else goes to the assistant: `open firefox and snap it left`,
+Enter, done. When a typed sentence is something the assistant understands
+and no entry title contains all its words, the assistant row comes first.
+
+**The palette is where the agent lives.** A request opens its
+conversation view: what you asked, each planned step with its progress
+(✔ done, ⟳ waiting for a launched app's window, ✖ failed and why), and
+the outcome. Keep typing to follow up; Backspace on an empty field returns
+to search, `?` opens the conversation directly, and "New" starts over.
+Requests from external agents (`ask` and `dispatch` over the agent
+protocol) appear in the same conversation, and the panel shows a ✨ count
+of agent activity you haven't seen (or ✨ while a request is still
+working); click it to open the conversation. Typing on the overview opens
+the palette with what you typed.
+
+Prefixes narrow the list: `>` commands, `@` windows, `/` or `~` files,
+`?` ask the assistant. ↑/↓ (or Tab, Ctrl+N/P) select, Enter runs, Esc
+closes. Picks you use often rise to the top. Agents can open and close it
+with `{"action":"palette"}` and open files with `{"action":"open","path":...}`
+(absolute paths only; executables and `.desktop` files are refused).
 
 ## Agent-first
 
@@ -26,7 +71,7 @@ Everything the shell can do is an `Action` (see `src/action.rs`). The UI,
 keyboard, assistant and external agents all go through the same actions, so
 anything a person can do an agent can do too, under the same rules.
 
-- **Assistant**: type in the overview's assistant widget, e.g.
+- **Assistant**: type in the command palette, e.g.
   `open firefox and snap it left, then go to workspace 2`.
   Try it from a terminal with `derisk ask open firefox and snap it left`.
 - **Agent protocol**: JSON lines over stdio or a Unix socket.
@@ -68,7 +113,7 @@ first); unit actions only apply to units that are currently failed.
   keep-alives and stopping are reported to the service manager; logs go to
   the journal with structured fields (stderr outside systemd).
 - **logind.** Lock, suspend, hibernate, log out, reboot and power off from the
-  system menu, assistant or agents.
+  command palette, assistant or agents.
 - **Failed units widget.** Failed user units show in the top bar and overview
   with restart and reset actions.
 
@@ -91,7 +136,7 @@ $ cargo run --release --features host -- session --launch foot
 of your current X11 or Wayland session. The core apps (Files, Settings, Text
 Editor, System Monitor, Calculator, in `crates/`) run inside
 the session and launch by name: `--launch files`, `derisk do open calculator`,
-or the overview assistant. Wayland apps launched from it (or from any
+or the command palette. Wayland apps launched from it (or from any
 terminal with `WAYLAND_DISPLAY` set to the socket it prints) get derisk's
 title bars, tiling, snapping, overview and assistant. The agent protocol is
 served on `$XDG_RUNTIME_DIR/derisk/agent.sock` against the live desktop:
@@ -109,7 +154,8 @@ systemd units and run logind session operations.
 
 | Chord | Action |
 | --- | --- |
-| Super (tap), Super+A | Overview (the assistant is focused, just type) |
+| Super+Space | Command palette |
+| Super (tap), Super+A | Overview (typing opens the palette) |
 | Super+←/→/↑/↓ | Snap halves and quarters, maximize, restore, minimize |
 | Super+1…9 / Super+Shift+1…9 | Switch workspace / move the window there (one past the last opens a new workspace) |
 | Super+J / Super+K, Alt+Tab | Focus next / previous |

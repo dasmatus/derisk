@@ -47,6 +47,9 @@ USAGE:
     derisk demo                   Run a headless walkthrough
     derisk ask <request...>       Show how the assistant interprets a request
     derisk do <request...>        Ask the running session's assistant to do it
+    derisk launch <APP> [--action <ID>]
+                                  Launch an app, or one of its desktop actions,
+                                  in the running session
     derisk send <json>            Send one agent-protocol request to the session
     derisk agent [OPTIONS]        Serve the JSON-lines agent protocol
 
@@ -75,6 +78,7 @@ fn main() {
         Some("do") => {
             send(&serde_json::json!({"method": "ask", "text": args[1..].join(" ")}).to_string())
         }
+        Some("launch") => launch(&args[1..]),
         Some("send") => send(&args[1..].join(" ")),
         Some("agent") => agent(&args[1..]),
         Some("-h" | "--help" | "help") | None => {
@@ -139,6 +143,19 @@ fn session_socket() -> Result<PathBuf> {
 }
 
 /// Sends one request line to the running session and prints the response.
+/// `derisk launch <app> [--action <id>]`, the `Exec` of derisk's own
+/// `.desktop` files.
+fn launch(args: &[String]) -> Result {
+    let action = match args {
+        [app] => serde_json::json!({"action": "launch", "app": app}),
+        [app, flag, id] if flag == "--action" => {
+            serde_json::json!({"action": "launch_action", "app": app, "id": id})
+        }
+        _ => return Err(format!("usage: derisk launch <APP> [--action <ID>]\n\n{USAGE}").into()),
+    };
+    send(&serde_json::json!({"method": "dispatch", "actions": [action]}).to_string())
+}
+
 fn send(line: &str) -> Result {
     let line = line.trim();
     if line.is_empty() {

@@ -22,6 +22,7 @@ use crate::{
     action::{Action, Effect},
     adaptive::FormFactor,
     assistant,
+    conversation::Source,
     geom::Rect,
     menu::Menu,
     overview::Battery,
@@ -93,6 +94,8 @@ pub struct State {
     pub windows: Vec<WindowState>,
     /// Overview visibility.
     pub overview: bool,
+    /// Whether the command palette is showing.
+    pub palette: bool,
     /// Global menus of the focused window.
     pub menus: Vec<Menu>,
     /// Tray item titles.
@@ -142,6 +145,7 @@ pub fn state(shell: &Shell) -> State {
         workspaces: (1..=shell.workspaces().len() as u64).collect(),
         windows,
         overview: shell.overview_visible(),
+        palette: shell.palette_visible(),
         menus: shell.menus.bar(focused.map(|w| w.get())),
         tray: shell.tray.items().map(|i| i.title.clone()).collect(),
         suggestions: shell.habits.suggestions(shell.clock.hour, 5),
@@ -161,6 +165,7 @@ pub fn tools() -> Value {
     let action = json!({
         "oneOf": [
             {"type": "object", "required": ["action", "app"], "properties": {"action": {"const": "launch"}, "app": {"type": "string"}}},
+            {"type": "object", "required": ["action", "app", "id"], "properties": {"action": {"const": "launch_action"}, "app": {"type": "string", "description": "Desktop file ID or core app ID"}, "id": {"type": "string", "description": "Desktop action ID from the app's .desktop file"}}},
             {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["close", "tile", "float", "toggle_maximize", "minimize"]}, "window": window}},
             {"type": "object", "required": ["action", "window"], "properties": {"action": {"enum": ["focus", "restore"]}, "window": {"type": "integer"}}},
             {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["focus_next", "focus_previous", "promote"]}}},
@@ -169,7 +174,8 @@ pub fn tools() -> Value {
             {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "switch_workspace"}, "workspace": workspace}},
             {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "move_to_workspace"}, "window": window, "workspace": workspace}},
             {"type": "object", "required": ["action", "layout"], "properties": {"action": {"const": "set_layout"}, "layout": {"enum": ["tall", "monocle"]}}},
-            {"type": "object", "required": ["action"], "properties": {"action": {"const": "overview"}, "visible": {"type": "boolean"}}},
+            {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["overview", "palette"]}, "visible": {"type": "boolean"}}},
+            {"type": "object", "required": ["action", "path"], "properties": {"action": {"const": "open"}, "path": {"type": "string", "description": "Absolute path to an existing file or folder; executables and .desktop files are refused"}}},
             {"type": "object", "required": ["action", "item"], "properties": {"action": {"const": "activate_menu"}, "window": window, "item": {"type": "string"}}},
             {"type": "object", "required": ["action", "op"], "properties": {"action": {"const": "session"}, "op": {"enum": ["lock", "suspend", "hibernate", "logout", "reboot", "power_off"]}, "confirmed": {"type": "boolean", "description": "Required for logout/reboot/power_off; only set after the user explicitly agreed"}}},
             {"type": "object", "required": ["action", "id"], "properties": {"action": {"const": "activate_tray"}, "id": {"type": "string"}, "item": {"type": "string"}}},
@@ -179,7 +185,7 @@ pub fn tools() -> Value {
     json!({"tools": [
         {
             "name": "get_state",
-            "description": "Describe the desktop: workspaces, windows (id, app, title, mode, frame, focus), overview, focused window's global menus, tray, app suggestions, failed systemd user units, clock, battery and low power mode.",
+            "description": "Describe the desktop: workspaces, windows (id, app, title, mode, frame, focus), overview and command palette visibility, focused window's global menus, tray, app suggestions, failed systemd user units, clock, battery and low power mode.",
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
@@ -214,18 +220,26 @@ pub fn handle_line(shell: &mut Shell, line: &str) -> (String, Vec<Effect>) {
     let (result, effects) = match request {
         Request::State => (Ok(to_value(&state(shell))), Vec::new()),
         Request::Tools => (Ok(tools()), Vec::new()),
-        Request::Dispatch { actions } => match shell.run(actions.clone()) {
-            Ok(effects) => (
-                Ok(to_value(&Applied {
-                    actions,
-                    effects: effects.clone(),
-                })),
-                effects,
-            ),
-            Err(e) => (Err(e.to_string()), Vec::new()),
-        },
+        Request::Dispatch { actions } => {
+            let request = match actions.len() {
+                1 => "1 action".to_owned(),
+                n => format!("{n} actions"),
+            };
+            match shell.run_recorded(&request, Source::Agent, actions.clone()) {
+                Ok(effects) => (
+                    Ok(to_value(&Applied {
+                        actions,
+                        effects: effects.clone(),
+                    })),
+                    effects,
+                ),
+                Err(e) => (Err(e.to_string()), Vec::new()),
+            }
+        }
         Request::Ask { text } => match assistant::interpret(&text) {
-            Ok(actions) => match shell.run(actions.clone()) {
+            // Interpreted twice so the response can list the actions; both
+            // runs of the assistant are pure.
+            Ok(actions) => match shell.ask(&text, Source::Agent, false) {
                 Ok(effects) => (
                     Ok(to_value(&Applied {
                         actions,
@@ -235,7 +249,12 @@ pub fn handle_line(shell: &mut Shell, line: &str) -> (String, Vec<Effect>) {
                 ),
                 Err(e) => (Err(e.to_string()), Vec::new()),
             },
-            Err(e) => (Err(e.to_string()), Vec::new()),
+            Err(e) => {
+                shell
+                    .conversation
+                    .not_understood(Source::Agent, &text, &e.to_string());
+                (Err(e.to_string()), Vec::new())
+            }
         },
         Request::RegisterMenu { window, menus } => {
             shell.menus.register(window, menus);
