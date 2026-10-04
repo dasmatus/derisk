@@ -16,6 +16,8 @@ repository = "https://github.com/dasmatus/derisk"
 mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
 mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
 mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
+mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
+mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
 mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
@@ -23,6 +25,7 @@ derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
 derisk-monitor = { path = "crates/derisk-monitor", version = "0.1.0" }
 derisk-calculator = { path = "crates/derisk-calculator", version = "0.1.0" }
 derisk-apps = { path = "crates/derisk-apps", version = "0.1.0" }
+derisk-gpui = { path = "crates/derisk-gpui", version = "0.1.0" }
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 
 [package]
@@ -37,6 +40,10 @@ repository.workspace = true
 [dependencies]
 derisk-settings.workspace = true
 mcsapi.workspace = true
+mcsapi-theme.workspace = true
+# App icons from the icon theme: PNG and SVG, the two formats themes ship.
+image = { version = "0.25", default-features = false, features = ["png"] }
+resvg = { version = "0.48.1", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
@@ -45,7 +52,9 @@ serde_json = "1.0.145"
 derisk-apps = { workspace = true, optional = true }
 mcsapi-compositor = { workspace = true, optional = true }
 mcsapi-runtime = { workspace = true, optional = true }
+# Only its list of ported apps; the GPUI build is its own binary.
+derisk-gpui = { workspace = true, optional = true }
 
 [features]
-host = ["dep:derisk-apps", "dep:mcsapi-compositor", "dep:mcsapi-runtime"]
+host = ["dep:derisk-apps", "dep:derisk-gpui", "dep:mcsapi-compositor", "dep:mcsapi-runtime"]
 

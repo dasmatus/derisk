@@ -12,6 +12,7 @@
 //! - [`keyboard`]: the on-screen keyboard and its word prediction.
 //! - [`overview`]: the overview grid and its widgets.
 //! - [`desktop`]: installed apps and their actions from `.desktop` files.
+//! - [`apps`] and [`icons`]: app names and icon theme icons for app IDs.
 //! - [`menu`]: the global menu.
 //! - [`palette`]: the command palette (Super+Space), the center of the
 //!   workflow: apps, windows, commands, settings and files in one search,
@@ -43,12 +44,14 @@
 pub mod action;
 pub mod adaptive;
 pub mod animation;
+pub mod apps;
 pub mod assistant;
 pub mod conversation;
 pub mod decorations;
 pub mod desktop;
 pub mod effects;
 pub mod geom;
+pub mod icons;
 pub mod ipc;
 pub mod keyboard;
 pub mod keys;
@@ -59,6 +62,7 @@ pub mod palette;
 pub mod shell;
 pub mod snap;
 pub mod systemd;
+pub mod theme;
 pub mod time;
 pub mod tray;
 pub mod ui;

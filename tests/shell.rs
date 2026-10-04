@@ -170,6 +170,33 @@ fn maximize_toggles_and_minimize_hides() {
 }
 
 #[test]
+fn an_app_id_set_after_mapping_still_gets_queued_actions() {
+    // GPUI maps its window before it sets the app ID.
+    let mut shell = desktop();
+    shell
+        .run([
+            Action::Launch {
+                app: "org.derisk.calculator".into(),
+            },
+            Action::Snap {
+                window: None,
+                zone: SnapZone::Left,
+            },
+        ])
+        .unwrap();
+    let (w, _) = shell.map_window("app", "");
+    assert_eq!(shell.mode(w), Some(Mode::Tiled));
+    shell.set_app_id(w, "org.derisk.calculator").unwrap();
+    assert_eq!(shell.window_label(w), Some(("org.derisk.calculator", "")));
+    assert_eq!(
+        shell.mode(w),
+        Some(Mode::Snapped {
+            zone: SnapZone::Left
+        })
+    );
+}
+
+#[test]
 fn actions_after_a_launch_wait_for_the_new_window() {
     let mut shell = desktop();
     let effects = shell

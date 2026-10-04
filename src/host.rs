@@ -7,7 +7,7 @@
 //! windows, and serves the agent protocol against the live desktop.
 
 use std::{
-    io::{BufRead, BufReader, Write as _},
+    io::{BufReader, Write as _},
     os::unix::{
         fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
@@ -42,7 +42,7 @@ use mcsapi::WindowId;
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, Input,
     InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press, Remote,
-    Theme, egui,
+    Reserved, Role, RuntimeClient, Theme, egui,
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -60,6 +60,55 @@ pub struct Options {
     pub size: (i32, i32),
     /// Shorten the startup animation.
     pub reduced_motion: bool,
+    /// Programs the compositor starts as panels, overlays or apps
+    /// ([`RuntimeClient`]), such as GPUI ones.
+    pub runtime: Vec<RuntimeClient>,
+}
+
+/// Parses a `--runtime` role: `app`, `overlay`, or
+/// `panel:<top|bottom|left|right>:<size>[:keyboard]`.
+pub fn parse_role(text: &str) -> std::result::Result<Role, String> {
+    let mut parts = text.split(':');
+    let role = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("app"), None, ..) => Role::App,
+        (Some("overlay"), None, ..) => Role::Overlay,
+        (Some("panel"), Some(edge), Some(size), keyboard) => Role::Panel {
+            edge: match edge {
+                "top" => compositor::Edge::Top,
+                "bottom" => compositor::Edge::Bottom,
+                "left" => compositor::Edge::Left,
+                "right" => compositor::Edge::Right,
+                _ => return Err(format!("unknown panel edge {edge:?}")),
+            },
+            size: size
+                .parse()
+                .ok()
+                .filter(|size| *size > 0)
+                .ok_or_else(|| format!("bad panel size {size:?}"))?,
+            keyboard: match keyboard {
+                None => false,
+                Some("keyboard") => true,
+                Some(other) => return Err(format!("unknown panel flag {other:?}")),
+            },
+        },
+        _ => {
+            return Err(format!(
+                "unknown role {text:?} (app, overlay, or panel:<edge>:<size>[:keyboard])"
+            ));
+        }
+    };
+    if parts.next().is_some() {
+        return Err(format!("unknown role {text:?}"));
+    }
+    Ok(role)
+}
+
+/// The GPUI build of the core apps (`derisk-gpui`), installed beside this
+/// executable. The apps it has ported run there as their own Wayland
+/// clients; without it they run in-process with egui.
+fn gpui_apps() -> Option<PathBuf> {
+    let path = std::env::current_exe().ok()?.with_file_name("derisk-gpui");
+    path.is_file().then_some(path)
 }
 
 /// The derisk shell as seen by the compositor.
@@ -86,6 +135,13 @@ pub struct Session {
     /// last wrote them.
     words: Option<PathBuf>,
     words_saved: Instant,
+    /// Environment launched apps get from the published theme.
+    theme_env: Vec<(String, String)>,
+    /// `derisk-gpui`, when installed: see [`gpui_apps`].
+    gpui: Option<PathBuf>,
+    /// The output's size, and the strips runtime panels cover in it.
+    output: (i32, i32),
+    reserved: Reserved,
 }
 
 /// Core-app actions waiting for the compositor to launch their app, shared
@@ -124,10 +180,20 @@ fn palette_entries(core: &[DesktopEntry], installed: &[DesktopEntry]) -> Vec<Ent
     core.chain(installed).collect()
 }
 
+/// Names and icons for app IDs: the core apps (with their emoji for a
+/// theme without their icon), then installed apps.
+fn app_index(core: &[DesktopEntry], installed: &[DesktopEntry]) -> derisk::apps::Apps {
+    let core = core.iter().map(|e| {
+        let glyph = derisk_apps::find(&e.id).map_or("", |app| app.icon);
+        (e, glyph)
+    });
+    derisk::apps::Apps::new(core.chain(installed.iter().map(|e| (e, ""))))
+}
+
 impl Session {
     fn new(options: &Options, pending_actions: PendingActions, phone: Arc<AtomicBool>) -> Self {
         let (w, h) = options.size;
-        let shell = Shell::new(rect(0, 0, w, h), false);
+        let mut shell = Shell::new(rect(0, 0, w, h), false);
         phone.store(shell.is_phone(), Ordering::Relaxed);
         let mut ui = ShellUi::new(&shell, options.reduced_motion);
         let core_apps = core_desktop_entries();
@@ -145,6 +211,7 @@ impl Session {
             200,
         );
         ui.palette.extra = palette_entries(&core_apps, &installed);
+        shell.apps = app_index(&core_apps, &installed);
         Self {
             shell,
             ui,
@@ -164,7 +231,47 @@ impl Session {
             phone,
             words,
             words_saved: Instant::now(),
+            theme_env: Vec::new(),
+            gpui: gpui_apps(),
+            output: (w, h),
+            reserved: Reserved::default(),
         }
+    }
+
+    /// Takes the theme from the current settings for the chrome and core
+    /// apps, and publishes it for everything else ([`derisk::theme`]).
+    fn apply_theme(&mut self) {
+        let settings = self.settings.current();
+        let library = mcsapi_theme::Library::xdg("derisk");
+        let (theme, error) = settings.theme_spec(&library);
+        if let Some(error) = error {
+            log(
+                Priority::Warning,
+                &format!(
+                    "theme {}: {error}; using the automatic theme",
+                    settings.appearance.theme
+                ),
+            );
+        }
+        self.ui.theme = Theme::from(&theme);
+        let id = match settings.appearance.theme {
+            id if id.is_automatic() => match settings.appearance.scheme {
+                derisk_settings::ColorScheme::Dark => "derisk-dark".to_owned(),
+                derisk_settings::ColorScheme::Light => "derisk-light".to_owned(),
+            },
+            id => id.as_str().to_owned(),
+        };
+        let Some(dir) = derisk::theme::runtime_dir() else {
+            return;
+        };
+        if let Err(error) = derisk::theme::publish(&dir, &id, &theme) {
+            log(
+                Priority::Warning,
+                &format!("publishing the theme to {}: {error}", dir.display()),
+            );
+        }
+        self.theme_env =
+            derisk::theme::environment(&dir, &theme, std::env::var_os("XDG_CONFIG_DIRS"));
     }
 
     /// Applies actions from any source and carries out their effects.
@@ -197,6 +304,7 @@ impl Session {
         if let Some((files, installed)) = self.index.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.ui.palette.files = files;
             self.ui.palette.extra = palette_entries(&self.core_apps, &installed);
+            self.shell.apps = app_index(&self.core_apps, &installed);
             self.installed = installed;
             self.index = None;
         }
@@ -213,16 +321,47 @@ impl Session {
                     split,
                     format!("--setenv=WAYLAND_DISPLAY={}", self.wayland_display),
                 );
+                for (key, value) in &self.theme_env {
+                    unit.insert(split, format!("--setenv={key}={value}"));
+                }
                 let _ = systemd::run(&unit);
             }
         } else if let Some((program, args)) = argv.split_first()
             && let Err(e) = std::process::Command::new(program)
                 .args(args)
                 .env("WAYLAND_DISPLAY", &self.wayland_display)
+                .envs(self.theme_env.iter().map(|(k, v)| (k, v)))
                 .spawn()
         {
             log(Priority::Warning, &format!("{program}: {e}"));
         }
+    }
+
+    /// Opens `app`: a core app ported to GPUI as a `derisk-gpui` process when
+    /// that is installed, any other core app in-process.
+    fn launch(&mut self, app: &str) {
+        let id = derisk_apps::find(app).map(|core| core.id);
+        if let (Some(gpui), Some(id)) = (&self.gpui, id)
+            && derisk_gpui::APPS.contains(&id)
+        {
+            let argv = vec![gpui.to_string_lossy().into_owned(), id.to_owned()];
+            self.spawn_command(id, &argv);
+            return;
+        }
+        self.commands.push(Command::Launch(app.to_owned()));
+    }
+
+    /// Shows the shell the output without the strips runtime panels cover.
+    fn apply_output(&mut self) {
+        let (w, h) = self.output;
+        let area = self
+            .reserved
+            .shrink(mcsapi::Geometry::new((0, 0).into(), (w, h).into()));
+        self.shell.set_output(
+            rect(area.loc.x, area.loc.y, area.size.w, area.size.h),
+            false,
+        );
+        self.phone.store(self.shell.is_phone(), Ordering::Relaxed);
     }
 
     /// Runs an app's desktop action: core apps open in-process through
@@ -254,7 +393,7 @@ impl Session {
     fn perform(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match &effect {
-                Effect::Launch { app } => self.commands.push(Command::Launch(app.clone())),
+                Effect::Launch { app } => self.launch(app),
                 Effect::LaunchAction { app, id } => self.launch_action(app, id),
                 Effect::Close { window } => {
                     if let Some(id) = WindowId::new(*window) {
@@ -293,6 +432,7 @@ impl Session {
                     } else if let Err(e) = std::process::Command::new("xdg-open")
                         .arg(path)
                         .env("WAYLAND_DISPLAY", &self.wayland_display)
+                        .envs(self.theme_env.iter().map(|(k, v)| (k, v)))
                         .spawn()
                     {
                         log(Priority::Warning, &format!("xdg-open {path}: {e}"));
@@ -319,13 +459,24 @@ impl compositor::Shell for Session {
         id
     }
 
+    fn set_app_id(&mut self, window: WindowId, app_id: &str) {
+        if let Ok(effects) = self.shell.set_app_id(window, app_id) {
+            self.perform(effects);
+        }
+    }
+
     fn unmap_window(&mut self, window: WindowId) {
         let _ = self.shell.unmap_window(window);
     }
 
-    fn set_output(&mut self, (w, h): (i32, i32)) {
-        self.shell.set_output(rect(0, 0, w, h), false);
-        self.phone.store(self.shell.is_phone(), Ordering::Relaxed);
+    fn set_output(&mut self, size: (i32, i32)) {
+        self.output = size;
+        self.apply_output();
+    }
+
+    fn set_reserved(&mut self, reserved: Reserved) {
+        self.reserved = reserved;
+        self.apply_output();
     }
 
     fn focused(&self) -> Option<WindowId> {
@@ -388,6 +539,7 @@ impl compositor::Shell for Session {
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
         if let Some(effects) = self.settings.poll() {
             self.shell.effects = effects;
+            self.apply_theme();
         }
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
@@ -678,6 +830,9 @@ pub fn run(options: Options) -> Result {
     for app in options.launch {
         compositor = compositor.launch(app);
     }
+    for client in options.runtime {
+        compositor = compositor.runtime(client);
+    }
     compositor.run()?;
     systemd::notify_stopping();
     Ok(())
@@ -701,6 +856,7 @@ fn agent_socket(path: Option<PathBuf>, remote: Remote<Session>) -> Result<Option
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
+        ipc::check_socket_dir(dir)?;
     }
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if !meta.file_type().is_socket() {
@@ -731,8 +887,8 @@ fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { return };
+    let mut reader = BufReader::new(stream);
+    while let Ok(Some(line)) = ipc::read_request(&mut reader) {
         if line.trim().is_empty() {
             continue;
         }
@@ -796,5 +952,43 @@ fn tiled_edges(mode: Mode) -> Edges {
             SnapZone::BottomRight => edges(false, true, false, true),
             SnapZone::Maximize => Edges::NONE,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_roles_parse() {
+        assert_eq!(parse_role("app"), Ok(Role::App));
+        assert_eq!(parse_role("overlay"), Ok(Role::Overlay));
+        assert_eq!(
+            parse_role("panel:bottom:48"),
+            Ok(Role::Panel {
+                edge: compositor::Edge::Bottom,
+                size: 48,
+                keyboard: false,
+            })
+        );
+        assert_eq!(
+            parse_role("panel:left:64:keyboard"),
+            Ok(Role::Panel {
+                edge: compositor::Edge::Left,
+                size: 64,
+                keyboard: true,
+            })
+        );
+        for bad in [
+            "",
+            "panel",
+            "panel:top",
+            "panel:up:32",
+            "panel:top:0",
+            "overlay:x",
+            "app:top:3",
+        ] {
+            assert!(parse_role(bad).is_err(), "{bad}");
+        }
     }
 }
