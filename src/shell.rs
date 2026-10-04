@@ -258,9 +258,12 @@ const LAUNCHER_EXTENSIONS: &[&str] = &[
 /// Whether `path` is safe to hand to `xdg-open`: absolute, existing, and
 /// neither executable nor a launcher, so opening it cannot run a program.
 ///
-/// A launcher is recognised by its extension in any case and, for desktop
-/// entries, by content too: shared-mime-info finds `[Desktop Entry]` in a
-/// file with no extension at all, and `evil.DESKTOP` matches its glob.
+/// A launcher is recognised by its extension in any case, and by content
+/// too, because shared-mime-info sniffs a file whose name matches no glob:
+/// `[Desktop Entry]` anywhere in the first 4 KiB, an ELF (AppImages are
+/// ELF) or Windows `MZ` executable whatever its name, and a zip (a jar or
+/// apk) only without an extension, since documents like .docx are zips too
+/// and their glob decides their type first.
 fn openable(path: &Path) -> bool {
     use std::{io::Read, os::unix::fs::PermissionsExt};
 
@@ -286,7 +289,10 @@ fn openable(path: &Path) -> bool {
     }
     let mut head = Vec::with_capacity(4096);
     let read = std::fs::File::open(path).and_then(|f| f.take(4096).read_to_end(&mut head));
-    read.is_ok() && !head.windows(15).any(|w| w == b"[Desktop Entry]")
+    let program = head.starts_with(b"\x7fELF")
+        || head.starts_with(b"MZ")
+        || (path.extension().is_none() && head.starts_with(b"PK\x03\x04"));
+    read.is_ok() && !program && !head.windows(15).any(|w| w == b"[Desktop Entry]")
 }
 
 impl Shell {
