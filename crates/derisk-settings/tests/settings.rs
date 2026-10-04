@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use derisk_settings::{
-    Accent, ColorScheme, Layout, LowPower, Page, Profile, Settings, SettingsApp,
+    Accent, ColorScheme, Layout, LowPower, Page, Profile, Settings, SettingsApp, Vrr,
 };
 use mcsapi_ui::{Theme, egui, run_frame};
 
@@ -23,6 +23,7 @@ fn text_round_trips_every_field() {
     settings.desktop.gaps = 0;
     settings.desktop.workspaces = 4;
     settings.desktop.profile = Profile::Tablet;
+    settings.desktop.vrr = Vrr::Off;
     settings.input.natural_scroll = false;
     settings.input.repeat_delay_ms = 250;
     settings.input.repeat_rate = 40;
@@ -66,6 +67,7 @@ fn set_rejects_out_of_range_values() {
     assert!(!settings.set("appearance.blur", "11"));
     assert!(!settings.set("appearance.top_bar_opacity", "10"));
     assert!(!settings.set("power.low_power", "sometimes"));
+    assert!(!settings.set("desktop.vrr", "maybe"));
     assert_eq!(settings, Settings::default());
     assert!(settings.set("power.dim_after_min", "0"));
     assert_eq!(settings.power.dim_after_min, 0);

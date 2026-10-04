@@ -148,6 +148,10 @@ pub struct Battery {
     pub percent: u8,
     /// Whether it is charging.
     pub charging: bool,
+    /// Whether the device runs on this battery. A full or "not charging"
+    /// battery on external power is neither charging nor discharging.
+    #[serde(default)]
+    pub discharging: bool,
 }
 
 impl Battery {
@@ -159,21 +163,22 @@ impl Battery {
             .map(|e| e.path())
             .collect();
         entries.sort();
-        entries.into_iter().find_map(|dir| {
-            let kind = std::fs::read_to_string(dir.join("type")).ok()?;
-            if kind.trim() != "Battery" {
+        let read = |dir: &Path, name: &str| std::fs::read_to_string(dir.join(name)).ok();
+        let external_power = entries.iter().any(|dir| {
+            read(dir, "type").is_some_and(|kind| kind.trim() != "Battery")
+                && read(dir, "online").is_some_and(|online| online.trim() == "1")
+        });
+        entries.iter().find_map(|dir| {
+            if read(dir, "type")?.trim() != "Battery" {
                 return None;
             }
-            let percent = std::fs::read_to_string(dir.join("capacity"))
-                .ok()?
-                .trim()
-                .parse::<u8>()
-                .ok()?
-                .min(100);
-            let status = std::fs::read_to_string(dir.join("status")).unwrap_or_default();
+            let percent = read(dir, "capacity")?.trim().parse::<u8>().ok()?.min(100);
+            let status = read(dir, "status").unwrap_or_default();
+            let status = status.trim();
             Some(Self {
                 percent,
-                charging: matches!(status.trim(), "Charging" | "Full"),
+                charging: matches!(status, "Charging" | "Full"),
+                discharging: status == "Discharging" && !external_power,
             })
         })
     }

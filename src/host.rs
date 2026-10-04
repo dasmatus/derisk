@@ -36,7 +36,7 @@ use derisk::{
 use mcsapi::WindowId;
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, InstanceId,
-    KeyInput, KeyRoute, Keysym, Placement, Press, Remote, Theme, egui,
+    KeyInput, KeyRoute, Keysym, OutputTiming, Placement, Press, Remote, Theme, egui,
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -279,7 +279,7 @@ impl Session {
 
     fn startup_done(&self) -> bool {
         let elapsed = self.start.elapsed().as_millis() as u32;
-        self.ui.startup.frame(elapsed).done
+        self.ui.startup_frame(elapsed).done
     }
 }
 
@@ -438,10 +438,13 @@ impl compositor::Shell for Session {
 
     fn client_request(&mut self, window: WindowId, request: ClientRequest) {
         let window = Some(window.get());
-        self.dispatch(vec![match request {
+        let action = match request {
             ClientRequest::Maximize => Action::ToggleMaximize { window },
             ClientRequest::Minimize => Action::Minimize { window },
-        }]);
+            // Requests added to the compositor later are ignored until handled.
+            _ => return,
+        };
+        self.dispatch(vec![action]);
     }
 
     fn theme(&self) -> Theme {
@@ -489,8 +492,16 @@ impl compositor::Shell for Session {
             .collect()
     }
 
-    fn frame_interval(&self) -> Duration {
-        self.shell.look().frame_interval
+    fn frame_interval(&self, timing: &OutputTiming) -> Duration {
+        let look = self.shell.look();
+        let timing = OutputTiming {
+            vrr: look.vrr.unwrap_or(timing.vrr),
+            ..*timing
+        };
+        match look.max_fps {
+            Some(fps) => timing.interval_for(fps),
+            None => timing.refresh_interval(),
+        }
     }
 
     fn spawn_argv(&mut self, app: &str) -> Vec<String> {

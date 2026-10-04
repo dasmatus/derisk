@@ -136,6 +136,43 @@ pub struct Appearance {
     pub panels: PanelOpacity,
 }
 
+/// Whether the display has variable refresh rate (VRR, Adaptive-Sync), which
+/// lets the shell pick any frame rate instead of a fraction of the refresh
+/// rate.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Vrr {
+    /// Use what the compositor detects.
+    #[default]
+    Automatic,
+    /// The display has VRR (for example a nested session on a VRR monitor).
+    On,
+    /// Treat the display as fixed-rate.
+    Off,
+}
+
+impl Vrr {
+    /// Every mode, in display order.
+    pub const ALL: [Self; 3] = [Self::Automatic, Self::On, Self::Off];
+
+    /// The mode's label in the Settings app.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::On => "On",
+            Self::Off => "Off",
+        }
+    }
+
+    /// Whether to treat the display as VRR, given what was detected.
+    pub const fn resolve(self, detected: bool) -> bool {
+        match self {
+            Self::Automatic => detected,
+            Self::On => true,
+            Self::Off => false,
+        }
+    }
+}
+
 /// Window management preferences.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DesktopPrefs {
@@ -147,6 +184,8 @@ pub struct DesktopPrefs {
     pub workspaces: u8,
     /// Adaptive profile.
     pub profile: Profile,
+    /// Variable refresh rate.
+    pub vrr: Vrr,
 }
 
 /// Keyboard and pointer preferences.
@@ -221,6 +260,7 @@ impl Default for Settings {
                 gaps: 8,
                 workspaces: 9,
                 profile: Profile::Automatic,
+                vrr: Vrr::Automatic,
             },
             input: Input {
                 natural_scroll: true,
@@ -276,6 +316,7 @@ macro_rules! enum_text {
 enum_text!(ColorScheme { Dark => "dark", Light => "light" });
 enum_text!(Accent { Lime => "lime", Sky => "sky", Violet => "violet", Rose => "rose", Amber => "amber" });
 enum_text!(Layout { Tall => "tall", Monocle => "monocle" });
+enum_text!(Vrr { Automatic => "auto", On => "on", Off => "off" });
 enum_text!(LowPower { Off => "off", OnBattery => "on_battery", On => "on" });
 enum_text!(Profile { Automatic => "automatic", Phone => "phone", Tablet => "tablet", Desktop => "desktop" });
 
@@ -348,6 +389,7 @@ impl Settings {
             "desktop.gaps" => put(&mut d.gaps, parse_in(value, 0, 64)),
             "desktop.workspaces" => put(&mut d.workspaces, parse_in(value, 1, 9)),
             "desktop.profile" => put(&mut d.profile, Profile::parse(value)),
+            "desktop.vrr" => put(&mut d.vrr, Vrr::parse(value)),
             "input.natural_scroll" => put(&mut i.natural_scroll, parse_bool(value)),
             "input.tap_to_click" => put(&mut i.tap_to_click, parse_bool(value)),
             "input.repeat_delay_ms" => put(&mut i.repeat_delay_ms, parse_in(value, 100, 1000)),
@@ -388,6 +430,7 @@ impl Settings {
              desktop.gaps = {}\n\
              desktop.workspaces = {}\n\
              desktop.profile = {}\n\
+             desktop.vrr = {}\n\
              input.natural_scroll = {}\n\
              input.tap_to_click = {}\n\
              input.repeat_delay_ms = {}\n\
@@ -411,6 +454,7 @@ impl Settings {
             d.gaps,
             d.workspaces,
             d.profile.as_str(),
+            d.vrr.as_str(),
             i.natural_scroll,
             i.tap_to_click,
             i.repeat_delay_ms,
