@@ -1,5 +1,6 @@
 use derisk::{
     action::Action,
+    animation::StartupFrame,
     geom::rect,
     overview::{OverviewLayout, fit, grid, row},
     shell::Shell,
@@ -493,6 +494,36 @@ fn translucent_panels_report_blur_areas_unless_low_power() {
     frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5200);
     assert!(ui.blur_regions().is_empty());
 }
+
+#[test]
+fn opaque_panels_are_not_blurred() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    shell.effects.panels.top_bar = 100;
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, (1920.0, 1080.0), vec![], 5000);
+    let bar = shell.profile().top_bar;
+    let areas: Vec<_> = ui.blur_regions().iter().map(|b| b.area).collect();
+    assert!(!areas.contains(&rect(0, 0, 1920, bar)), "{areas:?}");
+    assert!(areas.contains(&shell.work_area()), "{areas:?}");
+}
+
+#[test]
+fn low_power_skips_the_startup_animation() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.effects.low_power = LowPower::On;
+    let ui = ShellUi::new(&shell, false);
+    assert_eq!(ui.startup_frame(0), StartupFrame::DONE);
+    shell.effects.low_power = LowPower::Off;
+    shell.effects.reduce_motion = true;
+    let ui = ShellUi::new(&shell, true);
+    assert!(!ui.startup_frame(0).done);
+}
 /// Drags the first exposé window onto workspace strip slot `slot` (0-based).
 fn drag_to_slot(shell: &mut Shell, slot: usize, slots: usize) -> Vec<Action> {
     drag_to_slot_with(shell, slot, slots, |_| {}, vec![])
@@ -656,4 +687,218 @@ fn switching_workspaces_mid_drag_cancels_it() {
         vec![],
     );
     assert!(actions.is_empty(), "{actions:?}");
+}
+
+/// Presses at `from`, moves through `path`, and releases at the last point,
+/// one frame per event, returning the actions of every frame.
+fn touch(
+    ctx: &egui::Context,
+    ui: &mut ShellUi,
+    shell: &Shell,
+    size: (f32, f32),
+    from: egui::Pos2,
+    path: &[egui::Pos2],
+) -> Vec<Action> {
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let mut actions = Vec::new();
+    let mut ms = 5000;
+    let mut step = |events| {
+        ms += 16;
+        actions.extend(frame(ctx, ui, shell, size, events, ms));
+    };
+    step(vec![egui::Event::PointerMoved(from)]);
+    step(vec![button(from, true)]);
+    for p in path {
+        step(vec![egui::Event::PointerMoved(*p)]);
+    }
+    let end = path.last().copied().unwrap_or(from);
+    step(vec![button(end, false)]);
+    step(vec![]);
+    actions
+}
+
+#[test]
+fn phones_get_a_navigation_bar_below_the_work_area() {
+    let phone = Shell::new(rect(0, 0, 392, 872), true);
+    let nav = phone.nav_bar().area(phone.output());
+    assert!(nav.size.h >= derisk::mobile::TOUCH_TARGET);
+    let area = phone.work_area();
+    assert_eq!(area.loc.y + area.size.h, nav.loc.y);
+
+    // The desktop layout is unchanged above the breakpoint.
+    let desktop = Shell::new(rect(0, 0, 1920, 1080), false);
+    assert_eq!(desktop.nav_bar().height, 0);
+    let area = desktop.work_area();
+    assert_eq!(area.loc.y + area.size.h, 1080);
+}
+
+#[test]
+fn navigation_bar_buttons_and_swipes() {
+    let size = (392.0, 872.0);
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.map_window("editor", "notes.md");
+    shell.map_window("terminal", "sh");
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, size, vec![], 5000);
+    let buttons = shell.nav_bar().buttons(shell.output());
+    let center = |i: usize| to_rect(buttons[i].1).center();
+
+    // Back with nothing open switches to the previous app.
+    let actions = touch(&ctx, &mut ui, &shell, size, center(0), &[]);
+    assert_eq!(actions, vec![Action::FocusPrevious]);
+    // Home opens the overview, Apps the palette.
+    let actions = touch(&ctx, &mut ui, &shell, size, center(1), &[]);
+    assert_eq!(actions, vec![Action::Overview { visible: None }]);
+    let actions = touch(&ctx, &mut ui, &shell, size, center(2), &[]);
+    assert_eq!(actions, vec![Action::Palette { visible: None }]);
+
+    // A swipe up that starts on a button goes home and is not a tap.
+    let from = center(0);
+    let path: Vec<_> = (1..=6)
+        .map(|i| from - egui::vec2(0.0, 30.0 * i as f32))
+        .collect();
+    let actions = touch(&ctx, &mut ui, &shell, size, from, &path);
+    assert_eq!(
+        actions,
+        vec![Action::Overview {
+            visible: Some(true)
+        }]
+    );
+    // Sideways along the bar switches apps.
+    let from = center(1);
+    let path: Vec<_> = (1..=5)
+        .map(|i| from + egui::vec2(25.0 * i as f32, 0.0))
+        .collect();
+    let actions = touch(&ctx, &mut ui, &shell, size, from, &path);
+    assert_eq!(actions, vec![Action::FocusNext]);
+}
+
+#[test]
+fn navigation_bar_stays_usable_over_the_palette() {
+    let size = (392.0, 872.0);
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.map_window("editor", "notes.md");
+    shell.apply(Action::Palette { visible: None }).unwrap();
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, size, vec![], 5000);
+    let home = to_rect(shell.nav_bar().buttons(shell.output())[1].1).center();
+    let actions = touch(&ctx, &mut ui, &shell, size, home, &[]);
+    assert_eq!(
+        actions,
+        vec![
+            Action::Palette {
+                visible: Some(false)
+            },
+            Action::Overview {
+                visible: Some(true)
+            }
+        ]
+    );
+}
+
+#[test]
+fn phones_show_one_window_without_a_title_bar() {
+    let mut phone = Shell::new(rect(0, 0, 392, 872), true);
+    let (a, _) = phone.map_window("a", "A");
+    let (b, _) = phone.map_window("b", "B");
+    // Even a floating window, or a workspace switched to tall, fills the
+    // work area alone.
+    phone
+        .apply(Action::Float {
+            window: Some(a.get()),
+        })
+        .unwrap();
+    phone
+        .apply(Action::SetLayout {
+            layout: derisk::action::LayoutKind::Tall,
+        })
+        .unwrap();
+    phone.apply(Action::Focus { window: a.get() }).unwrap();
+    let placements = phone.placements();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].window, a);
+    assert_eq!(placements[0].frame, phone.work_area());
+    assert_eq!(placements[0].client, phone.work_area());
+    phone.apply(Action::Focus { window: b.get() }).unwrap();
+    assert_eq!(phone.placements()[0].window, b);
+}
+
+#[test]
+fn the_keyboard_types_into_the_palette_and_completes_words() {
+    use derisk::keyboard::{self, Key, Keyboard};
+    let size = (392.0, 872.0);
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.apply(Action::Palette { visible: None }).unwrap();
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, size, vec![], 5000);
+    // Opening the palette brings the keyboard up above the navigation bar.
+    assert!(ui.keyboard_visible(&shell));
+    let nav = shell.nav_bar().area(shell.output());
+    let area = rect(
+        nav.loc.x,
+        nav.loc.y - keyboard::HEIGHT,
+        nav.size.w,
+        keyboard::HEIGHT,
+    );
+    let keys = ui.keyboard.keys(area);
+    let at = |k: Key| to_rect(keys.iter().find(|(key, _)| *key == k).unwrap().1).center();
+    for c in "tom".chars() {
+        touch(&ctx, &mut ui, &shell, size, at(Key::Char(c)), &[]);
+    }
+    // The first letter was capitalized; tapping a suggestion finishes it.
+    assert_eq!(ui.keyboard.word(), "Tom");
+    let suggestions = ui.keyboard.suggestions();
+    let first = Keyboard::suggestion_cells(area)[0];
+    assert_eq!(suggestions[0], "Tomorrow");
+    touch(&ctx, &mut ui, &shell, size, to_rect(first).center(), &[]);
+    assert_eq!(ui.keyboard.word(), "");
+    // Everything went to the palette's field, none to a window.
+    assert!(ui.take_window_input().is_empty());
+}
+
+#[test]
+fn the_keyboard_button_types_into_the_focused_window() {
+    use derisk::keyboard::{self, Key, Output};
+    let size = (392.0, 872.0);
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.map_window("editor", "notes.md");
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, size, vec![], 5000);
+    assert!(!ui.keyboard_visible(&shell));
+    let button = to_rect(shell.nav_bar().buttons(shell.output())[3].1).center();
+    touch(&ctx, &mut ui, &shell, size, button, &[]);
+    assert!(ui.keyboard_visible(&shell));
+    // Windows make room for it.
+    let before = shell.work_area();
+    shell.keyboard = ui.keyboard_height(&shell);
+    assert_eq!(shell.work_area().size.h, before.size.h - keyboard::HEIGHT);
+    let nav = shell.nav_bar().area(shell.output());
+    let area = rect(
+        nav.loc.x,
+        nav.loc.y - keyboard::HEIGHT,
+        nav.size.w,
+        keyboard::HEIGHT,
+    );
+    let keys = ui.keyboard.keys(area);
+    let at = |k: Key| to_rect(keys.iter().find(|(key, _)| *key == k).unwrap().1).center();
+    touch(&ctx, &mut ui, &shell, size, at(Key::Char('h')), &[]);
+    touch(&ctx, &mut ui, &shell, size, at(Key::Char('i')), &[]);
+    touch(&ctx, &mut ui, &shell, size, at(Key::Backspace), &[]);
+    assert_eq!(
+        ui.take_window_input(),
+        vec![
+            Output::Text("H".into()),
+            Output::Text("i".into()),
+            Output::Backspace
+        ]
+    );
 }

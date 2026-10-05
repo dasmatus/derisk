@@ -4,36 +4,35 @@
 //! strength, per-panel opacity, when to save power); [`Effects::resolve`]
 //! combines it with the battery into a [`Look`] for this frame. In low power
 //! mode the blur, window shadows and animations go away, panels turn nearly
-//! opaque so text stays readable without the blur, and the frame rate
-//! halves.
+//! opaque so text stays readable without the blur, and the frame rate is
+//! capped at [`LOW_POWER_MAX_FPS`]. Otherwise the session renders once per
+//! refresh of the display; the compositor turns the cap into a rate the
+//! display shows evenly, using [`Look::vrr`].
 //!
 //! ```
 //! use derisk::{effects::Effects, overview::Battery};
 //! use derisk_settings::LowPower;
 //!
 //! let effects = Effects { low_power: LowPower::OnBattery, ..Effects::default() };
-//! let plugged = effects.resolve(Some(Battery { percent: 80, charging: true }));
-//! let unplugged = effects.resolve(Some(Battery { percent: 80, charging: false }));
+//! let plugged = effects.resolve(Some(Battery { percent: 80, charging: true, discharging: false }));
+//! let unplugged = effects.resolve(Some(Battery { percent: 80, charging: false, discharging: true }));
 //! assert!(plugged.blur > 0 && !plugged.low_power);
 //! assert!(unplugged.low_power && unplugged.blur == 0);
-//! assert!(unplugged.frame_interval > plugged.frame_interval);
+//! assert_eq!((plugged.max_fps, unplugged.max_fps), (None, Some(30)));
 //! ```
 
 use std::{
     path::{Path, PathBuf},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
-use derisk_settings::{LowPower, PanelOpacity, Settings};
+use derisk_settings::{LowPower, PanelOpacity, Settings, TopBar, Vrr, WindowStyle};
 use mcsapi::Geometry;
 
 use crate::overview::Battery;
 
-/// Time between frames normally, about 60 per second.
-pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
-
-/// Time between frames in low power mode, about 30 per second.
-pub const LOW_POWER_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// The frame rate cap in low power mode.
+pub const LOW_POWER_MAX_FPS: u32 = 30;
 
 /// The least panel opacity in low power mode, where nothing is blurred.
 const LOW_POWER_MIN_OPACITY: f32 = 0.97;
@@ -49,6 +48,12 @@ pub struct Effects {
     pub reduce_motion: bool,
     /// When low power mode turns on.
     pub low_power: LowPower,
+    /// Whether the display has variable refresh rate.
+    pub vrr: Vrr,
+    /// The top bar's position and contents.
+    pub top_bar: TopBar,
+    /// Window frame corners and shadows.
+    pub windows: WindowStyle,
 }
 
 impl Default for Effects {
@@ -74,8 +79,11 @@ pub struct Look {
     pub animate: bool,
     /// Whether windows cast shadows.
     pub shadows: bool,
-    /// Time between frames.
-    pub frame_interval: Duration,
+    /// The most frames per second; `None` renders once per refresh.
+    pub max_fps: Option<u32>,
+    /// The user's variable refresh rate choice: `Some` overrides what the
+    /// compositor detects, `None` keeps it.
+    pub vrr: Option<bool>,
 }
 
 /// An area of the screen to blur under a panel, in logical pixels.
@@ -98,13 +106,16 @@ impl Effects {
             panels: a.panels,
             reduce_motion: a.reduce_motion,
             low_power: settings.power.low_power,
+            vrr: settings.desktop.vrr,
+            top_bar: settings.top_bar,
+            windows: settings.windows,
         }
     }
 
     /// The effects for this frame. A device without a battery is never on
     /// battery.
     pub fn resolve(&self, battery: Option<Battery>) -> Look {
-        let on_battery = battery.is_some_and(|b| !b.charging);
+        let on_battery = battery.is_some_and(|b| b.discharging);
         let low_power = self.low_power.active(on_battery);
         let opacity = |percent: u8| {
             let o = f32::from(percent.clamp(20, 100)) / 100.0;
@@ -121,23 +132,25 @@ impl Effects {
             overview: opacity(self.panels.overview),
             snap_assist: opacity(self.panels.snap_assist),
             animate: !low_power && !self.reduce_motion,
-            shadows: !low_power,
-            frame_interval: if low_power {
-                LOW_POWER_FRAME_INTERVAL
-            } else {
-                FRAME_INTERVAL
+            shadows: !low_power && self.windows.shadows,
+            max_fps: low_power.then_some(LOW_POWER_MAX_FPS),
+            vrr: match self.vrr {
+                Vrr::Automatic => None,
+                Vrr::On => Some(true),
+                Vrr::Off => Some(false),
             },
         }
     }
 }
 
-/// Reloads [`Effects`] when the settings file changes, so the Settings app
-/// applies live.
+/// Reloads the settings when the file changes, so the Settings app applies
+/// live.
 #[derive(Debug)]
 pub struct SettingsWatch {
     path: Option<PathBuf>,
     modified: Option<SystemTime>,
     loaded: bool,
+    current: Settings,
 }
 
 impl SettingsWatch {
@@ -147,6 +160,7 @@ impl SettingsWatch {
             path,
             modified: None,
             loaded: false,
+            current: Settings::default(),
         }
     }
 
@@ -155,11 +169,18 @@ impl SettingsWatch {
         self.path.as_deref()
     }
 
-    /// New effects on the first call and whenever the file's modification
+    /// The settings from the last [`SettingsWatch::poll`] that returned
+    /// some, or the defaults before that.
+    pub fn current(&self) -> &Settings {
+        &self.current
+    }
+
+    /// The settings on the first call and whenever the file's modification
     /// time changes (including when it appears or goes away), else `None`.
-    pub fn poll(&mut self) -> Option<Effects> {
+    pub fn poll(&mut self) -> Option<Settings> {
         let Some(path) = &self.path else {
-            return (!std::mem::replace(&mut self.loaded, true)).then(Effects::default);
+            self.current = Settings::default();
+            return (!std::mem::replace(&mut self.loaded, true)).then(Settings::default);
         };
         let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         if self.loaded && modified == self.modified {
@@ -168,7 +189,8 @@ impl SettingsWatch {
         let (settings, _) = Settings::load(path).ok()?;
         self.loaded = true;
         self.modified = modified;
-        Some(Effects::from_settings(&settings))
+        self.current = settings.clone();
+        Some(settings)
     }
 }
 
@@ -179,10 +201,18 @@ mod tests {
     const PLUGGED: Option<Battery> = Some(Battery {
         percent: 50,
         charging: true,
+        discharging: false,
     });
     const UNPLUGGED: Option<Battery> = Some(Battery {
         percent: 50,
         charging: false,
+        discharging: true,
+    });
+    /// Plugged in but held below full charge ("Not charging").
+    const HELD: Option<Battery> = Some(Battery {
+        percent: 80,
+        charging: false,
+        discharging: false,
     });
 
     #[test]
@@ -192,7 +222,8 @@ mod tests {
         assert!(look.blur > 0);
         assert!(look.top_bar < 1.0 && look.top_bar >= 0.2);
         assert!(look.animate && look.shadows);
-        assert_eq!(look.frame_interval, FRAME_INTERVAL);
+        assert_eq!(look.max_fps, None);
+        assert_eq!(look.vrr, None);
     }
 
     #[test]
@@ -205,7 +236,7 @@ mod tests {
         assert!(look.low_power);
         assert_eq!(look.blur, 0);
         assert!(!look.animate && !look.shadows);
-        assert_eq!(look.frame_interval, LOW_POWER_FRAME_INTERVAL);
+        assert_eq!(look.max_fps, Some(LOW_POWER_MAX_FPS));
         assert!(look.top_bar >= LOW_POWER_MIN_OPACITY);
     }
 
@@ -217,6 +248,7 @@ mod tests {
         };
         assert!(!effects.resolve(None).low_power);
         assert!(!effects.resolve(PLUGGED).low_power);
+        assert!(!effects.resolve(HELD).low_power);
         assert!(effects.resolve(UNPLUGGED).low_power);
         let off = Effects {
             low_power: LowPower::Off,
@@ -242,6 +274,14 @@ mod tests {
     }
 
     #[test]
+    fn shadows_follow_the_window_style() {
+        let mut effects = Effects::default();
+        assert!(effects.resolve(None).shadows);
+        effects.windows.shadows = false;
+        assert!(!effects.resolve(None).shadows);
+    }
+
+    #[test]
     fn reduce_motion_stops_animation_but_keeps_blur() {
         let effects = Effects {
             reduce_motion: true,
@@ -253,30 +293,45 @@ mod tests {
     }
 
     #[test]
+    fn vrr_choice_overrides_detection_only_when_set() {
+        for (vrr, expected) in [
+            (Vrr::Automatic, None),
+            (Vrr::On, Some(true)),
+            (Vrr::Off, Some(false)),
+        ] {
+            let effects = Effects {
+                vrr,
+                ..Effects::default()
+            };
+            assert_eq!(effects.resolve(None).vrr, expected);
+        }
+    }
+
+    #[test]
     fn watch_reloads_when_the_file_changes() {
         let dir = std::env::temp_dir().join(format!("derisk-effects-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.conf");
         let mut watch = SettingsWatch::new(Some(path.clone()));
-        assert_eq!(watch.poll(), Some(Effects::default()));
+        assert_eq!(watch.poll(), Some(Settings::default()));
         assert_eq!(watch.poll(), None);
 
         std::fs::write(&path, "appearance.blur = 2\npower.low_power = on\n").unwrap();
-        let effects = watch.poll().expect("file appeared");
+        let effects = Effects::from_settings(&watch.poll().expect("file appeared"));
         assert_eq!(effects.blur, 2);
         assert_eq!(effects.low_power, LowPower::On);
         assert_eq!(watch.poll(), None);
 
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(watch.poll(), Some(Effects::default()));
+        assert_eq!(watch.poll(), Some(Settings::default()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn watch_without_a_path_yields_defaults_once() {
         let mut watch = SettingsWatch::new(None);
-        assert_eq!(watch.poll(), Some(Effects::default()));
+        assert_eq!(watch.poll(), Some(Settings::default()));
         assert_eq!(watch.poll(), None);
     }
 }

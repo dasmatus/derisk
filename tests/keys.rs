@@ -86,3 +86,28 @@ fn super_tap_only_without_other_keys() {
     tap.cancel();
     assert!(!tap.key(true, false));
 }
+
+#[test]
+fn rebound_shortcuts_move_and_free_their_chord() {
+    use derisk::keys::binding_with;
+    use derisk_settings::{Chord, Shortcut, Shortcuts};
+    let mut shortcuts = Shortcuts::default();
+    shortcuts.set(Shortcut::Close, Chord::parse("Ctrl+Alt+W"));
+    shortcuts.set(Shortcut::Float, None);
+    let ctrl_alt = Mods {
+        ctrl: true,
+        alt: true,
+        ..Mods::default()
+    };
+    assert_eq!(
+        binding_with(&shortcuts, ctrl_alt, Key::Letter('w')),
+        Some(Action::Close { window: None })
+    );
+    assert_eq!(binding_with(&shortcuts, SUPER, Key::Letter('q')), None);
+    assert_eq!(binding_with(&shortcuts, SUPER, Key::Letter('f')), None);
+    // The fixed families still work.
+    assert_eq!(
+        binding_with(&shortcuts, SUPER, Key::Digit(4)),
+        Some(Action::SwitchWorkspace { workspace: 4 })
+    );
+}

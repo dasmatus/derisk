@@ -225,10 +225,11 @@ impl FilesApp {
             if ui.button("⟳").on_hover_text("Refresh").clicked() {
                 self.go(Browser::refresh);
             }
-            let search_width = 180.0;
+            // On a phone the filter and the location share what is left.
+            let search_width = (ui.available_width() * 0.35).min(180.0);
             let location = ui.add(
                 egui::TextEdit::singleline(&mut self.location)
-                    .desired_width(ui.available_width() - search_width - 16.0),
+                    .desired_width((ui.available_width() - search_width - 16.0).max(60.0)),
             );
             if location.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 let target = PathBuf::from(&self.location);
@@ -247,7 +248,8 @@ impl FilesApp {
         };
         let selected = browser.selection().len();
         let mut action = None;
-        ui.horizontal(|ui| {
+        // Wraps onto a second line where the window is too narrow for it.
+        ui.horizontal_wrapped(|ui| {
             if ui.button("New folder").clicked() {
                 action = Some("folder");
             }
@@ -476,6 +478,9 @@ impl FilesApp {
     }
 }
 
+/// Below this width the places move from a sidebar to a row on top.
+const NARROW: f32 = 560.0;
+
 impl App for FilesApp {
     fn title(&self) -> &str {
         "Files"
@@ -507,20 +512,29 @@ impl App for FilesApp {
             });
         });
         let mut place = None;
-        egui::Panel::left("files-places")
-            .resizable(false)
-            .exact_size(170.0)
-            .show(ui, |ui| {
-                let cwd = self.browser.as_ref().map(|b| b.cwd().to_owned());
-                for (label, path) in self.places() {
-                    if ui
-                        .selectable_label(cwd.as_ref() == Some(&path), label)
-                        .clicked()
-                    {
-                        place = Some(path);
-                    }
+        let mut places = |ui: &mut egui::Ui| {
+            let cwd = self.browser.as_ref().map(|b| b.cwd().to_owned());
+            for (label, path) in self.places() {
+                if ui
+                    .selectable_label(cwd.as_ref() == Some(&path), label)
+                    .clicked()
+                {
+                    place = Some(path);
                 }
+            }
+        };
+        if ui.available_width() < NARROW {
+            // On a phone the places sidebar would take half the screen, so
+            // they become a row across the top that scrolls sideways.
+            egui::Panel::top("files-places").show(ui, |ui| {
+                egui::ScrollArea::horizontal().show(ui, |ui| ui.horizontal(&mut places));
             });
+        } else {
+            egui::Panel::left("files-places")
+                .resizable(false)
+                .exact_size(170.0)
+                .show(ui, places);
+        }
         if let Some(path) = place {
             self.open_place(&path);
         }

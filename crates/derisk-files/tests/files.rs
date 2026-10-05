@@ -92,12 +92,48 @@ fn copies_trees_and_keeps_links() {
         fs::read_link(dir.0.join("dst/link")).unwrap(),
         Path::new("a.txt")
     );
+    // Modes come across, a private folder stays private, and an existing
+    // name (or a link planted at it) is never written through.
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &str| {
+        fs::symlink_metadata(dir.0.join(p))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    fs::set_permissions(dir.0.join("src/sub"), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(dir.0.join("src/a.txt"), fs::Permissions::from_mode(0o640)).unwrap();
+    copy_recursive(&dir.0.join("src"), &dir.0.join("dst2")).unwrap();
+    assert_eq!(mode("dst2/sub"), 0o700);
+    assert_eq!(mode("dst2/a.txt"), 0o640);
+    std::os::unix::fs::symlink(dir.0.join("victim"), dir.0.join("planted")).unwrap();
+    assert!(copy_recursive(&dir.0.join("src/a.txt"), &dir.0.join("planted")).is_err());
+    assert!(!dir.0.join("victim").exists());
     assert!(copy_recursive(&dir.0.join("src"), &dir.0.join("src/sub/inner")).is_err());
     assert!(move_path(&dir.0.join("src"), &dir.0.join("src/sub/inner")).is_err());
     assert!(move_path(&dir.0.join("src/a.txt"), &dir.0.join("dst/sub/b.txt")).is_err());
     move_path(&dir.0.join("src"), &dir.0.join("moved")).unwrap();
     assert!(!dir.0.join("src").exists());
     assert!(dir.0.join("moved/sub/b.txt").exists());
+}
+
+#[test]
+fn trash_tightens_directories_an_earlier_version_made() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("trash-upgrade");
+    for sub in ["Trash/files", "Trash/info"] {
+        fs::create_dir_all(dir.0.join(sub)).unwrap();
+    }
+    for sub in ["Trash", "Trash/files", "Trash/info"] {
+        fs::set_permissions(dir.0.join(sub), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let file = dir.file("a.txt", 1);
+    Trash::at(dir.0.join("Trash")).put(&file).unwrap();
+    for sub in ["Trash", "Trash/files", "Trash/info"] {
+        let mode = fs::metadata(dir.0.join(sub)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{sub}");
+    }
 }
 
 #[test]
@@ -111,6 +147,11 @@ fn trash_records_the_original_path() {
     assert!(info.starts_with("[Trash Info]\nPath="));
     assert!(info.contains("my%20file%25.txt\n"), "{info}");
     assert!(info.contains("DeletionDate="));
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &str| fs::metadata(dir.0.join(p)).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode("Trash/files"), 0o700);
+    assert_eq!(mode("Trash/info"), 0o700);
+    assert_eq!(mode("Trash/info/my file%.txt.trashinfo"), 0o600);
     // A second file with the same name gets a numbered slot.
     let second = dir.file("my file%.txt", 2);
     assert_eq!(

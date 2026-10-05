@@ -341,6 +341,100 @@ pub fn notify(state: &str) -> bool {
     notify_socket().is_some_and(|s| s.send(state.as_bytes()).is_ok())
 }
 
+/// `systemctl` arguments that stop the headless agent, so the desktop can
+/// serve the agent socket on the same path.
+pub fn stop_headless_agent_argv() -> Vec<String> {
+    [
+        "systemctl",
+        "--user",
+        "stop",
+        "derisk-agent.socket",
+        "derisk-agent.service",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// The logind session this process runs in, from `XDG_SESSION_ID`.
+///
+/// Session operations name it, so Lock and Log out act on this session and
+/// not on every session of the user.
+pub fn session_id() -> Option<String> {
+    std::env::var("XDG_SESSION_ID")
+        .ok()
+        .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+/// `busctl` arguments that ask logind for the object path of session `id`.
+pub fn session_path_argv(id: &str) -> Vec<String> {
+    [
+        "busctl",
+        "--system",
+        "call",
+        "org.freedesktop.login1",
+        "/org/freedesktop/login1",
+        "org.freedesktop.login1.Manager",
+        "GetSession",
+        "s",
+        id,
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// The object path in `busctl call` output such as
+/// `o "/org/freedesktop/login1/session/_32"`.
+pub fn parse_object_path(output: &str) -> Option<String> {
+    let path = output.trim().strip_prefix("o ")?.trim().trim_matches('"');
+    path.starts_with('/').then(|| path.to_owned())
+}
+
+/// Looks up the object path of session `id`.
+pub fn session_path(id: &str) -> Option<String> {
+    let output = run(&session_path_argv(id)).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_object_path(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// `busctl` arguments that wait for logind's `Lock` signal on the session at
+/// `path` and exit when it arrives. logind sends it for `loginctl
+/// lock-session`, `loginctl lock-sessions` and anything else that asks for
+/// the session to be locked.
+pub fn lock_signal_argv(path: &str) -> Vec<String> {
+    [
+        "busctl",
+        "--system",
+        "wait",
+        "org.freedesktop.login1",
+        path,
+        "org.freedesktop.login1.Session",
+        "Lock",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// `busctl` arguments that tell logind whether the session at `path` is
+/// locked, which `loginctl show-session -p LockedHint` and logind's idle
+/// handling read.
+pub fn locked_hint_argv(path: &str, locked: bool) -> Vec<String> {
+    [
+        "busctl",
+        "--system",
+        "call",
+        "org.freedesktop.login1",
+        path,
+        "org.freedesktop.login1.Session",
+        "SetLockedHint",
+        "b",
+        if locked { "true" } else { "false" },
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
 /// Tells the service manager the shell is ready, with a status line.
 pub fn notify_ready(status: &str) -> bool {
     notify(&format!("READY=1\nSTATUS={}", status.replace('\n', " ")))

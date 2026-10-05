@@ -64,6 +64,16 @@ impl Clock {
         format!("{:02}:{:02}", self.hour, self.minute)
     }
 
+    /// e.g. `3:07 PM`.
+    pub fn time_label_12h(&self) -> String {
+        let hour = match self.hour % 12 {
+            0 => 12,
+            h => h,
+        };
+        let half = if self.hour < 12 { "AM" } else { "PM" };
+        format!("{hour}:{:02} {half}", self.minute)
+    }
+
     /// e.g. `Sat 3 Oct`.
     pub fn date_label(&self) -> String {
         format!(

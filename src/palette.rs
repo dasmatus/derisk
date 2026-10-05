@@ -480,13 +480,14 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
     for (i, &ws) in shell.workspaces().iter().enumerate() {
         for w in shell.windows_on(ws) {
             let (app, title) = shell.window_label(w).unwrap_or_default();
+            let app = shell.apps.look(app).name;
             let minimized = shell.is_minimized(w);
             let action = if minimized {
                 Action::Restore { window: w.get() }
             } else {
                 Action::Focus { window: w.get() }
             };
-            let name = if title.is_empty() { app } else { title };
+            let name = if title.is_empty() { &app } else { title };
             let mut detail = format!("{app} · workspace {}", i + 1);
             if minimized {
                 detail.push_str(" · minimized");
@@ -506,6 +507,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
     if let Some(w) = focused {
         let window = Some(w.get());
         let (app, _) = shell.window_label(w).unwrap_or_default();
+        let app = shell.apps.look(app).name;
         for m in shell.menus.app_menus(w.get()) {
             flatten(&m.entries, &m.title, &mut |id, path, shortcut| {
                 let mut e = Entry::new(
