@@ -1,0 +1,22 @@
+[package]
+name = "derisk-portal"
+description = "xdg-desktop-portal backend for derisk: appearance, screenshots, wallpaper and background apps"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "xdg-desktop-portal-derisk"
+path = "src/main.rs"
+
+[dependencies]
+# The portal backend traits and their D-Bus glue. Only the interfaces derisk
+# serves are switched on; the rest (file chooser, access dialog, ...) come
+# from the GTK backend, which derisk-portals.conf puts behind this one.
+ashpd = { version = "0.13.13", default-features = false, features = ["backend", "tokio", "settings", "screenshot", "wallpaper", "background"] }
+# The wallpaper portal writes the same settings file the Settings app does.
+derisk-settings.workspace = true
+serde_json = "1.0.145"
+tokio = { version = "1.43", features = ["rt", "macros", "net", "io-util", "time"] }

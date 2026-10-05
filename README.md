@@ -298,6 +298,33 @@ app starts. Its portal answers (camera, microphone, location, background,
 notifications, screenshots) are set to Ask, Allow or Deny through
 `flatpak permission-set` (`$DERISK_FLATPAK`, else `flatpak` on `PATH`).
 
+### Portal
+
+`xdg-desktop-portal-derisk` (`crates/derisk-portal`, on
+[ashpd](https://github.com/bilelmoussaoui/ashpd)'s backend traits) is the
+xdg-desktop-portal backend for a derisk session. It serves what only the
+session knows, and `data/portal/derisk-portals.conf` leaves everything else
+(file chooser, access dialog, printing, ...) to the GTK backend:
+
+| Portal | What it does |
+| --- | --- |
+| Settings | `org.freedesktop.appearance` from the published `theme.json`, so GTK 4, Qt, Firefox and Electron apps follow dark mode and the accent, live |
+| Screenshot | The whole screen from the compositor, over the agent socket, saved to Pictures/Screenshots |
+| Wallpaper | Sets a picture as the background through `settings.conf`, which the session reloads |
+| Background | Which apps have windows, over the agent socket; apps running without one are allowed for that run and nothing is stored |
+
+xdg-desktop-portal asks before a non-interactive screenshot or a wallpaper
+without a preview. The interactive and preview cases are the backend's to
+confirm, and it asks through the GTK backend's access dialog
+(`$DERISK_PORTAL_ACCESS` names another). There is no area picker or color
+picker yet, and the lock screen draws its own gradient, so a wallpaper for
+the lock screen alone is refused.
+
+Install `data/portal/derisk.portal` to `share/xdg-desktop-portal/portals`,
+`derisk-portals.conf` to `share/xdg-desktop-portal`, the D-Bus service to
+`share/dbus-1/services` and the unit to `share/systemd/user`, with `Exec=` and
+`ExecStart=` made absolute; `nix build` does.
+
 ### Headless commands
 
 ```console
@@ -409,7 +436,7 @@ GPU and windowing libraries. With [nix-direnv](https://github.com/nix-community/
 
 ```console
 $ nix develop                # the dev shell
-$ nix build                  # derisk with the host feature, plus its systemd units in share/systemd/user
+$ nix build                  # derisk with the host feature and its portal, plus their units and portal files under share/
 $ nix build .#derisk-preview # the apps' preview window
 $ nix run . -- session --launch foot
 $ nix flake check            # rustfmt, clippy and tests (default and host + preview)

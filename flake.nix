@@ -134,13 +134,22 @@
               // {
                 pname = "derisk";
                 cargoArtifacts = deps.host;
-                cargoExtraArgs = "--locked -p derisk --features host";
+                cargoExtraArgs = "--locked -p derisk -p derisk-portal --features derisk/host";
                 doCheck = false;
                 postInstall = ''
                   install -Dm644 -t $out/share/systemd/user data/systemd/user/*
                   # Run this build's derisk, not whichever one is on the manager's PATH.
                   substituteInPlace $out/share/systemd/user/derisk-agent.service \
                     --replace-fail "ExecStart=derisk " "ExecStart=$out/bin/derisk "
+                  # The portal backend: xdg-desktop-portal finds derisk.portal and the
+                  # portals.conf under share/, and D-Bus needs an absolute Exec=.
+                  install -Dm644 -t $out/share/xdg-desktop-portal/portals data/portal/derisk.portal
+                  install -Dm644 -t $out/share/xdg-desktop-portal data/portal/derisk-portals.conf
+                  install -Dm644 -t $out/share/dbus-1/services data/dbus-1/services/*
+                  substituteInPlace $out/share/dbus-1/services/org.freedesktop.impl.portal.desktop.derisk.service \
+                    --replace-fail "Exec=xdg-desktop-portal-derisk" "Exec=$out/bin/xdg-desktop-portal-derisk"
+                  substituteInPlace $out/share/systemd/user/xdg-desktop-portal-derisk.service \
+                    --replace-fail "ExecStart=xdg-desktop-portal-derisk" "ExecStart=$out/bin/xdg-desktop-portal-derisk"
                 '';
                 postFixup = withRuntimeRpath;
                 meta.mainProgram = "derisk";
