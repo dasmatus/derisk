@@ -304,8 +304,14 @@ impl MonitorApp {
     }
 
     fn table(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("🔍 Name or PID"));
+        // Wraps on a phone. A row wider than the window would widen the
+        // panel under it and push the table's columns off the screen.
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text("🔍 Name or PID")
+                    .desired_width((ui.available_width() * 0.4).min(240.0)),
+            );
             ui.label("Sort");
             for (key, label) in [
                 (SortKey::Cpu, "CPU"),
@@ -344,37 +350,117 @@ impl MonitorApp {
         }
         let mut select = None;
         let rows = self.rows();
+        let row_height = ui.spacing().interact_size.y;
+        let border = ui.visuals().widgets.noninteractive.bg_stroke.color;
+        let width = ui.available_width();
+        let (header, _) =
+            ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::hover());
+        cells(
+            ui,
+            header,
+            &COLUMNS.map(|(name, _, _)| egui::RichText::new(name).strong()),
+        );
+        ui.painter().hline(
+            header.x_range(),
+            header.bottom(),
+            egui::Stroke::new(1.0, border),
+        );
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                egui::Grid::new("monitor-processes")
-                    .num_columns(6)
-                    .striped(true)
-                    .spacing([20.0, 4.0])
-                    .show(ui, |ui| {
-                        for header in ["PID", "Name", "State", "CPU", "Memory", "Threads"] {
-                            ui.strong(header);
-                        }
-                        ui.end_row();
-                        for p in rows {
-                            if ui
-                                .selectable_label(self.selected == Some(p.pid), p.pid.to_string())
-                                .clicked()
-                            {
-                                select = Some(p.pid);
-                            }
-                            ui.label(&p.name);
-                            ui.label(p.state.to_string());
-                            ui.label(format!("{:.1}%", p.cpu));
-                            ui.label(format_kib(p.rss));
-                            ui.label(p.threads.to_string());
-                            ui.end_row();
-                        }
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let width = ui.available_width();
+                for (i, p) in rows.iter().enumerate() {
+                    let selected = self.selected == Some(p.pid);
+                    // One target per row: clicking a name or a number selects
+                    // the process, not only its PID.
+                    let (rect, row) =
+                        ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
+                    row.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            true,
+                            selected,
+                            format!("{} {}", p.pid, p.name),
+                        )
                     });
+                    let visuals = ui.visuals();
+                    let fill = if selected {
+                        Some(visuals.selection.bg_fill)
+                    } else if row.hovered() {
+                        Some(visuals.widgets.hovered.weak_bg_fill)
+                    } else if i % 2 == 1 {
+                        Some(visuals.faint_bg_color)
+                    } else {
+                        None
+                    };
+                    if let Some(fill) = fill {
+                        ui.painter().rect_filled(rect, 2.0, fill);
+                    }
+                    cells(
+                        ui,
+                        rect,
+                        &[
+                            p.pid.to_string(),
+                            p.name.clone(),
+                            p.state.to_string(),
+                            format!("{:.1}%", p.cpu),
+                            format_kib(p.rss),
+                            p.threads.to_string(),
+                        ]
+                        .map(egui::RichText::new),
+                    );
+                    if row.clicked() {
+                        select = Some(p.pid);
+                    }
+                }
             });
         if select.is_some() {
             self.selected = select;
         }
+    }
+}
+
+/// Process table columns: a header, its share of the row and the least it
+/// may have, so numbers stay whole on a phone. A share of 0 takes what the
+/// others leave, so the table spans the window.
+const COLUMNS: [(&str, f32, f32); 6] = [
+    ("PID", 0.09, 56.0),
+    ("Name", 0.0, 0.0),
+    ("State", 0.12, 44.0),
+    ("CPU", 0.1, 52.0),
+    ("Memory", 0.13, 72.0),
+    ("Threads", 0.1, 36.0),
+];
+
+/// Lays `texts` out across `row` in [`COLUMNS`].
+fn cells(ui: &mut egui::Ui, row: egui::Rect, texts: &[egui::RichText; 6]) {
+    let width = |share: f32, least: f32| (share * row.width()).max(least);
+    let fixed: f32 = COLUMNS
+        .iter()
+        .filter(|(_, share, _)| *share > 0.0)
+        .map(|(_, share, least)| width(*share, *least))
+        .sum();
+    let pad = 4.0;
+    let mut x = row.left();
+    for ((_, share, least), text) in COLUMNS.iter().zip(texts) {
+        let w = if *share == 0.0 {
+            (row.width() - fixed).max(0.0)
+        } else {
+            width(*share, *least)
+        };
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(x + pad, row.top()),
+            egui::vec2((w - 2.0 * pad).max(0.0), row.height()),
+        );
+        // `put` centers what it adds; cells read from the left.
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(cell)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| ui.add(egui::Label::new(text.clone()).truncate().selectable(false)),
+        );
+        x += w;
     }
 }
 
