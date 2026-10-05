@@ -98,6 +98,28 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// What running a sequence of actions did.
+///
+/// A failing action stops the rest, but the actions before it stay applied,
+/// so their effects (launching an app, say) must still be carried out:
+/// `effects` holds them whether or not `result` is an error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[must_use]
+pub struct Outcome {
+    /// Effects of the actions that were applied.
+    pub effects: Vec<Effect>,
+    /// The error that stopped the run, if any.
+    pub result: Result<(), Error>,
+}
+
+impl Outcome {
+    /// The effects if every action applied, else the error (dropping the
+    /// effects of the actions before it).
+    pub fn into_result(self) -> Result<Vec<Effect>, Error> {
+        self.result.map(|()| self.effects)
+    }
+}
+
 impl From<mcsapi::Error> for Error {
     fn from(e: mcsapi::Error) -> Self {
         Self::Policy(e)
@@ -632,14 +654,22 @@ impl Shell {
             .position(|(app, _)| *app == key || key.contains(app.as_str()))
         {
             let (_, actions) = self.pending.remove(i);
+            // Like `run_steps`: the first failure stops the rest.
+            let mut failed = false;
             for (action, step) in actions {
-                // Queued actions are best-effort: the window may already be gone.
-                let status = match self.apply(action) {
-                    Ok(more) => {
-                        effects.extend(more);
-                        StepStatus::Done
+                let status = if failed {
+                    StepStatus::Skipped
+                } else {
+                    match self.apply(action) {
+                        Ok(more) => {
+                            effects.extend(more);
+                            StepStatus::Done
+                        }
+                        Err(e) => {
+                            failed = true;
+                            StepStatus::Failed(e.to_string())
+                        }
                     }
-                    Err(e) => StepStatus::Failed(e.to_string()),
                 };
                 if let Some(step) = step {
                     self.conversation.set(step, status);
@@ -1010,8 +1040,9 @@ impl Shell {
     /// Window actions without an explicit window that follow a `Launch` are
     /// deferred until that app maps a window, so "open firefox and snap it
     /// left" acts on Firefox. Stops at the first error; earlier actions stay
-    /// applied.
-    pub fn run(&mut self, actions: impl IntoIterator<Item = Action>) -> Result<Vec<Effect>, Error> {
+    /// applied, and [`Outcome::effects`] holds their effects for the host to
+    /// carry out either way.
+    pub fn run(&mut self, actions: impl IntoIterator<Item = Action>) -> Outcome {
         self.run_steps(actions.into_iter().collect(), None)
     }
 
@@ -1022,12 +1053,7 @@ impl Shell {
     /// `confirmed` confirms destructive session operations; only pass it
     /// when the person explicitly confirmed this request (the palette asks
     /// again first). Agents never do.
-    pub fn ask(
-        &mut self,
-        text: &str,
-        source: Source,
-        confirmed: bool,
-    ) -> Result<Vec<Effect>, Error> {
+    pub fn ask(&mut self, text: &str, source: Source, confirmed: bool) -> Outcome {
         match assistant::interpret(text) {
             Ok(actions) => {
                 let actions = actions
@@ -1045,24 +1071,22 @@ impl Shell {
             Err(e) => {
                 self.conversation
                     .not_understood(source, text, &e.to_string());
-                Err(Error::NotUnderstood(e.0))
+                Outcome {
+                    effects: Vec::new(),
+                    result: Err(Error::NotUnderstood(e.0)),
+                }
             }
         }
     }
 
     /// Runs `actions` like [`Shell::run`], recording them as one turn of
     /// the conversation under `request`.
-    pub fn run_recorded(
-        &mut self,
-        request: &str,
-        source: Source,
-        actions: Vec<Action>,
-    ) -> Result<Vec<Effect>, Error> {
+    pub fn run_recorded(&mut self, request: &str, source: Source, actions: Vec<Action>) -> Outcome {
         let turn = self.conversation.start(source, request, &actions);
         self.run_steps(actions, Some(turn))
     }
 
-    fn run_steps(&mut self, actions: Vec<Action>, turn: Option<u64>) -> Result<Vec<Effect>, Error> {
+    fn run_steps(&mut self, actions: Vec<Action>, turn: Option<u64>) -> Outcome {
         let step = |i: usize| turn.map(|t| (t, i));
         let total = actions.len();
         let mut effects = Vec::new();
@@ -1089,7 +1113,10 @@ impl Shell {
                             self.conversation.set((t, rest), StepStatus::Skipped);
                         }
                     }
-                    return Err(e);
+                    return Outcome {
+                        effects,
+                        result: Err(e),
+                    };
                 }
             }
             if let Some(key) = launched {
@@ -1102,7 +1129,10 @@ impl Shell {
                 }
             }
         }
-        Ok(effects)
+        Outcome {
+            effects,
+            result: Ok(()),
+        }
     }
 
     /// Frames for the active workspace, bottom to top.

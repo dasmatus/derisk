@@ -197,6 +197,7 @@ fn an_app_id_set_after_mapping_still_gets_queued_actions() {
                 zone: SnapZone::Left,
             },
         ])
+        .result
         .unwrap();
     let (w, _) = shell.map_window("app", "");
     assert_eq!(shell.mode(w), Some(Mode::Tiled));
@@ -223,6 +224,7 @@ fn actions_after_a_launch_wait_for_the_new_window() {
                 zone: SnapZone::Right,
             },
         ])
+        .into_result()
         .unwrap();
     assert_eq!(
         effects,

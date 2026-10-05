@@ -554,9 +554,11 @@ impl Session {
         if actions.is_empty() {
             return;
         }
-        match self.shell.run(actions) {
-            Ok(effects) => self.perform(effects),
-            Err(e) => log(Priority::Info, &format!("action failed: {e}")),
+        let outcome = self.shell.run(actions);
+        // Actions before a failure stay applied, so their effects still run.
+        self.perform(outcome.effects);
+        if let Err(e) = outcome.result {
+            log(Priority::Info, &format!("action failed: {e}"));
         }
         self.palette_opened();
     }
@@ -1083,9 +1085,10 @@ impl compositor::Shell for Session {
         // Requests typed in the palette; their progress shows in its
         // conversation.
         for ask in self.ui.take_asks() {
-            match self.shell.ask(&ask.text, Source::User, ask.confirmed) {
-                Ok(effects) => self.perform(effects),
-                Err(e) => log(Priority::Info, &format!("request failed: {e}")),
+            let outcome = self.shell.ask(&ask.text, Source::User, ask.confirmed);
+            self.perform(outcome.effects);
+            if let Err(e) = outcome.result {
+                log(Priority::Info, &format!("request failed: {e}"));
             }
         }
         self.palette_opened();

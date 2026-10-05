@@ -174,7 +174,7 @@ fn palette_lists_app_actions() {
     history.record(private);
     assert_eq!(entries[empty(&history)[0]].title, "New Private Window");
 
-    let effects = shell.run(private.actions.clone()).unwrap();
+    let effects = shell.run(private.actions.clone()).into_result().unwrap();
     assert_eq!(
         effects,
         [Effect::LaunchAction {
