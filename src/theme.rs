@@ -13,9 +13,15 @@
 //! Each file is written to a temporary name and renamed into place, so a
 //! reader never sees half a theme; watch the directory for renames
 //! (`IN_MOVED_TO`) to follow changes. Apps launched from the shell also get
-//! [`environment`]: the cursor theme, and `XDG_CONFIG_DIRS` with the GTK
-//! settings first, so they apply unless the user's own `~/.config/gtk-*`
-//! says otherwise.
+//! [`environment`]: the cursor theme, the icon theme for Qt, and
+//! `XDG_CONFIG_DIRS` with the GTK settings first, so they apply unless the
+//! user's own `~/.config/gtk-*` says otherwise.
+//!
+//! The icon theme reaches two places files cannot, through
+//! [`icon_theme_argv`]: GSettings, which GTK prefers over `settings.ini`
+//! whenever the GNOME schemas are installed and which the GTK portal backend
+//! serves to Flatpak apps, and the environment of the user manager and D-Bus
+//! activation, for Qt apps the shell did not launch.
 //!
 //! ```
 //! let dir = std::env::temp_dir().join(format!("derisk-theme-doc-{}", std::process::id()));
@@ -67,6 +73,45 @@ pub fn publish(dir: &Path, id: &str, theme: &Theme) -> io::Result<()> {
     replace(&dir.join("theme.json"), &export::json(id, theme))
 }
 
+/// The variable Qt 5.15 and 6 read the icon theme from before asking their
+/// platform theme, which in a derisk session (neither GNOME nor Plasma)
+/// names none, leaving Qt apps with hicolor's few icons.
+pub const QT_ICON_THEME: &str = "QT_QPA_SYSTEM_ICON_THEME";
+
+/// `icons` if it can be handed on as a theme name: not empty, and without
+/// control characters, which no theme directory has and which would end a
+/// `settings.ini` line or an environment assignment early.
+fn icon_theme_name(icons: &str) -> Option<&str> {
+    (!icons.is_empty() && !icons.chars().any(char::is_control)).then_some(icons)
+}
+
+/// Commands that make `icons` the icon theme where [`publish`]'s files do not
+/// reach: GSettings' `org.gnome.desktop.interface icon-theme`, written with
+/// `dconf` so no schema has to be installed, and the user manager's and
+/// D-Bus activation's [`QT_ICON_THEME`]. Empty for a name that cannot be
+/// handed on.
+pub fn icon_theme_argv(icons: &str) -> Vec<Vec<String>> {
+    let Some(name) = icon_theme_name(icons) else {
+        return Vec::new();
+    };
+    // A GVariant string literal: single quotes, with quotes and
+    // backslashes inside escaped.
+    let quoted = format!("'{}'", name.replace('\\', "\\\\").replace('\'', "\\'"));
+    vec![
+        vec![
+            "dconf".to_owned(),
+            "write".to_owned(),
+            "/org/gnome/desktop/interface/icon-theme".to_owned(),
+            quoted,
+        ],
+        vec![
+            "dbus-update-activation-environment".to_owned(),
+            "--systemd".to_owned(),
+            format!("{QT_ICON_THEME}={name}"),
+        ],
+    ]
+}
+
 /// Environment for apps launched under `theme` published in `dir`.
 ///
 /// `system_config_dirs` is the session's `XDG_CONFIG_DIRS`; the published
@@ -80,6 +125,9 @@ pub fn environment(
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value))
         .collect();
+    if let Some(icons) = icon_theme_name(&theme.icons.theme) {
+        env.push((QT_ICON_THEME.to_owned(), icons.to_owned()));
+    }
     let system = system_config_dirs
         .filter(|dirs| !dirs.is_empty())
         .unwrap_or_else(|| "/etc/xdg".into());
@@ -131,5 +179,31 @@ mod tests {
             "/run/user/1000/derisk/config:/etc/xdg".into()
         )));
         assert!(env.contains(&("XCURSOR_SIZE".into(), "24".into())));
+        assert!(env.contains(&(QT_ICON_THEME.into(), Theme::dark().icons.theme)));
+    }
+
+    #[test]
+    fn icon_theme_argv_quotes_the_name_for_dconf() {
+        let argv = icon_theme_argv("Papirus-Dark");
+        assert_eq!(
+            argv[0],
+            [
+                "dconf",
+                "write",
+                "/org/gnome/desktop/interface/icon-theme",
+                "'Papirus-Dark'"
+            ]
+        );
+        assert_eq!(
+            argv[1],
+            [
+                "dbus-update-activation-environment",
+                "--systemd",
+                "QT_QPA_SYSTEM_ICON_THEME=Papirus-Dark"
+            ]
+        );
+        assert_eq!(icon_theme_argv(r"It's\Odd")[0][3], r"'It\'s\\Odd'");
+        assert!(icon_theme_argv("").is_empty());
+        assert!(icon_theme_argv("Bad\nName").is_empty());
     }
 }

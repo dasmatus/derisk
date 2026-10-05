@@ -177,6 +177,9 @@ pub struct Session {
     listeners: HashMap<u64, mpsc::Sender<String>>,
     /// Environment launched apps get from the published theme.
     theme_env: Vec<(String, String)>,
+    /// The icon theme last handed to GSettings and the activation
+    /// environment ([`derisk::theme::icon_theme_argv`]).
+    synced_icons: Option<String>,
     /// `derisk-gpui`, when installed: see [`gpui_apps`].
     gpui: Option<PathBuf>,
     /// The output's size, and the strips runtime panels cover in it.
@@ -315,6 +318,7 @@ impl Session {
             registered: HashMap::new(),
             listeners: HashMap::new(),
             theme_env: Vec::new(),
+            synced_icons: None,
             gpui: gpui_apps(),
             output: (w, h),
             reserved: Reserved::default(),
@@ -420,6 +424,22 @@ impl Session {
         }
         self.theme_env =
             derisk::theme::environment(&dir, &theme, std::env::var_os("XDG_CONFIG_DIRS"));
+        // Only a real session (--execute) changes the user's GSettings and
+        // activation environment, and only when the icon theme moved, since
+        // this runs on every settings change.
+        if self.execute && self.synced_icons.as_deref() != Some(theme.icons.theme.as_str()) {
+            for argv in derisk::theme::icon_theme_argv(&theme.icons.theme) {
+                let failed = match systemd::run(&argv) {
+                    Ok(output) if output.status.success() => None,
+                    Ok(output) => Some(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+                    Err(error) => Some(error.to_string()),
+                };
+                if let Some(error) = failed {
+                    log(Priority::Warning, &format!("{}: {error}", argv[0]));
+                }
+            }
+            self.synced_icons = Some(theme.icons.theme.clone());
+        }
     }
 
     /// Handles one agent request line from connection `conn`; the response
