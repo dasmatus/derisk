@@ -1548,6 +1548,7 @@ dependencies = [
  "libc",
  "mcsapi",
  "mcsapi-compositor",
+ "mcsapi-hardened-malloc",
  "mcsapi-runtime",
  "mcsapi-theme",
  "png 0.18.1",
@@ -4060,6 +4061,10 @@ dependencies = [
  "mcsapi-ui",
  "smithay",
 ]
+
+[[package]]
+name = "mcsapi-hardened-malloc"
+version = "0.1.0"
 
 [[package]]
 name = "mcsapi-runtime"

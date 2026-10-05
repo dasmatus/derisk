@@ -17,6 +17,7 @@ mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-hardened-malloc = { git = "https://github.com/dasmatus/mcsapi" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
@@ -57,6 +58,10 @@ derisk-gpui = { workspace = true, optional = true }
 libc = { version = "0.2", optional = true }
 # Screenshots for agents (`{"method":"screenshot"}`).
 png = { version = "0.18.1", optional = true }
+# GrapheneOS's hardened_malloc as the allocator (`hardened-malloc`). Links the
+# system's libhardened_malloc.so, so it is off by default: a build host
+# without that library can still build derisk.
+mcsapi-hardened-malloc = { workspace = true, optional = true }
 
 [features]
 host = [
@@ -70,6 +75,11 @@ host = [
     "dep:mcsapi-runtime",
     "dep:png",
 ]
+# Make hardened_malloc derisk's allocator, for the Rust heap and every C
+# library in the process. Turn it on only where the system has
+# libhardened_malloc.so and a 48-bit address space (see the crate's docs);
+# LosOS does on PCs, where it also preloads it into every process.
+hardened-malloc = ["dep:mcsapi-hardened-malloc"]
 
 
 # One codegen unit and fat LTO across every crate, mcsapi included: release
