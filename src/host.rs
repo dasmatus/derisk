@@ -58,7 +58,7 @@ use crate::pam;
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
     Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press,
-    Remote, Reserved, Role, RuntimeClient, Theme,
+    Remote, Reserved, Role, RuntimeClient, TextField, Theme,
     a11y::{Origin, Snapshot, Subtree},
     accesskit::{self, NodeId},
     egui,
@@ -157,6 +157,9 @@ pub struct Session {
     /// last wrote them.
     words: Option<PathBuf>,
     words_saved: Instant,
+    /// Whether a focused text field brought the on-screen keyboard up, so
+    /// leaving the field takes it down again; one the person opened stays.
+    keyboard_for_field: bool,
     shortcuts: Shortcuts,
     wallpaper: WallpaperPainter,
     privacy: Privacy,
@@ -301,6 +304,7 @@ impl Session {
             phone,
             words,
             words_saved: Instant::now(),
+            keyboard_for_field: false,
             shortcuts: Shortcuts::default(),
             wallpaper: WallpaperPainter::default(),
             privacy: derisk_settings::Settings::default().privacy,
@@ -1245,6 +1249,33 @@ impl compositor::Shell for Session {
 
     fn input_source(&mut self, synthetic: bool) {
         self.shell.set_synthetic_input(synthetic);
+    }
+
+    /// A GTK or Qt app's text field took or lost focus. On a touchscreen the
+    /// keyboard comes up for it, the way a phone's does; with a pointer the
+    /// hardware keyboard is the one in use, so it only stops learning words
+    /// typed into password fields.
+    fn text_input(&mut self, field: Option<TextField>) {
+        self.ui
+            .keyboard
+            .set_learning(!field.is_some_and(|f| f.password));
+        if !self.shell.is_phone() && !self.shell.profile().touch {
+            return;
+        }
+        let show = match field {
+            Some(_) if !self.shell.keyboard_visible() => {
+                self.keyboard_for_field = true;
+                true
+            }
+            None if self.keyboard_for_field => {
+                self.keyboard_for_field = false;
+                false
+            }
+            _ => return,
+        };
+        self.dispatch(vec![Action::Keyboard {
+            visible: Some(show),
+        }]);
     }
 }
 
