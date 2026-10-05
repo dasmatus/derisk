@@ -112,10 +112,8 @@ impl Greeter {
             }
         }
         if *self.login.phase() == Phase::Started && !self.quit {
-            log(
-                Priority::Notice,
-                &format!("starting the session for {}", self.login.username),
-            );
+            // The display manager logs whose session it is, by uid.
+            log(Priority::Notice, "starting the session");
             self.quit();
         }
     }

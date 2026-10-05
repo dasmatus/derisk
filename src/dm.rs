@@ -459,15 +459,18 @@ fn round(options: &Options, greeter: &Account) -> Result {
         return Ok(());
     };
     let Some(user) = account(&username) else {
-        return Err(format!("{username} authenticated but has no account").into());
+        return Err("an authenticated user has no account".into());
     };
+    // Sessions are logged by uid, as logind logs them; the name came from
+    // the greeter's text field.
+    let uid = user.uid;
     log(
         Priority::Notice,
-        &format!("starting a session for {username}"),
+        &format!("starting a session for uid {uid}"),
     );
     let worker = spawn_session(pam, &user, options.vt, "user", &cmd, &env, true)?;
     wait(worker);
-    log(Priority::Notice, &format!("session for {username} ended"));
+    log(Priority::Notice, &format!("session for uid {uid} ended"));
     Ok(())
 }
 
@@ -573,10 +576,9 @@ fn authenticate(options: &Options, stream: &mut UnixStream, username: &str) -> A
         return Auth::Error("unexpected request during authentication".into());
     }
     if let Err(e) = auth {
-        log(
-            Priority::Notice,
-            &format!("login for {username} failed: {e}"),
-        );
+        // No name: a failed login's user name is whatever was typed, which
+        // is sometimes the password typed into the wrong field.
+        log(Priority::Notice, &format!("a login failed: {e}"));
         return Auth::Failed(e);
     }
     // SAFETY: as above.
