@@ -209,14 +209,14 @@ impl Setup {
             ui,
             "Try it",
             &mut self.layout_try,
-            false,
+            wizard::Entry::Text,
             "Type here to test the layout",
         );
         let search = wizard::field(
             ui,
             "Search",
             &mut self.layout_search,
-            false,
+            wizard::Entry::Text,
             "Layout or language",
         );
         let shown: Vec<usize> = (0..self.layouts.len())
@@ -252,7 +252,13 @@ impl Setup {
     }
 
     fn zone_page(&mut self, ui: &mut Ui) {
-        let search = wizard::field(ui, "Search", &mut self.zone_search, false, "City or region");
+        let search = wizard::field(
+            ui,
+            "Search",
+            &mut self.zone_search,
+            wizard::Entry::Text,
+            "City or region",
+        );
         let shown: Vec<usize> = (0..self.zones.len())
             .filter(|&i| {
                 let z = &self.zones[i];
@@ -280,18 +286,40 @@ impl Setup {
 
     fn account_page(&mut self, ui: &mut Ui) {
         let mut real_name = self.account.real_name.clone();
-        if wizard::field(ui, "Full name", &mut real_name, false, "Ada Lovelace").changed() {
+        if wizard::field(
+            ui,
+            "Full name",
+            &mut real_name,
+            wizard::Entry::Text,
+            "Ada Lovelace",
+        )
+        .changed()
+        {
             self.account.set_real_name(real_name);
         }
-        if wizard::field(ui, "User name", &mut self.account.user_name, false, "ada").changed() {
+        if wizard::field(
+            ui,
+            "User name",
+            &mut self.account.user_name,
+            wizard::Entry::Text,
+            "ada",
+        )
+        .changed()
+        {
             self.account.user_name_edited = true;
         }
-        wizard::field(ui, "Password", &mut self.account.password, true, "Password");
+        wizard::field(
+            ui,
+            "Password",
+            &mut self.account.password,
+            wizard::Entry::Secret,
+            "Password",
+        );
         wizard::field(
             ui,
             "Confirm password",
             &mut self.account.confirm,
-            true,
+            wizard::Entry::Secret,
             "Password again",
         );
         if let Some(error) = &self.account_error {

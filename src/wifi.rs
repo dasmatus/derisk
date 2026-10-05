@@ -285,7 +285,7 @@ impl NetworkPage {
                     ui,
                     &format!("Passphrase for {}", network.name()),
                     &mut self.passphrase,
-                    true,
+                    wizard::Entry::Secret,
                     "Passphrase",
                 );
                 if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {

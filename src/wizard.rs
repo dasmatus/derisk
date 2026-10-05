@@ -278,12 +278,21 @@ fn dots(ui: &mut Ui, index: usize, count: usize, tokens: &Tokens) {
     }
 }
 
+/// What a [`field`] holds: shown as typed, or masked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Entry {
+    /// Shown as typed.
+    Text,
+    /// Masked, for a password or a passphrase.
+    Secret,
+}
+
 /// A label over a text field, the field taking the width it is given.
 pub fn field(
     ui: &mut Ui,
     label: &str,
     text: &mut String,
-    password: bool,
+    entry: Entry,
     placeholder: &str,
 ) -> egui::Response {
     let tokens = Tokens::current(ui.ctx());
@@ -296,7 +305,7 @@ pub fn field(
     ui.add_space(2.0);
     let response = ui.add(
         mcsapi_components::Input::new(text)
-            .password(password)
+            .password(entry == Entry::Secret)
             .placeholder(placeholder),
     );
     ui.add_space(10.0);
