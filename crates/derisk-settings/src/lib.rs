@@ -460,19 +460,21 @@ impl App for SettingsApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
-        egui::Panel::left("settings-pages")
-            .resizable(false)
-            .exact_size(180.0)
-            .show(ui, |ui| {
-                for page in Page::ALL {
-                    if ui
-                        .selectable_label(self.page == page, page.label())
-                        .clicked()
-                    {
-                        self.page = page;
-                    }
-                }
+        let narrow = ui.available_width() < NARROW;
+        if narrow {
+            // A 180-pixel sidebar would leave a phone half a page, so the
+            // pages become a row of tabs across the top that scrolls sideways.
+            egui::Panel::top("settings-pages").show(ui, |ui| {
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    ui.horizontal(|ui| self.page_buttons(ui));
+                });
             });
+        } else {
+            egui::Panel::left("settings-pages")
+                .resizable(false)
+                .exact_size(180.0)
+                .show(ui, |ui| self.page_buttons(ui));
+        }
         egui::Panel::bottom("settings-actions").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let dirty = self.is_dirty();
@@ -490,7 +492,30 @@ impl App for SettingsApp {
             });
         });
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| self.page_ui(ui, theme));
+            // A row of controls wider than a phone scrolls rather than being
+            // cut off where nothing can reach it.
+            let scroll = if narrow {
+                egui::ScrollArea::both()
+            } else {
+                egui::ScrollArea::vertical()
+            };
+            scroll.show(ui, |ui| self.page_ui(ui, theme));
         });
+    }
+}
+
+/// Below this width the page list moves from a sidebar to tabs on top.
+const NARROW: f32 = 560.0;
+
+impl SettingsApp {
+    fn page_buttons(&mut self, ui: &mut egui::Ui) {
+        for page in Page::ALL {
+            if ui
+                .selectable_label(self.page == page, page.label())
+                .clicked()
+            {
+                self.page = page;
+            }
+        }
     }
 }

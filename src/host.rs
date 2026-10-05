@@ -16,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     time::{Duration, Instant},
@@ -30,6 +30,7 @@ use derisk::{
     effects::{Effects, SettingsWatch},
     geom::{inset, rect},
     ipc::{self, LiveRequest},
+    keyboard::{Output as Typed, Predictor},
     keys::{self, Key, Mods, SuperTap},
     overview::Battery,
     palette::{self, Entry},
@@ -38,15 +39,15 @@ use derisk::{
     snap::{Direction, SnapZone},
     systemd::{self, Priority},
     time::Clock,
-    ui::ShellUi,
+    ui::{ShellUi, set_touch_style},
     wallpaper::{self, Visibility, WallpaperPainter},
 };
 use derisk_settings::{Privacy, Shortcuts};
 use mcsapi::WindowId;
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
-    InstanceId, KeyInput, KeyRoute, Keysym, OutputTiming, Placement, Press, Remote, Reserved, Role,
-    RuntimeClient, Theme,
+    Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press,
+    Remote, Reserved, Role, RuntimeClient, Theme,
     a11y::{Origin, Snapshot, Subtree},
     accesskit::{self, NodeId},
     egui,
@@ -138,6 +139,13 @@ pub struct Session {
     installed: Vec<DesktopEntry>,
     pending_actions: PendingActions,
     settings: SettingsWatch,
+    /// Whether the output is phone-sized, shared with [`CoreApps`] so the
+    /// apps get touch-sized widgets too.
+    phone: Arc<AtomicBool>,
+    /// Where the on-screen keyboard keeps the words it learned, and when it
+    /// last wrote them.
+    words: Option<PathBuf>,
+    words_saved: Instant,
     shortcuts: Shortcuts,
     wallpaper: WallpaperPainter,
     privacy: Privacy,
@@ -225,12 +233,25 @@ fn app_index(core: &[DesktopEntry], installed: &[DesktopEntry]) -> derisk::apps:
 }
 
 impl Session {
-    fn new(options: &Options, pending_actions: PendingActions) -> Self {
+    fn new(options: &Options, pending_actions: PendingActions, phone: Arc<AtomicBool>) -> Self {
         let (w, h) = options.size;
         let mut shell = Shell::new(rect(0, 0, w, h), false);
+        phone.store(shell.is_phone(), Ordering::Relaxed);
         let mut ui = ShellUi::new(&shell, options.reduced_motion);
         let core_apps = core_desktop_entries();
         let installed = installed_apps();
+        // The keyboard predicts app names too, below words the person used.
+        let words = Predictor::default_path();
+        if let Some(path) = &words {
+            ui.keyboard.predictor.load(path);
+        }
+        ui.keyboard.predictor.add_vocabulary(
+            core_apps
+                .iter()
+                .chain(&installed)
+                .flat_map(|e| e.name.split_whitespace()),
+            200,
+        );
         ui.palette.extra = palette_entries(&core_apps, &installed);
         shell.apps = app_index(&core_apps, &installed);
         Self {
@@ -249,6 +270,9 @@ impl Session {
             installed,
             pending_actions,
             settings: SettingsWatch::new(derisk_settings::default_path()),
+            phone,
+            words,
+            words_saved: Instant::now(),
             shortcuts: Shortcuts::default(),
             wallpaper: WallpaperPainter::default(),
             privacy: derisk_settings::Settings::default().privacy,
@@ -522,6 +546,7 @@ impl Session {
             rect(area.loc.x, area.loc.y, area.size.w, area.size.h),
             false,
         );
+        self.phone.store(self.shell.is_phone(), Ordering::Relaxed);
     }
 
     /// Runs an app's desktop action: core apps open in-process through
@@ -741,6 +766,16 @@ impl compositor::Shell for Session {
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
         }
+        // Learned words reach the disk at most twice a minute.
+        if self.ui.keyboard.predictor.is_dirty()
+            && self.words_saved.elapsed() >= Duration::from_secs(30)
+            && let Some(path) = &self.words
+        {
+            self.words_saved = Instant::now();
+            if let Err(e) = self.ui.keyboard.predictor.save(path) {
+                log(Priority::Warning, &format!("{}: {e}", path.display()));
+            }
+        }
     }
 
     fn chrome_wants_pointer(&self, (x, y): (i32, i32)) -> bool {
@@ -754,6 +789,11 @@ impl compositor::Shell for Session {
                 .ui
                 .bar_rect()
                 .is_some_and(|r| r.contains(egui::pos2(x as f32, y as f32)))
+            // Below the work area on a phone: the keyboard and navigation bar.
+            || (self.shell.is_phone() && {
+                let area = self.shell.work_area();
+                y >= area.loc.y + area.size.h
+            })
             || self.shell.snap_assist().is_some_and(|a| inside(a.frame))
             || !self.startup_done()
     }
@@ -882,6 +922,22 @@ impl compositor::Shell for Session {
     fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
+        // Windows make room for the on-screen keyboard, and what it typed
+        // for them goes to the focused one. It goes through the same
+        // synthetic-input path agents use, so the keyboard can't confirm
+        // what only a direct tap may (the power-off dialog).
+        self.shell.keyboard = self.ui.keyboard_height(&self.shell);
+        for typed in self.ui.take_window_input() {
+            let key = |sym| Input::Key {
+                sym,
+                mods: Modifiers::default(),
+            };
+            self.commands.push(Command::Input(match typed {
+                Typed::Text(text) => Input::Text(text),
+                Typed::Backspace => key(Keysym::BackSpace),
+                Typed::Enter => key(Keysym::Return),
+            }));
+        }
         // Requests typed in the palette; their progress shows in its
         // conversation.
         for ask in self.ui.take_asks() {
@@ -1047,6 +1103,7 @@ fn button_index(button: Button) -> u64 {
 struct CoreApps {
     session: derisk_apps::Session,
     pending_actions: PendingActions,
+    phone: Arc<AtomicBool>,
 }
 
 impl Apps for CoreApps {
@@ -1092,16 +1149,19 @@ impl Apps for CoreApps {
 
     fn prepare(&mut self, ctx: &egui::Context, theme: &Theme) {
         ctx.set_visuals(derisk_apps::visuals(theme));
+        set_touch_style(ctx, self.phone.load(Ordering::Relaxed));
     }
 }
 
 /// Runs the session until the window is closed.
 pub fn run(options: Options) -> Result {
     let pending_actions = PendingActions::default();
-    let session = Session::new(&options, pending_actions.clone());
+    let phone = Arc::new(AtomicBool::new(false));
+    let session = Session::new(&options, pending_actions.clone(), phone.clone());
     let apps = CoreApps {
         session: derisk_apps::Session::new()?,
         pending_actions,
+        phone,
     };
     let (w, h) = options.size;
     let mut compositor = Compositor::new(session)

@@ -20,6 +20,7 @@ use crate::{
     effects::{Effects, Look},
     geom::{Point, Rect, centered, contains, inset, rect},
     menu::{self, GlobalMenu},
+    mobile::NavBar,
     overview::Battery,
     snap::{Nudge, SnapZone, zone_at},
     systemd::{self, SessionOp},
@@ -242,6 +243,10 @@ pub struct Shell {
     pub failed_units: Vec<String>,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
+    /// Height of the on-screen keyboard above the navigation bar, updated by
+    /// the host from the chrome; 0 while it is hidden. Windows shrink to
+    /// stay above it, so the field being typed in stays visible.
+    pub keyboard: i32,
     /// Whether the latest input was injected by an agent or came from an
     /// AT-SPI action, rather than from the keyboard or pointer.
     synthetic_input: bool,
@@ -341,6 +346,7 @@ impl Shell {
             battery: None,
             failed_units: Vec::new(),
             effects: Effects::default(),
+            keyboard: 0,
             synthetic_input: false,
             agent_depth: 0,
             confirmation: None,
@@ -420,19 +426,30 @@ impl Shell {
 
     /// Where the top bar is drawn: along the top or bottom edge, as set in
     /// [`Effects::top_bar`]. An auto-hidden bar is drawn here while revealed.
+    /// A phone's status bar is always along the top, since the navigation
+    /// bar holds the bottom edge.
     pub fn bar_area(&self) -> Geometry {
         let o = self.output;
         let bar = self.profile.top_bar.min(o.size.h - 1);
         match self.effects.top_bar.position {
+            _ if self.is_phone() => rect(o.loc.x, o.loc.y, o.size.w, bar),
             BarPosition::Top => rect(o.loc.x, o.loc.y, o.size.w, bar),
             BarPosition::Bottom => rect(o.loc.x, o.loc.y + o.size.h - bar, o.size.w, bar),
         }
     }
 
     /// The output minus the top bar. An auto-hidden bar slides over windows
-    /// instead of taking room from them.
+    /// instead of taking room from them. Phones also lose the navigation bar
+    /// and the on-screen keyboard, and keep their status bar shown.
     pub fn work_area(&self) -> Geometry {
         let o = self.output;
+        if self.is_phone() {
+            let bar = self.profile.top_bar.min(o.size.h - 1);
+            let nav = (self.profile.nav_bar + self.keyboard)
+                .min(o.size.h - bar - 1)
+                .max(0);
+            return rect(o.loc.x, o.loc.y + bar, o.size.w, o.size.h - bar - nav);
+        }
         if self.effects.top_bar.autohide {
             return o;
         }
@@ -442,6 +459,13 @@ impl Shell {
             BarPosition::Bottom => o.loc.y,
         };
         rect(o.loc.x, y, o.size.w, o.size.h - bar)
+    }
+
+    /// The touch navigation bar (zero height except on phones).
+    pub fn nav_bar(&self) -> NavBar {
+        NavBar {
+            height: self.profile.nav_bar,
+        }
     }
 
     /// The underlying mcsapi policy (workspaces, focus, layout).
@@ -1106,8 +1130,21 @@ impl Shell {
             .filter(visible)
             .filter(|w| self.windows[w].mode == Mode::Tiled)
             .collect();
-        let topmost_tiled = self.stack.iter().rev().find(|w| tiled.contains(w)).copied();
         let tile_area = inset(area, gap / 2);
+        // Phones are monocle whatever the workspace's layout and the
+        // window's mode: the topmost window fills the work area, floating
+        // and snapped ones included, since there is no room to show two.
+        if self.is_phone() {
+            return self
+                .stack
+                .iter()
+                .rev()
+                .find(|w| members.contains(w) && visible(w))
+                .map(|&w| place(w, tile_area))
+                .into_iter()
+                .collect();
+        }
+        let topmost_tiled = self.stack.iter().rev().find(|w| tiled.contains(w)).copied();
         let layout = ws.layout();
         let mut out: Vec<WindowPlacement> = match layout.arrange(tile_area, tiled.iter().copied()) {
             Ok(placements) if layout != Layout::Monocle => placements
