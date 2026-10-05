@@ -79,6 +79,8 @@ USAGE:
                                   in the running session
     derisk send <json>            Send one agent-protocol request to the session
     derisk agent [OPTIONS]        Serve the JSON-lines agent protocol
+    derisk mcp                    Serve the running session's agent tools
+                                  over MCP on stdin and stdout
 
 SESSION OPTIONS:
     --launch <APP>        Launch an app once the session is up (repeatable)
@@ -141,6 +143,7 @@ fn main() {
         Some("launch") => launch(&args[1..]),
         Some("send") => send(&args[1..].join(" ")),
         Some("agent") => agent(&args[1..]),
+        Some("mcp") => mcp(),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -351,6 +354,36 @@ fn send(line: &str) -> Result {
     println!("{}", serde_json::to_string_pretty(&value)?);
     if value["ok"] == false {
         std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// `derisk mcp`: an MCP server on stdio whose tool calls go to the running
+/// session, one connection each, like `derisk send`.
+fn mcp() -> Result {
+    let mut session =
+        |request: &serde_json::Value| -> std::result::Result<serde_json::Value, String> {
+            let path = session_socket().map_err(|e| e.to_string())?;
+            let mut stream = UnixStream::connect(&path)
+                .map_err(|e| format!("no derisk session on {}: {e}", path.display()))?;
+            writeln!(stream, "{request}").map_err(|e| e.to_string())?;
+            let mut response = String::new();
+            BufReader::new(stream)
+                .read_line(&mut response)
+                .map_err(|e| e.to_string())?;
+            serde_json::from_str(&response).map_err(|e| format!("bad answer from the session: {e}"))
+        };
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout().lock();
+    let mut input = stdin.lock();
+    while let Some(line) = ipc::read_request(&mut input)? {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(reply) = derisk::mcp::respond(&line, &mut session) {
+            writeln!(stdout, "{reply}")?;
+            stdout.flush()?;
+        }
     }
     Ok(())
 }

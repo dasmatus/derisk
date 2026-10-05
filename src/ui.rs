@@ -1756,6 +1756,15 @@ impl ShellUi {
                 rows.push(ask);
             }
         }
+        // What the assistant could not do, Sonne's agent may: offered after
+        // the assistant's reason, before searching the web for it.
+        let agent = ask
+            .as_ref()
+            .filter(|ask| ask.actions.is_empty())
+            .and_then(|_| palette::agent(&state.query));
+        if let Some(agent) = &agent {
+            rows.push(agent);
+        }
         if let Some(web) = &web {
             rows.push(web);
         }

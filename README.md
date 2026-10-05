@@ -75,6 +75,13 @@ anything a person can do an agent can do too, under the same rules.
   `open firefox and snap it left, then go to workspace 2`.
   Try it from a terminal with `derisk ask open firefox and snap it left`.
 - **Agent protocol**: JSON lines over stdio or a Unix socket.
+- **MCP**: `derisk mcp` serves the same tools to MCP clients over stdio,
+  each call going to the running session. Sonne lists it as a context
+  server whenever `derisk` is installed, so its agent, with whichever model
+  key or agent CLI is set up in Sonne's settings, can drive the desktop.
+  Requests the assistant does not understand are offered to that agent in
+  the palette ("Ask Sonne's agent"); they open in Sonne's agent panel for
+  the person to send.
 
 ```console
 $ derisk agent
