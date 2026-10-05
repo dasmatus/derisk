@@ -8,4 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Wallpaper thumbnails, in the formats the session decodes.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+mcsapi-theme.workspace = true
 mcsapi-ui.workspace = true

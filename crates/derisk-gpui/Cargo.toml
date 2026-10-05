@@ -1,0 +1,27 @@
+[package]
+name = "derisk-gpui"
+description = "The derisk core apps as GPUI windows, each its own Wayland client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+derisk-calculator.workspace = true
+derisk-settings.workspace = true
+mcsapi-theme.workspace = true
+gpui = { version = "0.2.2", default-features = false, features = ["wayland", "x11"], optional = true }
+mcsapi-components-gpui = { workspace = true, optional = true }
+# GPUI 0.2.2 pulls xattr 0.2.3, which needs libc's removed Linux ENOATTR
+# alias; mcsapi pins the same version for the same reason.
+libc = { version = "=0.2.189", optional = true }
+
+[features]
+# GPUI needs Wayland, X11 and Vulkan system libraries; off by default like
+# mcsapi's own `gpui` feature, so the workspace builds without them.
+gpui = ["dep:gpui", "dep:mcsapi-components-gpui", "dep:libc", "mcsapi-components-gpui/gpui"]
+
+[[bin]]
+name = "derisk-gpui"
+required-features = ["gpui"]

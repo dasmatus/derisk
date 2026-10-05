@@ -280,6 +280,15 @@ pub fn format_number(value: f64) -> String {
     }
 }
 
+/// The keypad, row by row, shared by every toolkit's Calculator.
+pub const KEYS: [[&str; 5]; 5] = [
+    ["C", "(", ")", "%", "⬅"],
+    ["7", "8", "9", "÷", "√"],
+    ["4", "5", "6", "×", "^"],
+    ["1", "2", "3", "−", "pi"],
+    ["0", ".", "ans", "+", "="],
+];
+
 /// The Calculator app.
 #[derive(Debug, Default)]
 pub struct CalculatorApp {
@@ -316,7 +325,9 @@ impl CalculatorApp {
         }
     }
 
-    fn press(&mut self, key: &str) {
+    /// Applies one keypad key from [`KEYS`]: `C` clears, `⬅` deletes,
+    /// `=` submits, `√` opens `sqrt(`, anything else is typed.
+    pub fn press(&mut self, key: &str) {
         match key {
             "C" => {
                 self.input.clear();
@@ -332,40 +343,52 @@ impl CalculatorApp {
     }
 }
 
+/// Below this width the history moves from a side column to the bottom.
+const NARROW: f32 = 560.0;
+
 impl App for CalculatorApp {
     fn title(&self) -> &str {
         "Calculator"
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
-        egui::Panel::right("calculator-history")
-            .default_size(220.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("History");
-                    if ui.small_button("Clear").clicked() {
-                        self.history.clear();
+        let history = |ui: &mut egui::Ui| {
+            ui.horizontal(|ui| {
+                ui.strong("History");
+                if ui.small_button("Clear").clicked() {
+                    self.history.clear();
+                }
+            });
+            egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    let mut reuse = None;
+                    for (expression, value) in &self.history {
+                        let text = format!("{expression}\n= {}", format_number(*value));
+                        if ui
+                            .selectable_label(false, text)
+                            .on_hover_text("Use again")
+                            .clicked()
+                        {
+                            reuse = Some(expression.clone());
+                        }
+                    }
+                    if let Some(expression) = reuse {
+                        self.input = expression;
                     }
                 });
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        let mut reuse = None;
-                        for (expression, value) in &self.history {
-                            let text = format!("{expression}\n= {}", format_number(*value));
-                            if ui
-                                .selectable_label(false, text)
-                                .on_hover_text("Use again")
-                                .clicked()
-                            {
-                                reuse = Some(expression.clone());
-                            }
-                        }
-                        if let Some(expression) = reuse {
-                            self.input = expression;
-                        }
-                    });
-            });
+        };
+        if ui.available_width() < NARROW {
+            // A phone has no width for a side column; the history goes under
+            // the keypad instead, a few lines tall.
+            egui::Panel::bottom("calculator-history")
+                .exact_size(160.0)
+                .show(ui, history);
+        } else {
+            egui::Panel::right("calculator-history")
+                .default_size(220.0)
+                .show(ui, history);
+        }
         egui::CentralPanel::default_margins().show(ui, |ui| {
             let field = ui.add(
                 egui::TextEdit::singleline(&mut self.input)
@@ -386,13 +409,6 @@ impl App for CalculatorApp {
             };
             ui.label(preview.size(18.0));
             ui.add_space(8.0);
-            const KEYS: [[&str; 5]; 5] = [
-                ["C", "(", ")", "%", "⬅"],
-                ["7", "8", "9", "÷", "√"],
-                ["4", "5", "6", "×", "^"],
-                ["1", "2", "3", "−", "pi"],
-                ["0", ".", "ans", "+", "="],
-            ];
             let size = egui::vec2(
                 ((ui.available_width() - 4.0 * 6.0) / 5.0).max(40.0),
                 ((ui.available_height() - 4.0 * 6.0) / 5.0).clamp(32.0, 72.0),

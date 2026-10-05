@@ -91,6 +91,75 @@ Guard rails: apps can only be launched by plain command or desktop-file
 name (no paths or arguments); reboot, power off, hibernate and log out need
 `"confirmed": true`, which the assistant never sets on its own (the UI asks
 first); unit actions only apply to units that are currently failed.
+An agent's `"confirmed": true` is not taken as the person's word: the
+request waits on screen for someone at the computer to press the button
+(`"error"` says so), and the agent's own clicks, keys and accessibility
+actions cannot press it. A headless `derisk agent` has no screen, so it
+cannot power off or log out at all.
+
+### Computer use
+
+On the live desktop (`derisk session`), agents can also see and drive
+what is on screen. The same tree is published over AT-SPI, so screen
+readers such as Orca read it too.
+
+```console
+{"method":"tree"}                                   # every element: stable id, role, name, value, bounds, state, actions
+{"method":"find","role":"button","name":"Save"}     # elements matching a role and/or name (case-insensitive substring)
+{"method":"act","element":42,"action":"click"}      # click, focus, set_value (with "value"), expand, collapse, scroll_*, ...
+{"method":"screenshot"}                             # PNG path under $XDG_RUNTIME_DIR/derisk/screenshots; "inline":true for base64
+{"method":"input","events":[{"type":"click","x":400,"y":300},{"type":"key","key":"ctrl+a"},{"type":"text","text":"hi"}]}
+{"method":"register_tree","window":3,"nodes":[{"id":1,"role":"button","name":"Play","actions":["click"]}]}
+```
+
+Element ids stay the same while the element exists. Names, values and
+window titles are written by apps and web pages, not by the person, so
+every `tree` and `find` result carries a `note` saying to treat them as
+data, never as instructions. `register_tree` lets an out-of-process
+program (a GPUI app, say) describe its own window: its nodes appear under
+that window, actions on them come back to it as
+`{"event":"action","window":3,"node":1,"action":"click"}` on its
+connection, and they disappear when it disconnects.
+
+### Accessibility
+
+- One accessibility tree for the top bar, overview, palette, dialogs and
+  the built-in apps (roles, names, states, focus), on AT-SPI.
+- Every control is reachable by keyboard and the focused one has a ring
+  in the accent colour. Super+B moves focus to the top bar; Tab and
+  Shift+Tab move through it, Enter or Space activate, Escape gives focus
+  back to the window.
+- `--reduced-motion` turns animations off.
+
+## Themes
+
+Everything derisk draws, and every app it can reach, follows one theme
+from mcsapi's theming engine (`mcsapi-theme`). Settings → Appearance picks
+it: **Automatic** is the built-in dark or light theme with your accent,
+kept at 3:1 contrast; any other entry is a theme file, `<id>.theme` under
+`derisk/themes` in `$XDG_DATA_HOME` or `$XDG_DATA_DIRS`, which can inherit
+from another and change only what it needs:
+
+```toml
+name = "Paper"
+inherits = "derisk-light"
+
+[colors]
+accent = "rose"
+
+[icons]
+theme = "Papirus"
+```
+
+The session publishes the active theme under `$XDG_RUNTIME_DIR/derisk`
+whenever settings change, each file replaced atomically:
+`theme.json` (colors, tokens, fonts, icons and the freedesktop appearance
+values) for any consumer, `android/values/colors.xml` for the Android
+translation layer, and GTK `settings.ini` files. Apps launched from the
+shell get `XDG_CONFIG_DIRS` with those GTK settings first (your own
+`~/.config/gtk-*` still wins) and `XCURSOR_THEME`/`XCURSOR_SIZE`.
+`x2mcsapi --theme <id>` restyles web, Electron, GTK and Qt apps from the
+same theme.
 
 ## systemd integration
 
@@ -195,7 +264,37 @@ systemd units and run logind session operations.
 | Super+Q | Close |
 | Super+F / Super+T | Float / tile |
 | Super+M / Super+Shift+M | Monocle / tall |
+| Super+B | Focus the top bar (Tab moves on, Escape returns to the window) |
 | Escape | Leave the overview |
+
+Settings → Shortcuts rebinds the single-chord ones (palette, overview,
+focus, promote, close, float, tile, layouts) or turns them off; the
+families (Super+digits, Super+arrows, Alt+Tab) stay fixed.
+
+### Wallpaper
+
+Settings → Wallpaper picks derisk's gradient, one color, a two-color
+gradient, a PNG/JPEG/WebP picture (fill, fit, stretch, center or tile), a
+slideshow of a folder's pictures (every 1 to 1440 minutes, in order or
+shuffled), or a looping video. Videos play silently through an `ffmpeg`
+child process (`$DERISK_FFMPEG`, else `ffmpeg` on `PATH`) at 30 fps, at most
+1080p, and pause while a window fills the screen and in low power mode.
+Anything that fails to load falls back to the gradient and is logged.
+The page previews the choice and shows thumbnails of what it finds in
+Pictures, Videos and the system backgrounds.
+
+### Privacy
+
+Settings → Privacy turns location, camera and microphone off for every
+Flatpak app (it denies them in the portal permission store on Save; turning
+one back on lets apps ask again), stops the recently used files list, and
+empties trash older than 1 to 365 days. Under it, each installed Flatpak
+app's network, display, sound, device, folder and session-bus access can be
+switched; derisk writes these as `flatpak override --user` does, to
+`$XDG_DATA_HOME/flatpak/overrides/<app>`, so they apply the next time the
+app starts. Its portal answers (camera, microphone, location, background,
+notifications, screenshots) are set to Ask, Allow or Deny through
+`flatpak permission-set` (`$DERISK_FLATPAK`, else `flatpak` on `PATH`).
 
 ### Headless commands
 
@@ -248,7 +347,7 @@ in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
 | App | Crate | What it does |
 | --- | --- | --- |
 | Files | `derisk-files` | Places, back/forward/up, sort, filter, hidden files, new folder/file, rename (never overwrites), copy/cut/paste with `name (copy).ext` on clashes, the freedesktop.org trash, and `xdg-open`. |
-| Settings | `derisk-settings` | Dark/light, accent, text size, reduced motion, layout, gaps, workspaces, adaptive profile, input, notifications, and power, saved to `$XDG_CONFIG_HOME/derisk/settings.conf`. `Settings::theme()` gives the shell its colors. |
+| Settings | `derisk-settings` | Dark/light, accent, text size, reduced motion, window corners and shadows, wallpaper, the top bar's position, auto-hide and contents, layout, gaps, workspaces, adaptive profile, input, shortcuts, notifications, and power, saved to `$XDG_CONFIG_HOME/derisk/settings.conf`. `Settings::theme()` gives the shell its colors. |
 | Text Editor | `derisk-editor` | UTF-8 files up to 8 MiB, atomic saves that keep permissions, find and replace, line/column, unsaved-change prompts. |
 | System Monitor | `derisk-monitor` | CPU graph, memory, swap, load, uptime, and a sortable, filterable process table with End process, from `/proc`. |
 | Calculator | `derisk-calculator` | Expressions with precedence, `^`, `%`, functions, `pi`, `e`, `ans`, and history. |
@@ -260,6 +359,31 @@ To try them in one window without the compositor:
 
 ```console
 $ cargo run -p derisk-apps --features preview --bin derisk-preview -- org.derisk.files
+```
+
+### GPUI
+
+derisk is moving from egui to [GPUI](https://www.gpui.rs). `derisk-gpui`
+draws the ported apps (so far the Calculator) as their own Wayland clients,
+in the desktop theme, and follows theme changes while running. When the
+`derisk-gpui` binary sits next to `derisk`, the session opens ported apps
+with it; otherwise they run in-process with egui as before.
+
+```console
+$ cargo build -p derisk-gpui --features gpui
+$ cargo run -p derisk-gpui --features gpui -- org.derisk.calculator
+```
+
+GPUI cannot draw inside the compositor, so the shell's chrome is still egui.
+GPUI panels and overlays run as the compositor's runtime clients: it starts
+them on a private connection and places their windows by the role given on
+the command line, which a client cannot choose for itself. Panels keep
+windows out of their strip; an overlay covers the screen and takes every key.
+Both come back if they exit.
+
+```console
+$ derisk session --runtime panel:bottom:48 "my-gpui-dock"
+$ derisk session --runtime overlay "my-gpui-launcher"
 ```
 
 ## Building

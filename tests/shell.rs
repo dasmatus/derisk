@@ -170,6 +170,33 @@ fn maximize_toggles_and_minimize_hides() {
 }
 
 #[test]
+fn an_app_id_set_after_mapping_still_gets_queued_actions() {
+    // GPUI maps its window before it sets the app ID.
+    let mut shell = desktop();
+    shell
+        .run([
+            Action::Launch {
+                app: "org.derisk.calculator".into(),
+            },
+            Action::Snap {
+                window: None,
+                zone: SnapZone::Left,
+            },
+        ])
+        .unwrap();
+    let (w, _) = shell.map_window("app", "");
+    assert_eq!(shell.mode(w), Some(Mode::Tiled));
+    shell.set_app_id(w, "org.derisk.calculator").unwrap();
+    assert_eq!(shell.window_label(w), Some(("org.derisk.calculator", "")));
+    assert_eq!(
+        shell.mode(w),
+        Some(Mode::Snapped {
+            zone: SnapZone::Left
+        })
+    );
+}
+
+#[test]
 fn actions_after_a_launch_wait_for_the_new_window() {
     let mut shell = desktop();
     let effects = shell
@@ -388,4 +415,20 @@ fn workspaces_are_capped() {
         }),
         Err(Error::UnknownWorkspace(MAX_WORKSPACES + 1))
     );
+}
+
+#[test]
+fn the_bar_can_move_to_the_bottom_or_hide() {
+    use derisk_settings::BarPosition;
+    let mut shell = desktop();
+    let bar = shell.profile().top_bar;
+    assert_eq!(shell.work_area(), rect(0, bar, 1920, 1080 - bar));
+    shell.effects.top_bar.position = BarPosition::Bottom;
+    assert_eq!(shell.work_area(), rect(0, 0, 1920, 1080 - bar));
+    assert_eq!(shell.bar_area(), rect(0, 1080 - bar, 1920, bar));
+    let (a, _) = shell.map_window("editor", "notes");
+    let f = frame_of(&shell, a);
+    assert!(f.loc.y + f.size.h <= 1080 - bar, "{f:?}");
+    shell.effects.top_bar.autohide = true;
+    assert_eq!(shell.work_area(), rect(0, 0, 1920, 1080));
 }

@@ -8,4 +8,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Only for the O_NOFOLLOW and O_DIRECTORY values, which differ by architecture.
+libc = "0.2"
 mcsapi-ui.workspace = true

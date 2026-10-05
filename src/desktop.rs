@@ -60,6 +60,9 @@ pub struct DesktopEntry {
     pub keywords: Vec<String>,
     /// `Icon` (a theme icon name or path), empty if unset.
     pub icon: String,
+    /// `StartupWMClass`: the app ID its windows use when that differs from
+    /// the desktop file ID, empty if unset.
+    pub wm_class: String,
     /// The `Exec` line, unparsed.
     pub exec: String,
     /// Actions in `Actions` order, only those with a group and an `Exec`.
@@ -231,6 +234,7 @@ impl DesktopEntry {
             comment: String::new(),
             keywords: Vec::new(),
             icon: String::new(),
+            wm_class: String::new(),
             exec: String::new(),
             actions: Vec::new(),
             no_display: false,
@@ -276,6 +280,7 @@ impl DesktopEntry {
                     "Comment" => entry.comment = unescape(value),
                     "Keywords" => entry.keywords = list(value),
                     "Icon" => entry.icon = unescape(value),
+                    "StartupWMClass" => entry.wm_class = unescape(value),
                     "Exec" => entry.exec = value.to_owned(),
                     "NoDisplay" => entry.no_display = value == "true",
                     "Hidden" => hidden = value == "true",

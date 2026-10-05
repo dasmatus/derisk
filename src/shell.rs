@@ -6,18 +6,21 @@ use std::{
     path::Path,
 };
 
+use derisk_settings::BarPosition;
 use mcsapi::{Desktop, Geometry, Layout, WindowId, WorkspaceId};
 use serde::Serialize;
 
 use crate::{
     action::{Action, Effect, LayoutKind},
     adaptive::{FormFactor, Habits, Profile},
+    apps::Apps,
     assistant,
     conversation::{Conversation, Source, StepRef, StepStatus},
     decorations::{Button, ClickTracker, Hit},
     effects::{Effects, Look},
     geom::{Point, Rect, centered, contains, inset, rect},
     menu::{self, GlobalMenu},
+    mobile::NavBar,
     overview::Battery,
     snap::{Nudge, SnapZone, zone_at},
     systemd::{self, SessionOp},
@@ -48,6 +51,9 @@ pub enum Error {
     NoFocusedWindow,
     /// A destructive session operation was not confirmed by the user.
     NeedsConfirmation(SessionOp),
+    /// An agent or injected input asked for a destructive session
+    /// operation; it waits for the person to confirm it on screen.
+    ConfirmOnScreen(SessionOp),
     /// The app name is not a plain command or desktop-file ID.
     NotLaunchable(String),
     /// No tray item has this ID.
@@ -76,6 +82,10 @@ impl std::fmt::Display for Error {
                     "{op:?} needs explicit confirmation (set \"confirmed\": true)"
                 )
             }
+            Self::ConfirmOnScreen(op) => write!(
+                f,
+                "{op:?} is waiting for the person at the computer to confirm it on screen"
+            ),
             Self::NotLaunchable(app) => write!(f, "not a launchable app name: {app:?}"),
             Self::UnknownTrayItem(id) => write!(f, "unknown tray item: {id:?}"),
             Self::UnknownUnit(unit) => write!(f, "not a failed user unit: {unit:?}"),
@@ -233,22 +243,79 @@ pub struct Shell {
     pub failed_units: Vec<String>,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
+    /// Height of the on-screen keyboard above the navigation bar, updated by
+    /// the host from the chrome; 0 while it is hidden. Windows shrink to
+    /// stay above it, so the field being typed in stays visible.
+    pub keyboard: i32,
+    /// Whether the latest input was injected by an agent or came from an
+    /// AT-SPI action, rather than from the keyboard or pointer.
+    synthetic_input: bool,
+    /// Nesting depth of agent requests being handled ([`Shell::as_agent`]).
+    agent_depth: u32,
+    /// A destructive session operation waiting for the person to confirm.
+    confirmation: Option<SessionOp>,
+    /// Names and icons for app IDs, set by the host from `.desktop` files.
+    pub apps: Apps,
 }
 
+/// File types whose default handler runs the file as a program rather than
+/// showing it: desktop launchers, Java archives, Windows programs (through
+/// Wine), Flatpak references, AppImages and Android packages (through the
+/// Android Translation Layer). Compared without case, as shared-mime-info
+/// matches globs.
+const LAUNCHER_EXTENSIONS: &[&str] = &[
+    "desktop",
+    "jar",
+    "exe",
+    "msi",
+    "bat",
+    "cmd",
+    "com",
+    "lnk",
+    "flatpakref",
+    "flatpakrepo",
+    "appimage",
+    "apk",
+];
+
 /// Whether `path` is safe to hand to `xdg-open`: absolute, existing, and
-/// neither executable nor a `.desktop` launcher, so opening it cannot run a
-/// program.
+/// neither executable nor a launcher, so opening it cannot run a program.
+///
+/// A launcher is recognised by its extension in any case, and by content
+/// too, because shared-mime-info sniffs a file whose name matches no glob:
+/// `[Desktop Entry]` anywhere in the first 4 KiB, an ELF (AppImages are
+/// ELF) or Windows `MZ` executable whatever its name, and a zip (a jar or
+/// apk) only without an extension, since documents like .docx are zips too
+/// and their glob decides their type first.
 fn openable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
+    use std::{io::Read, os::unix::fs::PermissionsExt};
 
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
     };
-    path.is_absolute()
-        && (meta.is_dir()
-            || (meta.is_file()
-                && meta.permissions().mode() & 0o111 == 0
-                && path.extension().is_none_or(|e| e != "desktop")))
+    if !path.is_absolute() {
+        return false;
+    }
+    if meta.is_dir() {
+        return true;
+    }
+    if !meta.is_file() || meta.permissions().mode() & 0o111 != 0 {
+        return false;
+    }
+    let launcher = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        LAUNCHER_EXTENSIONS
+            .iter()
+            .any(|l| e.eq_ignore_ascii_case(l))
+    });
+    if launcher {
+        return false;
+    }
+    let mut head = Vec::with_capacity(4096);
+    let read = std::fs::File::open(path).and_then(|f| f.take(4096).read_to_end(&mut head));
+    let program = head.starts_with(b"\x7fELF")
+        || head.starts_with(b"MZ")
+        || (path.extension().is_none() && head.starts_with(b"PK\x03\x04"));
+    read.is_ok() && !program && !head.windows(15).any(|w| w == b"[Desktop Entry]")
 }
 
 impl Shell {
@@ -279,6 +346,11 @@ impl Shell {
             battery: None,
             failed_units: Vec::new(),
             effects: Effects::default(),
+            keyboard: 0,
+            synthetic_input: false,
+            agent_depth: 0,
+            confirmation: None,
+            apps: Apps::default(),
         };
         shell.apply_profile_layout();
         shell
@@ -287,6 +359,39 @@ impl Shell {
     /// The effects in force now, from [`Shell::effects`] and the battery.
     pub fn look(&self) -> Look {
         self.effects.resolve(self.battery)
+    }
+
+    /// Records whether the latest input was synthetic (injected by an agent,
+    /// or an AT-SPI action) or real; the host calls this when it changes.
+    pub fn set_synthetic_input(&mut self, synthetic: bool) {
+        self.synthetic_input = synthetic;
+    }
+
+    /// Whether the latest input was synthetic.
+    pub fn synthetic_input(&self) -> bool {
+        self.synthetic_input
+    }
+
+    /// Runs `f` as an agent's request: destructive session operations it
+    /// asks for wait for an on-screen confirmation even when it claims the
+    /// person confirmed.
+    pub fn as_agent<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.agent_depth += 1;
+        let result = f(self);
+        self.agent_depth -= 1;
+        result
+    }
+
+    /// Whether what is happening now may not come from the person: an
+    /// agent's request, or input an agent injected.
+    pub fn untrusted(&self) -> bool {
+        self.agent_depth > 0 || self.synthetic_input
+    }
+
+    /// A destructive session operation an agent or injected input asked
+    /// for, waiting for [`Action::Confirm`] from real input.
+    pub fn pending_confirmation(&self) -> Option<SessionOp> {
+        self.confirmation
     }
 
     /// Updates the output (resolution change, rotation, dock/undock).
@@ -319,15 +424,48 @@ impl Shell {
         self.output
     }
 
-    /// The output minus the top bar.
+    /// Where the top bar is drawn: along the top or bottom edge, as set in
+    /// [`Effects::top_bar`]. An auto-hidden bar is drawn here while revealed.
+    /// A phone's status bar is always along the top, since the navigation
+    /// bar holds the bottom edge.
+    pub fn bar_area(&self) -> Geometry {
+        let o = self.output;
+        let bar = self.profile.top_bar.min(o.size.h - 1);
+        match self.effects.top_bar.position {
+            _ if self.is_phone() => rect(o.loc.x, o.loc.y, o.size.w, bar),
+            BarPosition::Top => rect(o.loc.x, o.loc.y, o.size.w, bar),
+            BarPosition::Bottom => rect(o.loc.x, o.loc.y + o.size.h - bar, o.size.w, bar),
+        }
+    }
+
+    /// The output minus the top bar. An auto-hidden bar slides over windows
+    /// instead of taking room from them. Phones also lose the navigation bar
+    /// and the on-screen keyboard, and keep their status bar shown.
     pub fn work_area(&self) -> Geometry {
-        let bar = self.profile.top_bar.min(self.output.size.h - 1);
-        rect(
-            self.output.loc.x,
-            self.output.loc.y + bar,
-            self.output.size.w,
-            self.output.size.h - bar,
-        )
+        let o = self.output;
+        if self.is_phone() {
+            let bar = self.profile.top_bar.min(o.size.h - 1);
+            let nav = (self.profile.nav_bar + self.keyboard)
+                .min(o.size.h - bar - 1)
+                .max(0);
+            return rect(o.loc.x, o.loc.y + bar, o.size.w, o.size.h - bar - nav);
+        }
+        if self.effects.top_bar.autohide {
+            return o;
+        }
+        let bar = self.bar_area().size.h;
+        let y = match self.effects.top_bar.position {
+            BarPosition::Top => o.loc.y + bar,
+            BarPosition::Bottom => o.loc.y,
+        };
+        rect(o.loc.x, y, o.size.w, o.size.h - bar)
+    }
+
+    /// The touch navigation bar (zero height except on phones).
+    pub fn nav_bar(&self) -> NavBar {
+        NavBar {
+            height: self.profile.nav_bar,
+        }
     }
 
     /// The underlying mcsapi policy (workspaces, focus, layout).
@@ -469,7 +607,23 @@ impl Shell {
             },
         );
         self.stack.push(id);
+        let effects = self.apply_pending(app_id);
+        (id, effects)
+    }
 
+    /// Updates a window's app ID, for toolkits that set it after mapping
+    /// (GPUI), and applies actions an agent queued for that app.
+    pub fn set_app_id(&mut self, window: WindowId, app_id: &str) -> Result<Vec<Effect>, Error> {
+        let info = self.info_mut(window)?;
+        if info.app_id == app_id {
+            return Ok(Vec::new());
+        }
+        info.app_id = app_id.to_owned();
+        Ok(self.apply_pending(app_id))
+    }
+
+    /// Applies the actions an agent queued after launching `app_id`.
+    fn apply_pending(&mut self, app_id: &str) -> Vec<Effect> {
         let key = app_id.to_lowercase();
         let mut effects = Vec::new();
         if let Some(i) = self
@@ -492,7 +646,7 @@ impl Shell {
                 }
             }
         }
-        (id, effects)
+        effects
     }
 
     /// Stops managing a destroyed toplevel.
@@ -809,6 +963,27 @@ impl Shell {
                 if op.is_destructive() && !confirmed {
                     return Err(Error::NeedsConfirmation(op));
                 }
+                // An agent saying "confirmed" is not the person agreeing,
+                // and neither is a click or Enter an agent injected: a web
+                // page title can talk an agent into anything. Ask on screen.
+                if op.is_destructive() && self.untrusted() {
+                    self.confirmation = Some(op);
+                    return Err(Error::ConfirmOnScreen(op));
+                }
+                return Ok(vec![Effect::Session { op }]);
+            }
+            Action::Confirm { accept } => {
+                let Some(op) = self.confirmation else {
+                    return Ok(Vec::new());
+                };
+                if !accept {
+                    self.confirmation = None;
+                    return Ok(Vec::new());
+                }
+                if self.untrusted() {
+                    return Err(Error::ConfirmOnScreen(op));
+                }
+                self.confirmation = None;
                 return Ok(vec![Effect::Session { op }]);
             }
             Action::ActivateTray { id, item } => {
@@ -955,8 +1130,21 @@ impl Shell {
             .filter(visible)
             .filter(|w| self.windows[w].mode == Mode::Tiled)
             .collect();
-        let topmost_tiled = self.stack.iter().rev().find(|w| tiled.contains(w)).copied();
         let tile_area = inset(area, gap / 2);
+        // Phones are monocle whatever the workspace's layout and the
+        // window's mode: the topmost window fills the work area, floating
+        // and snapped ones included, since there is no room to show two.
+        if self.is_phone() {
+            return self
+                .stack
+                .iter()
+                .rev()
+                .find(|w| members.contains(w) && visible(w))
+                .map(|&w| place(w, tile_area))
+                .into_iter()
+                .collect();
+        }
+        let topmost_tiled = self.stack.iter().rev().find(|w| tiled.contains(w)).copied();
         let layout = ws.layout();
         let mut out: Vec<WindowPlacement> = match layout.arrange(tile_area, tiled.iter().copied()) {
             Ok(placements) if layout != Layout::Monocle => placements

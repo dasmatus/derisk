@@ -3,7 +3,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use mcsapi_ui::{Theme, egui::Color32};
+use mcsapi_ui::{
+    Theme,
+    egui::{Color32, Rect, pos2, vec2},
+};
+
+use crate::shortcuts::Shortcuts;
 
 /// Light or dark shell colors.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -35,15 +40,91 @@ impl Accent {
     /// Every accent, in display order.
     pub const ALL: [Self; 5] = [Self::Lime, Self::Sky, Self::Violet, Self::Rose, Self::Amber];
 
+    /// The accent's color, from the theming engine's built-in accents.
+    pub fn spec_color(self) -> mcsapi_theme::Color {
+        // Every name in `enum_text!` below is one of mcsapi_theme::ACCENTS.
+        mcsapi_theme::accent(self.as_str()).unwrap_or(mcsapi_theme::ACCENTS[0].1)
+    }
+
     /// The accent's color.
-    pub const fn color(self) -> Color32 {
-        match self {
-            Self::Lime => Color32::from_rgb(163, 230, 53),
-            Self::Sky => Color32::from_rgb(56, 189, 248),
-            Self::Violet => Color32::from_rgb(167, 139, 250),
-            Self::Rose => Color32::from_rgb(251, 113, 133),
-            Self::Amber => Color32::from_rgb(251, 191, 36),
+    pub fn color(self) -> Color32 {
+        let c = self.spec_color();
+        Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
+    }
+}
+
+/// Which theme the desktop uses: [`ThemeId::AUTOMATIC`] (the built-in light
+/// or dark theme for [`ColorScheme`], with the chosen [`Accent`]) or the ID of
+/// a theme file, `derisk/themes/<id>.theme` in an XDG data directory.
+///
+/// Stored inline so [`Settings`] stays `Copy`.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ThemeId {
+    bytes: [u8; Self::MAX],
+    len: u8,
+}
+
+impl ThemeId {
+    /// Longest ID accepted.
+    pub const MAX: usize = 48;
+    /// Follow the color scheme and accent settings.
+    pub const AUTOMATIC: Self = Self {
+        bytes: [0; Self::MAX],
+        len: 0,
+    };
+
+    /// Parses `auto` or a theme ID: letters, digits, `-`, `_` and `.`, not
+    /// starting with a dot, at most [`ThemeId::MAX`] bytes.
+    pub fn parse(text: &str) -> Option<Self> {
+        if text == "auto" {
+            return Some(Self::AUTOMATIC);
         }
+        let valid = !text.is_empty()
+            && text.len() <= Self::MAX
+            && !text.starts_with('.')
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+        valid.then(|| {
+            let mut bytes = [0; Self::MAX];
+            bytes[..text.len()].copy_from_slice(text.as_bytes());
+            Self {
+                bytes,
+                len: text.len() as u8,
+            }
+        })
+    }
+
+    /// Whether this follows the scheme and accent settings.
+    pub fn is_automatic(self) -> bool {
+        self.len == 0
+    }
+
+    /// The ID, or `auto`.
+    pub fn as_str(&self) -> &str {
+        if self.is_automatic() {
+            return "auto";
+        }
+        // Infallible: `parse` only stores ASCII.
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or("auto")
+    }
+}
+
+impl Default for ThemeId {
+    fn default() -> Self {
+        Self::AUTOMATIC
+    }
+}
+
+impl fmt::Debug for ThemeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ThemeId({})", self.as_str())
+    }
+}
+
+impl fmt::Display for ThemeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -122,6 +203,8 @@ pub struct PanelOpacity {
 /// Appearance preferences.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Appearance {
+    /// The theme; when automatic, `scheme` and `accent` pick a built-in one.
+    pub theme: ThemeId,
     /// Light or dark colors.
     pub scheme: ColorScheme,
     /// Highlight color.
@@ -134,6 +217,243 @@ pub struct Appearance {
     pub blur: u8,
     /// Panel opacity.
     pub panels: PanelOpacity,
+}
+
+/// Which screen edge the top bar sits on.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BarPosition {
+    /// Along the top edge.
+    #[default]
+    Top,
+    /// Along the bottom edge, like a taskbar.
+    Bottom,
+}
+
+/// The top bar's place and what it shows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TopBar {
+    /// Top or bottom edge.
+    pub position: BarPosition,
+    /// Hide the bar until the pointer touches its edge; windows then use
+    /// the whole screen.
+    pub autohide: bool,
+    /// The search field that opens the command palette.
+    pub search: bool,
+    /// The focused app's name.
+    pub app_name: bool,
+    /// The date beside the clock.
+    pub date: bool,
+    /// The battery level.
+    pub battery: bool,
+    /// A 24-hour clock instead of AM/PM.
+    pub clock_24h: bool,
+}
+
+/// How window frames look.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowStyle {
+    /// Radius of the title bar's top corners, 0 to 20 logical pixels.
+    pub corner_radius: u8,
+    /// A soft shadow under each window (low power mode drops it anyway).
+    pub shadows: bool,
+}
+
+/// An sRGB color, written `#rrggbb`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Rgb(pub u8, pub u8, pub u8);
+
+impl Rgb {
+    /// Parses `#rrggbb`.
+    pub fn parse(text: &str) -> Option<Self> {
+        let hex = text.strip_prefix('#')?;
+        if hex.len() != 6 || !hex.is_ascii() {
+            return None;
+        }
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+        Some(Self(byte(0)?, byte(2)?, byte(4)?))
+    }
+
+    /// The color as `#rrggbb`.
+    pub fn to_hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.0, self.1, self.2)
+    }
+
+    /// The color for egui.
+    pub const fn color(self) -> Color32 {
+        Color32::from_rgb(self.0, self.1, self.2)
+    }
+}
+
+/// What the desktop background shows.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WallpaperKind {
+    /// derisk's own gradient, tinted by the accent.
+    #[default]
+    Default,
+    /// One color.
+    Color,
+    /// A top-to-bottom gradient between two colors.
+    Gradient,
+    /// A PNG, JPEG or WebP picture.
+    Image,
+    /// Pictures from a folder, changing on a timer.
+    Slideshow,
+    /// A looping video, decoded by ffmpeg.
+    Video,
+}
+
+impl WallpaperKind {
+    /// Every kind, in display order.
+    pub const ALL: [Self; 6] = [
+        Self::Default,
+        Self::Color,
+        Self::Gradient,
+        Self::Image,
+        Self::Slideshow,
+        Self::Video,
+    ];
+
+    /// The kind's label in the Settings app.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Default => "derisk",
+            Self::Color => "Color",
+            Self::Gradient => "Gradient",
+            Self::Image => "Picture",
+            Self::Slideshow => "Slideshow",
+            Self::Video => "Video",
+        }
+    }
+}
+
+/// How a picture or video fills a screen of a different shape.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Fit {
+    /// Cover the screen, cropping the overflow.
+    #[default]
+    Fill,
+    /// Show all of it, with bars of the first color around it.
+    Fit,
+    /// Cover the screen, distorting it.
+    Stretch,
+    /// Actual size in the middle.
+    Center,
+    /// Repeat at actual size.
+    Tile,
+}
+
+impl Fit {
+    /// Every mode, in display order.
+    pub const ALL: [Self; 5] = [
+        Self::Fill,
+        Self::Fit,
+        Self::Stretch,
+        Self::Center,
+        Self::Tile,
+    ];
+
+    /// Where a `size` picture lands on `screen`, as the rectangle to draw and
+    /// the part of the texture to sample (in 0–1 texture coordinates; above 1
+    /// repeats, for tiling).
+    pub fn place(self, size: [usize; 2], screen: Rect) -> (Rect, Rect) {
+        let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
+        match self {
+            Fit::Stretch => (screen, full),
+            Fit::Fill => {
+                // Sample the centered part of the picture with the screen's shape.
+                let scale = (screen.width() / w).max(screen.height() / h);
+                let (uw, uh) = (screen.width() / (w * scale), screen.height() / (h * scale));
+                let uv = Rect::from_center_size(pos2(0.5, 0.5), vec2(uw, uh));
+                (screen, uv)
+            }
+            Fit::Fit => {
+                let scale = (screen.width() / w).min(screen.height() / h);
+                (
+                    Rect::from_center_size(screen.center(), vec2(w * scale, h * scale)),
+                    full,
+                )
+            }
+            Fit::Center => {
+                // Actual size, cropped to the screen when larger.
+                let shown = vec2(w.min(screen.width()), h.min(screen.height()));
+                let uv = Rect::from_center_size(pos2(0.5, 0.5), vec2(shown.x / w, shown.y / h));
+                (Rect::from_center_size(screen.center(), shown), uv)
+            }
+            Fit::Tile => (
+                screen,
+                Rect::from_min_size(
+                    pos2(0.0, 0.0),
+                    vec2(screen.width() / w, screen.height() / h),
+                ),
+            ),
+        }
+    }
+
+    /// The mode's label in the Settings app.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Fill => "Fill",
+            Self::Fit => "Fit",
+            Self::Stretch => "Stretch",
+            Self::Center => "Center",
+            Self::Tile => "Tile",
+        }
+    }
+}
+
+/// The desktop background.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Wallpaper {
+    /// What to show.
+    pub kind: WallpaperKind,
+    /// The picture or video file, or the slideshow's folder.
+    pub path: PathBuf,
+    /// How pictures and videos fill the screen.
+    pub fit: Fit,
+    /// The color, the gradient's top, and the bars around a fitted picture.
+    pub color: Rgb,
+    /// The gradient's bottom.
+    pub color2: Rgb,
+    /// Minutes between slideshow pictures, 1 to 1440.
+    pub interval_min: u16,
+    /// Show slideshow pictures in random order.
+    pub shuffle: bool,
+    /// Stop a video while a window covers the whole screen.
+    pub pause_when_covered: bool,
+    /// Stop a video in low power mode (on battery, by default).
+    pub pause_in_low_power: bool,
+}
+
+impl Default for Wallpaper {
+    fn default() -> Self {
+        Self {
+            kind: WallpaperKind::Default,
+            path: PathBuf::new(),
+            fit: Fit::Fill,
+            color: Rgb(17, 24, 39),
+            color2: Rgb(30, 27, 75),
+            interval_min: 30,
+            shuffle: false,
+            pause_when_covered: true,
+            pause_in_low_power: true,
+        }
+    }
+}
+
+/// Privacy preferences.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Privacy {
+    /// Apps may ask for the location. Off denies it to every Flatpak app.
+    pub location: bool,
+    /// Apps may ask for the camera. Off denies it to every Flatpak app.
+    pub camera: bool,
+    /// Apps may ask for the microphone. Off denies it to every Flatpak app.
+    pub microphone: bool,
+    /// Keep a list of recently used files and palette picks.
+    pub remember_recent: bool,
+    /// Days after which trashed files are deleted for good; 0 keeps them.
+    pub empty_trash_days: u16,
 }
 
 /// Whether the display has variable refresh rate (VRR, Adaptive-Sync), which
@@ -226,10 +546,20 @@ pub struct Power {
 }
 
 /// All derisk preferences.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     /// Appearance.
     pub appearance: Appearance,
+    /// The top bar.
+    pub top_bar: TopBar,
+    /// Window frames.
+    pub windows: WindowStyle,
+    /// The desktop background.
+    pub wallpaper: Wallpaper,
+    /// Rebindable keyboard shortcuts.
+    pub shortcuts: Shortcuts,
+    /// Device access, history and trash.
+    pub privacy: Privacy,
     /// Window management.
     pub desktop: DesktopPrefs,
     /// Keyboard and pointer.
@@ -244,6 +574,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             appearance: Appearance {
+                theme: ThemeId::AUTOMATIC,
                 scheme: ColorScheme::Dark,
                 accent: Accent::Lime,
                 text_scale: 1.0,
@@ -254,6 +585,28 @@ impl Default for Settings {
                     overview: 80,
                     snap_assist: 85,
                 },
+            },
+            top_bar: TopBar {
+                position: BarPosition::Top,
+                autohide: false,
+                search: true,
+                app_name: true,
+                date: true,
+                battery: true,
+                clock_24h: true,
+            },
+            windows: WindowStyle {
+                corner_radius: 10,
+                shadows: true,
+            },
+            wallpaper: Wallpaper::default(),
+            shortcuts: Shortcuts::default(),
+            privacy: Privacy {
+                location: true,
+                camera: true,
+                microphone: true,
+                remember_recent: true,
+                empty_trash_days: 30,
             },
             desktop: DesktopPrefs {
                 layout: Layout::Tall,
@@ -319,6 +672,27 @@ enum_text!(Layout { Tall => "tall", Monocle => "monocle" });
 enum_text!(Vrr { Automatic => "auto", On => "on", Off => "off" });
 enum_text!(LowPower { Off => "off", OnBattery => "on_battery", On => "on" });
 enum_text!(Profile { Automatic => "automatic", Phone => "phone", Tablet => "tablet", Desktop => "desktop" });
+enum_text!(BarPosition { Top => "top", Bottom => "bottom" });
+enum_text!(WallpaperKind { Default => "default", Color => "color", Gradient => "gradient", Image => "image", Slideshow => "slideshow", Video => "video" });
+enum_text!(Fit { Fill => "fill", Fit => "fit", Stretch => "stretch", Center => "center", Tile => "tile" });
+
+/// The line without its comment. `#` starts a comment at the start of a
+/// line or as a word of its own after a space, so `#rrggbb` colors and
+/// paths with `#` in them survive.
+fn strip_comment(line: &str) -> &str {
+    if line.trim_start().starts_with('#') {
+        return "";
+    }
+    let bytes = line.as_bytes();
+    let end = (1..bytes.len())
+        .find(|&i| {
+            bytes[i] == b'#'
+                && bytes[i - 1].is_ascii_whitespace()
+                && bytes.get(i + 1).is_none_or(|b| b.is_ascii_whitespace())
+        })
+        .unwrap_or(bytes.len());
+    &line[..end]
+}
 
 fn parse_bool(text: &str) -> Option<bool> {
     match text {
@@ -333,7 +707,8 @@ fn parse_in<T: std::str::FromStr + PartialOrd>(text: &str, min: T, max: T) -> Op
 }
 
 impl Settings {
-    /// Parses `key = value` lines. `#` starts a comment.
+    /// Parses `key = value` lines. `#` starts a comment (see
+    /// [`strip_comment`]).
     ///
     /// Unknown keys and invalid values are skipped with a warning and leave
     /// the default in place, so an old or hand-edited file never blocks login.
@@ -341,7 +716,7 @@ impl Settings {
         let mut settings = Self::default();
         let mut warnings = Vec::new();
         for (index, raw) in text.lines().enumerate() {
-            let line = raw.split('#').next().unwrap_or_default().trim();
+            let line = strip_comment(raw).trim();
             if line.is_empty() {
                 continue;
             }
@@ -374,7 +749,13 @@ impl Settings {
             &mut self.notifications,
             &mut self.power,
         );
+        let (b, win, w) = (&mut self.top_bar, &mut self.windows, &mut self.wallpaper);
+        let pv = &mut self.privacy;
+        if let Some(id) = key.strip_prefix("shortcut.") {
+            return self.shortcuts.set_text(id, value);
+        }
         match key {
+            "appearance.theme" => put(&mut a.theme, ThemeId::parse(value)),
             "appearance.scheme" => put(&mut a.scheme, ColorScheme::parse(value)),
             "appearance.accent" => put(&mut a.accent, Accent::parse(value)),
             "appearance.text_scale" => put(&mut a.text_scale, parse_in(value, 0.75, 2.0)),
@@ -403,6 +784,34 @@ impl Settings {
             "power.lock_after_min" => put(&mut p.lock_after_min, parse_in(value, 0, 240)),
             "power.suspend_after_min" => put(&mut p.suspend_after_min, parse_in(value, 0, 240)),
             "power.low_power" => put(&mut p.low_power, LowPower::parse(value)),
+            "top_bar.position" => put(&mut b.position, BarPosition::parse(value)),
+            "top_bar.autohide" => put(&mut b.autohide, parse_bool(value)),
+            "top_bar.search" => put(&mut b.search, parse_bool(value)),
+            "top_bar.app_name" => put(&mut b.app_name, parse_bool(value)),
+            "top_bar.date" => put(&mut b.date, parse_bool(value)),
+            "top_bar.battery" => put(&mut b.battery, parse_bool(value)),
+            "top_bar.clock_24h" => put(&mut b.clock_24h, parse_bool(value)),
+            "windows.corner_radius" => put(&mut win.corner_radius, parse_in(value, 0, 20)),
+            "windows.shadows" => put(&mut win.shadows, parse_bool(value)),
+            "wallpaper.kind" => put(&mut w.kind, WallpaperKind::parse(value)),
+            // Empty means none; anything else must be absolute, because the
+            // session and the Settings app run from different directories.
+            "wallpaper.path" => put(
+                &mut w.path,
+                Some(PathBuf::from(value)).filter(|p| value.is_empty() || p.is_absolute()),
+            ),
+            "wallpaper.fit" => put(&mut w.fit, Fit::parse(value)),
+            "wallpaper.color" => put(&mut w.color, Rgb::parse(value)),
+            "wallpaper.color2" => put(&mut w.color2, Rgb::parse(value)),
+            "wallpaper.interval_min" => put(&mut w.interval_min, parse_in(value, 1, 1440)),
+            "wallpaper.shuffle" => put(&mut w.shuffle, parse_bool(value)),
+            "wallpaper.pause_when_covered" => put(&mut w.pause_when_covered, parse_bool(value)),
+            "wallpaper.pause_in_low_power" => put(&mut w.pause_in_low_power, parse_bool(value)),
+            "privacy.location" => put(&mut pv.location, parse_bool(value)),
+            "privacy.camera" => put(&mut pv.camera, parse_bool(value)),
+            "privacy.microphone" => put(&mut pv.microphone, parse_bool(value)),
+            "privacy.remember_recent" => put(&mut pv.remember_recent, parse_bool(value)),
+            "privacy.empty_trash_days" => put(&mut pv.empty_trash_days, parse_in(value, 0, 365)),
             _ => false,
         }
     }
@@ -416,8 +825,10 @@ impl Settings {
             &self.notifications,
             &self.power,
         );
+        let (b, win, w) = (&self.top_bar, &self.windows, &self.wallpaper);
         format!(
             "# derisk settings, written by the Settings app.\n\
+             appearance.theme = {}\n\
              appearance.scheme = {}\n\
              appearance.accent = {}\n\
              appearance.text_scale = {}\n\
@@ -441,7 +852,32 @@ impl Settings {
              power.dim_after_min = {}\n\
              power.lock_after_min = {}\n\
              power.suspend_after_min = {}\n\
-             power.low_power = {}\n",
+             power.low_power = {}\n\
+             top_bar.position = {}\n\
+             top_bar.autohide = {}\n\
+             top_bar.search = {}\n\
+             top_bar.app_name = {}\n\
+             top_bar.date = {}\n\
+             top_bar.battery = {}\n\
+             top_bar.clock_24h = {}\n\
+             windows.corner_radius = {}\n\
+             windows.shadows = {}\n\
+             wallpaper.kind = {}\n\
+             wallpaper.path = {}\n\
+             wallpaper.fit = {}\n\
+             wallpaper.color = {}\n\
+             wallpaper.color2 = {}\n\
+             wallpaper.interval_min = {}\n\
+             wallpaper.shuffle = {}\n\
+             wallpaper.pause_when_covered = {}\n\
+             wallpaper.pause_in_low_power = {}\n\
+             privacy.location = {}\n\
+             privacy.camera = {}\n\
+             privacy.microphone = {}\n\
+             privacy.remember_recent = {}\n\
+             privacy.empty_trash_days = {}\n\
+             {}",
+            a.theme.as_str(),
             a.scheme.as_str(),
             a.accent.as_str(),
             a.text_scale,
@@ -466,6 +902,30 @@ impl Settings {
             p.lock_after_min,
             p.suspend_after_min,
             p.low_power.as_str(),
+            b.position.as_str(),
+            b.autohide,
+            b.search,
+            b.app_name,
+            b.date,
+            b.battery,
+            b.clock_24h,
+            win.corner_radius,
+            win.shadows,
+            w.kind.as_str(),
+            w.path.display(),
+            w.fit.as_str(),
+            w.color.to_hex(),
+            w.color2.to_hex(),
+            w.interval_min,
+            w.shuffle,
+            w.pause_when_covered,
+            w.pause_in_low_power,
+            self.privacy.location,
+            self.privacy.camera,
+            self.privacy.microphone,
+            self.privacy.remember_recent,
+            self.privacy.empty_trash_days,
+            self.shortcuts.to_text(),
         )
     }
 
@@ -490,23 +950,38 @@ impl Settings {
         fs::rename(&temporary, path)
     }
 
-    /// The shell and app colors these settings select.
-    pub fn theme(&self) -> Theme {
-        let accent = self.appearance.accent.color();
-        match self.appearance.scheme {
-            ColorScheme::Dark => Theme {
-                accent,
-                ..Theme::default()
-            },
-            ColorScheme::Light => Theme {
-                background: Color32::from_rgb(248, 250, 252),
-                surface: Color32::from_rgb(226, 232, 240),
-                foreground: Color32::from_rgb(15, 23, 42),
-                border: Color32::from_rgb(148, 163, 184),
-                // Accents are tuned for dark backgrounds; darken for contrast.
-                accent: Color32::from_rgb(accent.r() / 2, accent.g() / 2, accent.b() / 2),
-            },
+    /// The theme these settings select, looking theme files up in
+    /// `library` (usually [`mcsapi_theme::Library::xdg`]`("derisk")`).
+    ///
+    /// An automatic theme is the built-in `derisk-dark` or `derisk-light`
+    /// with the chosen accent, kept legible on the background. A named theme
+    /// brings its own accent; if it cannot be loaded, the automatic theme is
+    /// used and the error is returned alongside it.
+    pub fn theme_spec(
+        &self,
+        library: &mcsapi_theme::Library,
+    ) -> (mcsapi_theme::Theme, Option<mcsapi_theme::LoadError>) {
+        let a = &self.appearance;
+        let automatic = || {
+            let base = match a.scheme {
+                ColorScheme::Dark => mcsapi_theme::Theme::dark(),
+                ColorScheme::Light => mcsapi_theme::Theme::light(),
+            };
+            base.with_accent(a.accent.spec_color())
+        };
+        if a.theme.is_automatic() {
+            return (automatic(), None);
         }
+        match library.load(a.theme.as_str()) {
+            Ok(parsed) => (parsed.theme, None),
+            Err(error) => (automatic(), Some(error)),
+        }
+    }
+
+    /// The shell and app colors these settings select, with theme files from
+    /// the XDG data directories.
+    pub fn theme(&self) -> Theme {
+        Theme::from(&self.theme_spec(&mcsapi_theme::Library::xdg("derisk")).0)
     }
 }
 

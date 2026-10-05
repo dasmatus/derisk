@@ -9,20 +9,21 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#31 (the compositor on the bare seat, DRM/KMS; it builds
-# on #24's lock cancelling the held press and #23's frame pacing) merges, every
-# mcsapi crate comes from its branch so the apps and the compositor share one
-# mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-screen-greeter-9i89ht" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-screen-greeter-9i89ht" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-screen-greeter-9i89ht" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/lock-screen-greeter-9i89ht" }
+# Every mcsapi crate comes from the same mcsapi revision so the apps and the
+# compositor share one mcsapi-ui; `cargo update -p mcsapi` moves them together.
+mcsapi = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
 derisk-monitor = { path = "crates/derisk-monitor", version = "0.1.0" }
 derisk-calculator = { path = "crates/derisk-calculator", version = "0.1.0" }
 derisk-apps = { path = "crates/derisk-apps", version = "0.1.0" }
+derisk-gpui = { path = "crates/derisk-gpui", version = "0.1.0" }
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 
 [package]
@@ -37,6 +38,11 @@ repository.workspace = true
 [dependencies]
 derisk-settings.workspace = true
 mcsapi.workspace = true
+# Wallpapers in the formats the Settings app offers; app icons from the icon
+# theme are PNG (SVG goes through resvg).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+mcsapi-theme.workspace = true
+resvg = { version = "0.48.1", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
@@ -45,17 +51,23 @@ serde_json = "1.0.145"
 derisk-apps = { workspace = true, optional = true }
 mcsapi-compositor = { workspace = true, optional = true }
 mcsapi-runtime = { workspace = true, optional = true }
+# Only its list of ported apps; the GPUI build is its own binary.
+derisk-gpui = { workspace = true, optional = true }
 # The lock screen's PAM conversation allocates with libc, which PAM frees.
 libc = { version = "0.2", optional = true }
+# Screenshots for agents (`{"method":"screenshot"}`).
+png = { version = "0.18.1", optional = true }
 
 [features]
 host = [
     "dep:derisk-apps",
+    "dep:derisk-gpui",
     "dep:libc",
     "dep:mcsapi-compositor",
     # The display manager starts the login screen and the session on the
     # bare seat, with no compositor underneath to nest in.
     "mcsapi-compositor/kms",
     "dep:mcsapi-runtime",
+    "dep:png",
 ]
 

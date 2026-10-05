@@ -8,8 +8,11 @@
 //!   Windows-style dragging with edge/corner snapping and Snap Assist.
 //! - [`decorations`]: server-side title bars with the buttons on the left.
 //! - [`adaptive`]: phone/tablet/desktop profiles and learned app suggestions.
+//! - [`mobile`]: the touch navigation bar and edge swipes on phones.
+//! - [`keyboard`]: the on-screen keyboard and its word prediction.
 //! - [`overview`]: the overview grid and its widgets.
 //! - [`desktop`]: installed apps and their actions from `.desktop` files.
+//! - [`apps`] and [`icons`]: app names and icon theme icons for app IDs.
 //! - [`menu`]: the global menu.
 //! - [`palette`]: the command palette (Super+Space), the center of the
 //!   workflow: apps, windows, commands, settings and files in one search,
@@ -25,6 +28,8 @@
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
 //!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.
+//! - [`privacy`]: forgetting recent files and emptying old trash.
+//! - [`wallpaper`]: the desktop background, from a color to a looping video.
 //!
 //! ```
 //! use derisk::{action::Action, geom::rect, shell::Shell, snap::SnapZone};
@@ -43,6 +48,7 @@
 pub mod action;
 pub mod adaptive;
 pub mod animation;
+pub mod apps;
 pub mod assistant;
 pub mod conversation;
 pub mod decorations;
@@ -50,17 +56,23 @@ pub mod desktop;
 pub mod effects;
 pub mod geom;
 pub mod greetd;
+pub mod icons;
 pub mod ipc;
+pub mod keyboard;
 pub mod keys;
 pub mod lock;
 pub mod menu;
+pub mod mobile;
 pub mod overview;
 pub mod palette;
+pub mod privacy;
 pub mod shell;
 pub mod snap;
 pub mod systemd;
+pub mod theme;
 pub mod time;
 pub mod tray;
 pub mod ui;
+pub mod wallpaper;
 
 pub use mcsapi;
