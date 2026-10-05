@@ -160,7 +160,6 @@ fn the_plan_saves_everything_and_creates_the_account_last() {
                 "matus",
                 "--real-name=Matúš Novák",
                 "--member-of=wheel",
-                "--language=sk_SK.UTF-8",
                 "--timezone=Europe/Bratislava",
             ],
         ]
@@ -181,7 +180,7 @@ fn the_plan_saves_everything_and_creates_the_account_last() {
         ..Choices::default()
     });
     assert_eq!(bare.len(), 1);
-    assert!(!bare[0].argv.iter().any(|a| a.starts_with("--language")));
+    assert!(!bare[0].argv.iter().any(|a| a.starts_with("--timezone")));
 }
 
 #[test]
