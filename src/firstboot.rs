@@ -205,6 +205,14 @@ impl Setup {
     }
 
     fn keyboard_page(&mut self, ui: &mut Ui, out: &mut Vec<Command>) {
+        if self.layouts.is_empty() {
+            wizard::notice(
+                ui,
+                "No keyboard layouts were found; the current one stays.",
+                false,
+            );
+            return;
+        }
         wizard::field(
             ui,
             "Try it",
