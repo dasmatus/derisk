@@ -235,6 +235,35 @@ systemd units and run logind session operations.
 | Super+B | Focus the top bar (Tab moves on, Escape returns to the window) |
 | Escape | Leave the overview |
 
+Settings → Shortcuts rebinds the single-chord ones (palette, overview,
+focus, promote, close, float, tile, layouts) or turns them off; the
+families (Super+digits, Super+arrows, Alt+Tab) stay fixed.
+
+### Wallpaper
+
+Settings → Wallpaper picks derisk's gradient, one color, a two-color
+gradient, a PNG/JPEG/WebP picture (fill, fit, stretch, center or tile), a
+slideshow of a folder's pictures (every 1 to 1440 minutes, in order or
+shuffled), or a looping video. Videos play silently through an `ffmpeg`
+child process (`$DERISK_FFMPEG`, else `ffmpeg` on `PATH`) at 30 fps, at most
+1080p, and pause while a window fills the screen and in low power mode.
+Anything that fails to load falls back to the gradient and is logged.
+The page previews the choice and shows thumbnails of what it finds in
+Pictures, Videos and the system backgrounds.
+
+### Privacy
+
+Settings → Privacy turns location, camera and microphone off for every
+Flatpak app (it denies them in the portal permission store on Save; turning
+one back on lets apps ask again), stops the recently used files list, and
+empties trash older than 1 to 365 days. Under it, each installed Flatpak
+app's network, display, sound, device, folder and session-bus access can be
+switched; derisk writes these as `flatpak override --user` does, to
+`$XDG_DATA_HOME/flatpak/overrides/<app>`, so they apply the next time the
+app starts. Its portal answers (camera, microphone, location, background,
+notifications, screenshots) are set to Ask, Allow or Deny through
+`flatpak permission-set` (`$DERISK_FLATPAK`, else `flatpak` on `PATH`).
+
 ### Headless commands
 
 ```console
@@ -286,7 +315,7 @@ in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
 | App | Crate | What it does |
 | --- | --- | --- |
 | Files | `derisk-files` | Places, back/forward/up, sort, filter, hidden files, new folder/file, rename (never overwrites), copy/cut/paste with `name (copy).ext` on clashes, the freedesktop.org trash, and `xdg-open`. |
-| Settings | `derisk-settings` | Dark/light, accent, text size, reduced motion, layout, gaps, workspaces, adaptive profile, input, notifications, and power, saved to `$XDG_CONFIG_HOME/derisk/settings.conf`. `Settings::theme()` gives the shell its colors. |
+| Settings | `derisk-settings` | Dark/light, accent, text size, reduced motion, window corners and shadows, wallpaper, the top bar's position, auto-hide and contents, layout, gaps, workspaces, adaptive profile, input, shortcuts, notifications, and power, saved to `$XDG_CONFIG_HOME/derisk/settings.conf`. `Settings::theme()` gives the shell its colors. |
 | Text Editor | `derisk-editor` | UTF-8 files up to 8 MiB, atomic saves that keep permissions, find and replace, line/column, unsaved-change prompts. |
 | System Monitor | `derisk-monitor` | CPU graph, memory, swap, load, uptime, and a sortable, filterable process table with End process, from `/proc`. |
 | Calculator | `derisk-calculator` | Expressions with precedence, `^`, `%`, functions, `pi`, `e`, `ans`, and history. |
