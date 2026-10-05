@@ -100,6 +100,14 @@ AGENT OPTIONS:
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+// derisk is the display manager, the compositor and every core app in one
+// process, holding the login screen's password and whatever the apps open, so
+// its heap is the one most worth hardening. Under LosOS this is the same
+// library /etc/ld.so.preload already loads; the binding adds sized frees.
+#[cfg(feature = "hardened-malloc")]
+#[global_allocator]
+static GLOBAL: mcsapi_hardened_malloc::HardenedMalloc = mcsapi_hardened_malloc::HardenedMalloc;
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
