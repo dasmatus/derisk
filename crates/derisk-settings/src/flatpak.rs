@@ -538,11 +538,15 @@ pub fn portal_permissions(app: &str) -> Result<BTreeMap<Portal, bool>, CommandEr
     Ok(parse_permission_show(&flatpak(&["permission-show", app])?))
 }
 
-/// Parses `flatpak permission-show` output: a header line, then
-/// tab-separated table, object, app, permissions (comma-separated) and data.
+/// Parses `flatpak permission-show` output: tab-separated table, object,
+/// app, permissions (comma-separated) and data.
+///
+/// flatpak prints its `Table Object App ...` header only to a terminal, so
+/// output read through a pipe starts with a permission. A header, when
+/// there is one, matches no portal and is skipped like any unknown row.
 pub fn parse_permission_show(text: &str) -> BTreeMap<Portal, bool> {
     let mut found = BTreeMap::new();
-    for line in text.lines().skip(1) {
+    for line in text.lines() {
         let fields: Vec<&str> = line.split('\t').map(str::trim).collect();
         let [table, object, _app, permissions, ..] = fields[..] else {
             continue;
