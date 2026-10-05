@@ -72,8 +72,9 @@ fn button_color(button: Button) -> Color32 {
     }
 }
 
-/// Decoded app icons by icon name, `None` for names no theme has.
-type AppIcons = RefCell<HashMap<String, Option<Arc<egui::ColorImage>>>>;
+/// Decoded app icons by icon theme generation and icon name, `None` for
+/// names no theme has.
+type AppIcons = RefCell<HashMap<(u64, String), Option<Arc<egui::ColorImage>>>>;
 
 /// The battery as its symbolic icon and percentage.
 fn battery(ui: &mut Ui, b: Battery, color: Color32) -> egui::Response {
@@ -96,17 +97,19 @@ fn battery(ui: &mut Ui, b: Battery, color: Color32) -> egui::Response {
 
 /// Paints an app's icon into `r`: the icon theme's, else the app's
 /// glyph, else its initial on an accent tile, so every window has one.
-fn paint_app_icon(icons: &AppIcons, theme: &Theme, painter: &Painter, r: Rect, look: &AppLook) {
-    let image = icons
+fn paint_app_icon(app_icons: &AppIcons, theme: &Theme, painter: &Painter, r: Rect, look: &AppLook) {
+    // Keyed by the icon theme too, so changing it shows its icons.
+    let generation = icons::generation();
+    let image = app_icons
         .borrow_mut()
-        .entry(look.icon.to_owned())
+        .entry((generation, look.icon.to_owned()))
         .or_insert_with(|| icons::load(&icons::find(look.icon, ICON_PX)?, ICON_PX).map(Arc::new))
         .clone();
     // Title bars and the chrome are separate egui contexts with their own
     // textures, so each context uploads the icon once and keeps it.
     let texture = image.map(|image| {
         let ctx = painter.ctx();
-        let id = Id::new(("derisk-app-icon", look.icon));
+        let id = Id::new(("derisk-app-icon", generation, look.icon));
         ctx.data(|d| d.get_temp::<TextureHandle>(id))
             .unwrap_or_else(|| {
                 let texture = ctx.load_texture(

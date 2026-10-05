@@ -1,23 +1,31 @@
-//! Icons for the shell and the core apps, as egui images.
+//! Icons for the shell and the core apps, as egui images, from the icon
+//! theme the person has set.
 //!
 //! Two kinds. App icons ([`find`], [`load`]) keep their colors. Everything
 //! else, the buttons, places, file types and status the chrome and apps
-//! show, is a Papirus symbolic icon named by its freedesktop name and drawn
-//! as a greyscale mask in the theme's text color ([`paint`], [`button`],
-//! [`show`]), the way GNOME and KDE draw symbolic icons. Without Papirus
-//! those fall back to a glyph from egui's built-in fonts ([`glyph`]), so a
-//! system that lacks the theme still shows something for every icon.
+//! show, is a symbolic icon named by its freedesktop name and drawn as a
+//! greyscale mask in the theme's text color ([`paint`], [`button`],
+//! [`show`]), the way GNOME and KDE draw symbolic icons. When no theme has
+//! one it falls back to a glyph from egui's built-in fonts ([`glyph`]), so
+//! every icon still shows something.
 //!
-//! [`find`] follows the [icon theme spec]'s layout without reading every
-//! `index.theme`: apps install their own icons into `hicolor`, so that theme
-//! is searched first, then every other installed theme (which is where
-//! generic names such as `system-file-manager` live), then `pixmaps`.
+//! Both follow the [icon theme spec]'s lookup without its size tables: the
+//! theme set with [`set_theme`] (the session passes the one its theme file
+//! names), then the themes it `Inherits`, then Papirus, which is the default
+//! and fills any symbolic icon the set theme lacks, then `hicolor`, where
+//! apps install their own icons. App icons then try every other installed
+//! theme, where generic names such as `system-file-manager` live, and
+//! `pixmaps`.
 //!
 //! [icon theme spec]: https://specifications.freedesktop.org/icon-theme-spec/latest/
 
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::{
+        RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use mcsapi_ui::egui::{
@@ -79,8 +87,15 @@ fn fit(path: &Path, size: Option<u32>, want: u32) -> (u8, u32) {
 }
 
 /// Every `<theme>/<a>/<b>/<name>.{png,svg}` under `theme`, which covers both
-/// `48x48/apps` and `apps/48` layouts, scored by [`fit`].
-fn in_theme(theme: &Path, name: &str, want: u32, best: &mut Option<((u8, u32), PathBuf)>) {
+/// `48x48/apps` and `apps/48` layouts, scored by [`fit`]. With `small`, only
+/// directories for 24 px or less count, closest to 16 px first.
+fn in_theme(
+    theme: &Path,
+    name: &str,
+    want: u32,
+    small: bool,
+    best: &mut Option<((u8, u32), PathBuf)>,
+) {
     let Ok(outer) = fs::read_dir(theme) else {
         return;
     };
@@ -96,7 +111,11 @@ fn in_theme(theme: &Path, name: &str, want: u32, best: &mut Option<((u8, u32), P
                 if !path.is_file() {
                     continue;
                 }
-                let score = fit(&path, size, want);
+                let score = match (small, size) {
+                    (false, _) => fit(&path, size, want),
+                    (true, Some(n)) if n <= 24 => (0, n.abs_diff(16)),
+                    (true, _) => continue,
+                };
                 if best.as_ref().is_none_or(|(s, _)| score < *s) {
                     *best = Some((score, path));
                 }
@@ -105,15 +124,104 @@ fn in_theme(theme: &Path, name: &str, want: u32, best: &mut Option<((u8, u32), P
     }
 }
 
+/// The icon theme set with [`set_theme`]; empty until then.
+static THEME: RwLock<String> = RwLock::new(String::new());
+
+/// Bumped by every [`set_theme`] that changes the theme, so caches keyed by
+/// it drop icons from the old one.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Sets the icon theme, by its directory name (`Papirus-Dark`, `Adwaita`),
+/// that every lookup starts from.
+pub fn set_theme(name: &str) {
+    let mut theme = THEME.write().unwrap_or_else(|e| e.into_inner());
+    if *theme != name {
+        *theme = name.to_owned();
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The icon theme set with [`set_theme`].
+pub fn current_theme() -> String {
+    THEME.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Changes whenever the icon theme does. [`texture`] keys on it; a cache
+/// of [`find`] results should too.
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Relaxed)
+}
+
+/// Papirus variants, dark first because the shell's default theme is dark.
+/// Each is tinted at paint time, so the variant only matters for shapes.
+const PAPIRUS: [&str; 3] = ["Papirus-Dark", "Papirus", "Papirus-Light"];
+
+/// The `Inherits` list of `theme`'s `index.theme`, from the first root
+/// that has one.
+fn inherits(theme: &str, icons: &[PathBuf]) -> Vec<String> {
+    let Some(text) = icons
+        .iter()
+        .find_map(|root| fs::read_to_string(root.join(theme).join("index.theme")).ok())
+    else {
+        return Vec::new();
+    };
+    let mut section = "";
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            section = line;
+        } else if section == "[Icon Theme]"
+            && let Some(value) = line.strip_prefix("Inherits").map(str::trim_start)
+            && let Some(value) = value.strip_prefix('=')
+        {
+            return value
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_owned)
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+/// The themes to search, in order: `theme`, everything it inherits
+/// (breadth first, each once), Papirus, then `hicolor`.
+pub fn theme_chain(theme: &str, icons: &[PathBuf]) -> Vec<String> {
+    let mut chain: Vec<String> = Vec::new();
+    let mut queue = std::collections::VecDeque::from([theme.to_owned()]);
+    while let Some(next) = queue.pop_front() {
+        // A theme name with a path in it would escape the icon roots.
+        if next.is_empty() || next.contains('/') || next.starts_with('.') || chain.contains(&next) {
+            continue;
+        }
+        queue.extend(inherits(&next, icons));
+        chain.push(next);
+    }
+    for theme in PAPIRUS.into_iter().chain(["hicolor"]) {
+        if !chain.iter().any(|t| t == theme) {
+            chain.push(theme.to_owned());
+        }
+    }
+    chain
+}
+
 /// The file for icon `name` (a theme name or an absolute path) closest to
 /// `want` pixels square, from the XDG icon directories.
 pub fn find(name: &str, want: u32) -> Option<PathBuf> {
     let (icons, pixmaps) = roots();
-    find_in(name, want, &icons, &pixmaps)
+    let themes = theme_chain(&current_theme(), &icons);
+    find_in(name, want, &icons, &pixmaps, &themes)
 }
 
-/// [`find`] in the given `icons` and `pixmaps` roots, in precedence order.
-pub fn find_in(name: &str, want: u32, icons: &[PathBuf], pixmaps: &[PathBuf]) -> Option<PathBuf> {
+/// [`find`] in the given `icons` and `pixmaps` roots, in precedence order,
+/// trying `themes` (see [`theme_chain`]) before any other theme.
+pub fn find_in(
+    name: &str,
+    want: u32,
+    icons: &[PathBuf],
+    pixmaps: &[PathBuf],
+    themes: &[String],
+) -> Option<PathBuf> {
     if name.starts_with('/') {
         return Some(PathBuf::from(name)).filter(|p| p.is_file());
     }
@@ -121,25 +229,28 @@ pub fn find_in(name: &str, want: u32, icons: &[PathBuf], pixmaps: &[PathBuf]) ->
     if name.is_empty() || name.contains('/') || name.starts_with('.') {
         return None;
     }
-    let mut best = None;
-    for root in icons {
-        in_theme(&root.join("hicolor"), name, want, &mut best);
+    for theme in themes {
+        let mut best = None;
+        for root in icons {
+            in_theme(&root.join(theme), name, want, false, &mut best);
+        }
+        if best.is_some() {
+            return best.map(|(_, p)| p);
+        }
     }
-    if best.is_some() {
-        return best.map(|(_, p)| p);
-    }
     for root in icons {
-        let Ok(themes) = fs::read_dir(root) else {
+        let Ok(others) = fs::read_dir(root) else {
             continue;
         };
-        let mut themes: Vec<_> = themes
+        let mut others: Vec<_> = others
             .filter_map(Result::ok)
+            .filter(|t| !themes.iter().any(|n| t.file_name() == n.as_str()))
             .map(|t| t.path())
-            .filter(|t| !t.ends_with("hicolor"))
             .collect();
-        themes.sort();
-        for theme in themes {
-            in_theme(&theme, name, want, &mut best);
+        others.sort();
+        let mut best = None;
+        for theme in others {
+            in_theme(&theme, name, want, false, &mut best);
         }
         if best.is_some() {
             return best.map(|(_, p)| p);
@@ -193,46 +304,39 @@ pub fn load(path: &Path, size: u32) -> Option<ColorImage> {
     }
 }
 
-/// Papirus variants, dark first because the shell's default theme is dark.
-/// Each is tinted at paint time, so the variant only matters for shapes.
-const PAPIRUS: [&str; 3] = ["Papirus-Dark", "Papirus", "Papirus-Light"];
-
-/// The Papirus file for symbolic icon `name`: the symbolic variant, else the
-/// plain 16 px one, from any context (actions, places, status, ...).
+/// The file for symbolic icon `name`: its `-symbolic` variant, else the
+/// plain icon at a small size (at most 24 px, where themes draw actions as
+/// outlines rather than colored pictures), from the first theme in the
+/// [`theme_chain`] that has either.
 ///
-/// Papirus keeps its symbolic icons in `<theme>/symbolic/<context>/`
-/// (`symbolic/actions/window-close-symbolic.svg`), beside the sized
-/// directories rather than inside one. `16x16/symbolic/` is searched too,
-/// for themes laid out that way.
+/// Every `<theme>/<a>/<b>/` directory is searched, which covers Papirus's
+/// `symbolic/actions/`, Adwaita's `scalable/actions/` and `16x16/actions/`,
+/// and Breeze's `actions/16/`.
 pub fn find_action(name: &str) -> Option<PathBuf> {
     let (icons, _) = roots();
-    find_action_in(name, &icons)
+    find_action_in(name, &icons, &theme_chain(&current_theme(), &icons))
 }
 
-/// [`find_action`] in the given `icons` roots.
-pub fn find_action_in(name: &str, icons: &[PathBuf]) -> Option<PathBuf> {
+/// [`find_action`] in the given `icons` roots and `themes`.
+pub fn find_action_in(name: &str, icons: &[PathBuf], themes: &[String]) -> Option<PathBuf> {
     if name.is_empty() || name.contains('/') || name.starts_with('.') {
         return None;
     }
-    let in_contexts = |dir: PathBuf, file: &str| {
-        let mut contexts: Vec<_> = fs::read_dir(dir).ok()?.filter_map(Result::ok).collect();
-        contexts.sort_by_key(|c| c.file_name());
-        contexts
-            .iter()
-            .map(|c| c.path().join(file))
-            .find(|p| p.is_file())
-    };
-    let symbolic = format!("{name}-symbolic.svg");
-    for theme in PAPIRUS {
+    let symbolic = format!("{name}-symbolic");
+    for theme in themes {
+        let mut best = None;
         for root in icons {
-            let theme = root.join(theme);
-            let small = theme.join("16x16");
-            if let Some(found) = in_contexts(theme.join("symbolic"), &symbolic)
-                .or_else(|| in_contexts(small.join("symbolic"), &symbolic))
-                .or_else(|| in_contexts(small.clone(), &format!("{name}.svg")))
-            {
-                return Some(found);
+            in_theme(&root.join(theme), &symbolic, 16, false, &mut best);
+        }
+        if best.is_none() {
+            // Only small sizes: a big plain icon is a colored picture, and
+            // its mask a blob.
+            for root in icons {
+                in_theme(&root.join(theme), name, 16, true, &mut best);
             }
+        }
+        if best.is_some() {
+            return best.map(|(_, p)| p);
         }
     }
     None
@@ -323,7 +427,7 @@ const SYMBOLIC_PX: u32 = 48;
 /// theme has it. Each egui context (the chrome, each title bar, each app)
 /// has its own textures, so each decodes and uploads an icon once.
 pub fn texture(ctx: &Context, name: &str) -> Option<TextureHandle> {
-    let id = Id::new(("derisk-symbolic-icon", name));
+    let id = Id::new(("derisk-symbolic-icon", generation(), name));
     if let Some(cached) = ctx.data(|d| d.get_temp::<Option<TextureHandle>>(id)) {
         return cached;
     }

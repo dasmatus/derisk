@@ -69,7 +69,7 @@ fn unknown_app_ids_still_read_as_names() {
 }
 
 #[test]
-fn icons_come_from_hicolor_then_other_themes_then_pixmaps() {
+fn icons_come_from_the_set_theme_then_hicolor_then_other_themes_then_pixmaps() {
     let root = std::env::temp_dir().join(format!("derisk-icons-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     let icons_dir = root.join("icons");
@@ -95,8 +95,12 @@ fn icons_come_from_hicolor_then_other_themes_then_pixmaps() {
         48,
     );
     let pixmap = png(pixmaps.join("legacy.png"), 48);
+    let themed = icons_dir.join("Themed/scalable/apps/foot.svg");
+    fs::create_dir_all(themed.parent().unwrap()).unwrap();
+    fs::copy(&svg, &themed).unwrap();
     let roots = (vec![icons_dir.clone()], vec![pixmaps.clone()]);
-    let find = |name, want| icons::find_in(name, want, &roots.0, &roots.1);
+    let unset = icons::theme_chain("", &roots.0);
+    let find = |name, want| icons::find_in(name, want, &roots.0, &roots.1, &unset);
 
     // The smallest PNG at least as big, else the SVG, else a smaller PNG.
     assert_eq!(find("foot", 64), Some(big.clone()));
@@ -107,6 +111,12 @@ fn icons_come_from_hicolor_then_other_themes_then_pixmaps() {
     assert_eq!(find(big.to_str().unwrap(), 64), Some(big.clone()));
     assert_eq!(find("../foot", 64), None);
     assert_eq!(find("missing", 64), None);
+    // A set theme comes before hicolor, as the spec has it.
+    let set = icons::theme_chain("Themed", &roots.0);
+    assert_eq!(
+        icons::find_in("foot", 64, &roots.0, &roots.1, &set),
+        Some(themed)
+    );
 
     // Decoded no bigger than asked, in both formats.
     assert_eq!(icons::load(&big, 64).unwrap().size, [64, 64]);
@@ -136,20 +146,55 @@ fn action_icons_come_from_papirus_as_greyscale_masks() {
     // Papirus's own layout: symbolic icons beside the sized directories.
     let symbolic = write("Papirus-Dark/symbolic/actions/window-close-symbolic.svg");
     write("Papirus-Dark/16x16/actions/window-close.svg");
-    let nested = write("Papirus-Dark/16x16/symbolic/actions/go-up-symbolic.svg");
-    write("Papirus-Dark/16x16/actions/go-up.svg");
     let plain = write("Papirus/16x16/places/folder.svg");
+    // A big plain icon is a picture, never used as a mask.
+    write("Papirus/48x48/actions/list-add.svg");
     let roots = [root.clone()];
+    let papirus = icons::theme_chain("", &roots);
+    let find = |name| icons::find_action_in(name, &roots, &papirus);
 
-    // The symbolic variant first, Papirus-Dark before Papirus, any context.
+    // Without a set theme: the symbolic variant first, Papirus-Dark before
+    // Papirus, any context.
+    assert_eq!(find("window-close"), Some(symbolic.clone()));
+    assert_eq!(find("folder"), Some(plain));
+    assert_eq!(find("../folder"), None);
+    assert_eq!(find("list-add"), None);
+
+    // A set theme and the themes it inherits come first, Adwaita-style
+    // `scalable/actions` included; Papirus fills in what they lack.
+    let breeze = write("Breeze/actions/16/window-close.svg");
+    let adwaita = write("Adwaita/scalable/actions/go-up-symbolic.svg");
+    fs::write(
+        root.join("Breeze/index.theme"),
+        "[Icon Theme]\nName=Breeze\nInherits=Adwaita,hicolor\n",
+    )
+    .unwrap();
+    let chain = icons::theme_chain("Breeze", &roots);
     assert_eq!(
-        icons::find_action_in("window-close", &roots),
-        Some(symbolic.clone())
+        chain,
+        [
+            "Breeze",
+            "Adwaita",
+            "hicolor",
+            "Papirus-Dark",
+            "Papirus",
+            "Papirus-Light"
+        ]
     );
-    assert_eq!(icons::find_action_in("go-up", &roots), Some(nested));
-    assert_eq!(icons::find_action_in("folder", &roots), Some(plain));
-    assert_eq!(icons::find_action_in("../folder", &roots), None);
-    assert_eq!(icons::find_action_in("list-add", &roots), None);
+    let find = |name| icons::find_action_in(name, &roots, &chain);
+    assert_eq!(find("window-close"), Some(breeze));
+    assert_eq!(find("go-up"), Some(adwaita));
+    assert_eq!(
+        find("folder"),
+        Some(root.join("Papirus/16x16/places/folder.svg"))
+    );
+    // Themes that inherit each other, or name a path, end the chain.
+    fs::write(
+        root.join("Adwaita/index.theme"),
+        "[Icon Theme]\nInherits=Breeze,../etc\n",
+    )
+    .unwrap();
+    assert_eq!(icons::theme_chain("Breeze", &roots).len(), 6);
 
     // A red icon becomes a white mask, tinted when painted.
     let mask = icons::load_mask(&symbolic, 16).unwrap();
