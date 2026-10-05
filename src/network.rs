@@ -354,7 +354,8 @@ impl Security {
                     let raw =
                         passphrase.len() == 64 && passphrase.bytes().all(|b| b.is_ascii_hexdigit());
                     let ascii = passphrase.bytes().all(|b| (0x20..0x7f).contains(&b));
-                    if !raw && !(ascii && (8..=63).contains(&passphrase.len())) {
+                    let quoted = ascii && (8..=63).contains(&passphrase.len());
+                    if !(raw || quoted) {
                         return Err(io::Error::other(
                             "A WPA2 passphrase is 8 to 63 ASCII characters long.",
                         ));
