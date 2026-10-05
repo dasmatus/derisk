@@ -6,6 +6,8 @@
 //! (launching apps as units, session operations) can be executed for real.
 
 #[cfg(feature = "host")]
+mod computer;
+#[cfg(feature = "host")]
 mod host;
 
 use std::{
