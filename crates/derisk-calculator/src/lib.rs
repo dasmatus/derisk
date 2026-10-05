@@ -422,11 +422,28 @@ impl App for CalculatorApp {
                             if key == "=" {
                                 label = label.color(theme.background);
                             }
-                            let mut button = egui::Button::new(label).min_size(size);
+                            // Backspace is an icon; the rest are what they type.
+                            let mut button = if key == "⬅" {
+                                let color = ui.visuals().text_color();
+                                derisk_icons::button(ui.ctx(), "edit-clear", 18.0, color)
+                            } else {
+                                egui::Button::new(label)
+                            }
+                            .min_size(size);
                             if key == "=" {
                                 button = button.fill(theme.accent);
                             }
-                            if ui.add(button).clicked() {
+                            let response = ui.add(button);
+                            if key == "⬅" {
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::WidgetType::Button,
+                                        true,
+                                        "Backspace",
+                                    )
+                                });
+                            }
+                            if response.clicked() {
                                 self.press(key);
                             }
                         }

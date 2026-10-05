@@ -43,13 +43,13 @@ impl NavButton {
     /// Left to right.
     pub const ORDER: [Self; 4] = [Self::Back, Self::Home, Self::Apps, Self::Keyboard];
 
-    /// The glyph drawn on the button.
+    /// The symbolic icon drawn on the button (see [`crate::icons`]).
     pub fn icon(self) -> &'static str {
         match self {
-            Self::Back => "◀",
-            Self::Home => "🏠",
-            Self::Apps => "🔍",
-            Self::Keyboard => "⌨",
+            Self::Back => "go-previous",
+            Self::Home => "go-home",
+            Self::Apps => "system-search",
+            Self::Keyboard => "input-keyboard",
         }
     }
 

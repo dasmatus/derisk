@@ -42,6 +42,16 @@ fn names_and_icons_come_from_the_matching_desktop_file() {
         (look.name.as_ref(), look.icon, look.glyph),
         ("Text Editor", "org.derisk.editor", "📝")
     );
+    // The palette's desktop file IDs, with their `.desktop`.
+    let look = apps.look("org.derisk.files.desktop");
+    assert_eq!(
+        (look.name.as_ref(), look.icon),
+        ("Files", "system-file-manager")
+    );
+    assert_eq!(
+        apps.look("org.derisk.editor.desktop").icon,
+        "org.derisk.editor"
+    );
     // `derisk` starts every core app, so it names none of them.
     assert_eq!(apps.look("derisk").name, "Derisk");
 }
@@ -123,8 +133,11 @@ fn action_icons_come_from_papirus_as_greyscale_masks() {
         .unwrap();
         path
     };
-    let symbolic = write("Papirus-Dark/16x16/symbolic/actions/window-close-symbolic.svg");
+    // Papirus's own layout: symbolic icons beside the sized directories.
+    let symbolic = write("Papirus-Dark/symbolic/actions/window-close-symbolic.svg");
     write("Papirus-Dark/16x16/actions/window-close.svg");
+    let nested = write("Papirus-Dark/16x16/symbolic/actions/go-up-symbolic.svg");
+    write("Papirus-Dark/16x16/actions/go-up.svg");
     let plain = write("Papirus/16x16/places/folder.svg");
     let roots = [root.clone()];
 
@@ -133,6 +146,7 @@ fn action_icons_come_from_papirus_as_greyscale_masks() {
         icons::find_action_in("window-close", &roots),
         Some(symbolic.clone())
     );
+    assert_eq!(icons::find_action_in("go-up", &roots), Some(nested));
     assert_eq!(icons::find_action_in("folder", &roots), Some(plain));
     assert_eq!(icons::find_action_in("../folder", &roots), None);
     assert_eq!(icons::find_action_in("list-add", &roots), None);
@@ -141,7 +155,12 @@ fn action_icons_come_from_papirus_as_greyscale_masks() {
     let mask = icons::load_mask(&symbolic, 16).unwrap();
     assert_eq!(mask.pixels[0], mcsapi::toolkit::egui::Color32::WHITE);
 
-    assert_eq!(icons::action_for_glyph("🔒"), Some("system-lock-screen"));
-    assert_eq!(icons::action_for_glyph("📁"), None);
+    // Without the theme each icon still has a glyph.
+    assert_eq!(icons::glyph("system-lock-screen"), "🔒");
+    assert_eq!(icons::glyph("battery-level-80-charging"), "⚡");
+    assert_eq!(icons::glyph("no-such-icon"), "•");
+    assert_eq!(icons::battery(84, false), "battery-level-80");
+    assert_eq!(icons::battery(100, true), "battery-level-100-charging");
+    assert_eq!(icons::battery(3, false), "battery-level-0");
     fs::remove_dir_all(&root).unwrap();
 }

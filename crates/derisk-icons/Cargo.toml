@@ -1,0 +1,14 @@
+[package]
+name = "derisk-icons"
+description = "derisk's icons: app icons from freedesktop themes and Papirus's symbolic icons as greyscale egui images"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# App icons from the icon theme are PNG; SVG goes through resvg.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+mcsapi-ui.workspace = true
+resvg = { version = "0.48.1", default-features = false }

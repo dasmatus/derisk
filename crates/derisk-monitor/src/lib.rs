@@ -305,7 +305,9 @@ impl MonitorApp {
 
     fn table(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("🔍 Name or PID"));
+            let color = ui.visuals().weak_text_color();
+            derisk_icons::show(ui, "system-search", 16.0, color);
+            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Name or PID"));
             ui.label("Sort");
             for (key, label) in [
                 (SortKey::Cpu, "CPU"),

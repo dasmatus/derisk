@@ -159,28 +159,29 @@ impl FilesApp {
         }
     }
 
-    fn places(&self) -> Vec<(&'static str, PathBuf)> {
+    /// The sidebar's places: symbolic icon, label and folder.
+    fn places(&self) -> Vec<(&'static str, &'static str, PathBuf)> {
         let mut places = Vec::new();
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            places.push(("🏠 Home", home.clone()));
-            for (label, dir) in [
-                ("🖥 Desktop", "Desktop"),
-                ("🗐 Documents", "Documents"),
-                ("⬇ Downloads", "Downloads"),
-                ("🎵 Music", "Music"),
-                ("🖼 Pictures", "Pictures"),
-                ("🎞 Videos", "Videos"),
+            places.push(("user-home", "Home", home.clone()));
+            for (icon, dir) in [
+                ("user-desktop", "Desktop"),
+                ("folder-documents", "Documents"),
+                ("folder-download", "Downloads"),
+                ("folder-music", "Music"),
+                ("folder-pictures", "Pictures"),
+                ("folder-videos", "Videos"),
             ] {
                 let path = home.join(dir);
                 if path.is_dir() {
-                    places.push((label, path));
+                    places.push((icon, dir, path));
                 }
             }
         }
         if let Some(trash) = self.browser.as_ref().and_then(Browser::trash) {
-            places.push(("🗑 Trash", trash.files_dir()));
+            places.push(("user-trash", "Trash", trash.files_dir()));
         }
-        places.push(("💻 Computer", PathBuf::from("/")));
+        places.push(("computer", "Computer", PathBuf::from("/")));
         places
     }
 
@@ -205,24 +206,16 @@ impl FilesApp {
         };
         let (back, forward) = (browser.can_go_back(), browser.can_go_forward());
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(back, egui::Button::new("⬅"))
-                .on_hover_text("Back")
-                .clicked()
-            {
+            if derisk_icons::tool(ui, back, "go-previous", "Back").clicked() {
                 self.go(Browser::go_back);
             }
-            if ui
-                .add_enabled(forward, egui::Button::new("➡"))
-                .on_hover_text("Forward")
-                .clicked()
-            {
+            if derisk_icons::tool(ui, forward, "go-next", "Forward").clicked() {
                 self.go(Browser::go_forward);
             }
-            if ui.button("⬆").on_hover_text("Parent folder").clicked() {
+            if derisk_icons::tool(ui, true, "go-up", "Parent folder").clicked() {
                 self.go(Browser::go_up);
             }
-            if ui.button("⟳").on_hover_text("Refresh").clicked() {
+            if derisk_icons::tool(ui, true, "view-refresh", "Refresh").clicked() {
                 self.go(Browser::refresh);
             }
             // On a phone the filter and the location share what is left.
@@ -236,10 +229,12 @@ impl FilesApp {
                 self.go(|b| b.navigate(target));
             }
             if let Some(browser) = &mut self.browser {
+                let color = ui.visuals().weak_text_color();
+                derisk_icons::show(ui, "system-search", 16.0, color);
                 ui.add(
                     egui::TextEdit::singleline(&mut browser.filter)
-                        .hint_text("🔍 Filter")
-                        .desired_width(search_width),
+                        .hint_text("Filter")
+                        .desired_width(search_width - 20.0),
                 );
             }
         });
@@ -409,14 +404,7 @@ impl FilesApp {
             return;
         };
         let (key, descending) = browser.sort();
-        let arrow = if descending { " ⏷" } else { " ⏶" };
-        let header = |label: &str, column: SortKey| {
-            if key == column {
-                format!("{label}{arrow}")
-            } else {
-                label.to_owned()
-            }
-        };
+        let arrow = if descending { "pan-down" } else { "pan-up" };
         let mut activate = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
@@ -432,7 +420,13 @@ impl FilesApp {
                             ("Size", SortKey::Size),
                             ("Modified", SortKey::Modified),
                         ] {
-                            if ui.button(header(label, column)).clicked() {
+                            let header = if key == column {
+                                let color = ui.visuals().text_color();
+                                derisk_icons::button_with_text(ui.ctx(), arrow, label, 12.0, color)
+                            } else {
+                                egui::Button::new(label)
+                            };
+                            if ui.add(header).clicked() {
                                 browser.sort_by(column);
                             }
                         }
@@ -440,17 +434,20 @@ impl FilesApp {
                         let mut clicked = None;
                         for entry in browser.visible() {
                             let icon = match (entry.kind, entry.symlink) {
-                                (Kind::Directory, _) => "🗀",
-                                (_, true) => "🔗",
-                                (Kind::File, _) => "🗋",
-                                (Kind::Other, _) => "❓",
+                                (Kind::Directory, _) => "folder",
+                                (_, true) => "insert-link",
+                                (Kind::File, _) => "text-x-generic",
+                                (Kind::Other, _) => "dialog-question",
                             };
                             let selected = browser.is_selected(&entry.path);
-                            let mut text = egui::RichText::new(format!("{icon} {}", entry.name));
+                            let mut text = egui::RichText::new(&entry.name);
+                            let mut color = ui.visuals().text_color();
                             if entry.is_hidden() {
                                 text = text.color(theme.border);
+                                color = theme.border;
                             }
-                            let row = ui.selectable_label(selected, text);
+                            let icon = derisk_icons::atom(ui.ctx(), icon, 16.0, color);
+                            let row = ui.add(egui::Button::selectable(selected, (icon, text)));
                             if row.double_clicked() {
                                 activate = Some(entry.path.clone());
                             } else if row.clicked() {
@@ -514,9 +511,14 @@ impl App for FilesApp {
         let mut place = None;
         let mut places = |ui: &mut egui::Ui| {
             let cwd = self.browser.as_ref().map(|b| b.cwd().to_owned());
-            for (label, path) in self.places() {
+            let color = ui.visuals().text_color();
+            for (icon, label, path) in self.places() {
+                let atom = derisk_icons::atom(ui.ctx(), icon, 16.0, color);
                 if ui
-                    .selectable_label(cwd.as_ref() == Some(&path), label)
+                    .add(egui::Button::selectable(
+                        cwd.as_ref() == Some(&path),
+                        (atom, label),
+                    ))
                     .clicked()
                 {
                     place = Some(path);
