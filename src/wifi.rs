@@ -258,7 +258,9 @@ impl NetworkPage {
         let Some(_) = &status.interface else {
             wizard::notice(
                 ui,
-                if status.wired.is_empty() {
+                if status.online {
+                    "No Wi-Fi adapter was found."
+                } else if status.wired.is_empty() {
                     "This machine has no network adapter that works yet."
                 } else {
                     "No Wi-Fi adapter was found. Plug in a network cable."
