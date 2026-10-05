@@ -9,16 +9,14 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#28 (touchscreen input, on top of #30's input
-# injection, which the on-screen keyboard types through) merges, every
-# mcsapi crate comes from its branch so the apps and the compositor share
-# one mcsapi-ui. Then drop the `branch` keys and run `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
-mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
-mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/mobile-navigation-wwcgv6" }
+# Every mcsapi crate comes from the same mcsapi revision so the apps and the
+# compositor share one mcsapi-ui; `cargo update -p mcsapi` moves them together.
+mcsapi = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
@@ -54,7 +52,9 @@ mcsapi-compositor = { workspace = true, optional = true }
 mcsapi-runtime = { workspace = true, optional = true }
 # Only its list of ported apps; the GPUI build is its own binary.
 derisk-gpui = { workspace = true, optional = true }
+# Screenshots for agents (`{"method":"screenshot"}`).
+png = { version = "0.18.1", optional = true }
 
 [features]
-host = ["dep:derisk-apps", "dep:derisk-gpui", "dep:mcsapi-compositor", "dep:mcsapi-runtime"]
+host = ["dep:derisk-apps", "dep:derisk-gpui", "dep:mcsapi-compositor", "dep:mcsapi-runtime", "dep:png"]
 

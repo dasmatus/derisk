@@ -170,6 +170,13 @@ pub enum Action {
         /// Unit name.
         unit: String,
     },
+    /// Answer the on-screen confirmation of a session operation an agent
+    /// or injected input asked for ([`crate::shell::Shell::pending_confirmation`]).
+    /// Accepting only works from real input.
+    Confirm {
+        /// Go ahead, or cancel.
+        accept: bool,
+    },
 }
 
 impl Action {
@@ -230,6 +237,8 @@ impl Action {
             Self::ActivateTray { id, .. } => format!("Activate tray item {id}"),
             Self::RestartUnit { unit } => format!("Restart {unit}"),
             Self::ResetFailed { unit } => format!("Dismiss {unit}"),
+            Self::Confirm { accept: true } => "Confirm".into(),
+            Self::Confirm { accept: false } => "Cancel".into(),
         }
     }
 

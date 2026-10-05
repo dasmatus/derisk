@@ -50,6 +50,9 @@ pub enum Error {
     NoFocusedWindow,
     /// A destructive session operation was not confirmed by the user.
     NeedsConfirmation(SessionOp),
+    /// An agent or injected input asked for a destructive session
+    /// operation; it waits for the person to confirm it on screen.
+    ConfirmOnScreen(SessionOp),
     /// The app name is not a plain command or desktop-file ID.
     NotLaunchable(String),
     /// No tray item has this ID.
@@ -78,6 +81,10 @@ impl std::fmt::Display for Error {
                     "{op:?} needs explicit confirmation (set \"confirmed\": true)"
                 )
             }
+            Self::ConfirmOnScreen(op) => write!(
+                f,
+                "{op:?} is waiting for the person at the computer to confirm it on screen"
+            ),
             Self::NotLaunchable(app) => write!(f, "not a launchable app name: {app:?}"),
             Self::UnknownTrayItem(id) => write!(f, "unknown tray item: {id:?}"),
             Self::UnknownUnit(unit) => write!(f, "not a failed user unit: {unit:?}"),
@@ -239,6 +246,13 @@ pub struct Shell {
     /// the host from the chrome; 0 while it is hidden. Windows shrink to
     /// stay above it, so the field being typed in stays visible.
     pub keyboard: i32,
+    /// Whether the latest input was injected by an agent or came from an
+    /// AT-SPI action, rather than from the keyboard or pointer.
+    synthetic_input: bool,
+    /// Nesting depth of agent requests being handled ([`Shell::as_agent`]).
+    agent_depth: u32,
+    /// A destructive session operation waiting for the person to confirm.
+    confirmation: Option<SessionOp>,
     /// Names and icons for app IDs, set by the host from `.desktop` files.
     pub apps: Apps,
 }
@@ -332,6 +346,9 @@ impl Shell {
             failed_units: Vec::new(),
             effects: Effects::default(),
             keyboard: 0,
+            synthetic_input: false,
+            agent_depth: 0,
+            confirmation: None,
             apps: Apps::default(),
         };
         shell.apply_profile_layout();
@@ -341,6 +358,39 @@ impl Shell {
     /// The effects in force now, from [`Shell::effects`] and the battery.
     pub fn look(&self) -> Look {
         self.effects.resolve(self.battery)
+    }
+
+    /// Records whether the latest input was synthetic (injected by an agent,
+    /// or an AT-SPI action) or real; the host calls this when it changes.
+    pub fn set_synthetic_input(&mut self, synthetic: bool) {
+        self.synthetic_input = synthetic;
+    }
+
+    /// Whether the latest input was synthetic.
+    pub fn synthetic_input(&self) -> bool {
+        self.synthetic_input
+    }
+
+    /// Runs `f` as an agent's request: destructive session operations it
+    /// asks for wait for an on-screen confirmation even when it claims the
+    /// person confirmed.
+    pub fn as_agent<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.agent_depth += 1;
+        let result = f(self);
+        self.agent_depth -= 1;
+        result
+    }
+
+    /// Whether what is happening now may not come from the person: an
+    /// agent's request, or input an agent injected.
+    pub fn untrusted(&self) -> bool {
+        self.agent_depth > 0 || self.synthetic_input
+    }
+
+    /// A destructive session operation an agent or injected input asked
+    /// for, waiting for [`Action::Confirm`] from real input.
+    pub fn pending_confirmation(&self) -> Option<SessionOp> {
+        self.confirmation
     }
 
     /// Updates the output (resolution change, rotation, dock/undock).
@@ -890,6 +940,27 @@ impl Shell {
                 if op.is_destructive() && !confirmed {
                     return Err(Error::NeedsConfirmation(op));
                 }
+                // An agent saying "confirmed" is not the person agreeing,
+                // and neither is a click or Enter an agent injected: a web
+                // page title can talk an agent into anything. Ask on screen.
+                if op.is_destructive() && self.untrusted() {
+                    self.confirmation = Some(op);
+                    return Err(Error::ConfirmOnScreen(op));
+                }
+                return Ok(vec![Effect::Session { op }]);
+            }
+            Action::Confirm { accept } => {
+                let Some(op) = self.confirmation else {
+                    return Ok(Vec::new());
+                };
+                if !accept {
+                    self.confirmation = None;
+                    return Ok(Vec::new());
+                }
+                if self.untrusted() {
+                    return Err(Error::ConfirmOnScreen(op));
+                }
+                self.confirmation = None;
                 return Ok(vec![Effect::Session { op }]);
             }
             Action::ActivateTray { id, item } => {

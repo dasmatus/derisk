@@ -17,8 +17,8 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf, sync::Arc};
 
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
-    Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, pos2,
-    vec2,
+    Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder,
+    accesskit::Role, pos2, vec2,
 };
 use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 
@@ -37,6 +37,7 @@ use crate::{
     overview::{OverviewLayout, Widget, fit, grid, row},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
+    systemd::SessionOp,
 };
 
 /// Converts a logical geometry to an egui rectangle.
@@ -45,6 +46,17 @@ pub fn to_rect(g: Geometry) -> Rect {
         pos2(g.loc.x as f32, g.loc.y as f32),
         vec2(g.size.w as f32, g.size.h as f32),
     )
+}
+
+/// Gives a widget its role and name for screen readers and agents. egui
+/// names widgets after their text, which for the chrome is often a symbol
+/// (◆, ✨, ⚠) or nothing at all for areas drawn with the painter.
+fn name(ui: &Ui, response: &egui::Response, role: Role, label: impl Into<String>) {
+    let label = label.into();
+    ui.ctx().accesskit_node_builder(response.id, |node| {
+        node.set_role(role);
+        node.set_label(label);
+    });
 }
 
 fn button_color(button: Button) -> Color32 {
@@ -160,6 +172,8 @@ pub struct ShellUi {
     window_input: Vec<OskOutput>,
     /// When a held Backspace repeats next.
     backspace_repeat: Option<f64>,
+    /// Move keyboard focus into the top bar next frame (Super+B).
+    focus_bar: bool,
     /// Decoded app icons by theme name or path, `None` when the theme has
     /// none. Behind a `RefCell` because title bars paint through `&self`.
     icons: RefCell<HashMap<String, Option<Arc<egui::ColorImage>>>>,
@@ -316,6 +330,7 @@ impl ShellUi {
             chrome_input: Vec::new(),
             window_input: Vec::new(),
             backspace_repeat: None,
+            focus_bar: false,
             icons: RefCell::default(),
         }
     }
@@ -465,6 +480,13 @@ impl ShellUi {
     /// last call (text for the chrome's own fields goes there directly).
     pub fn take_window_input(&mut self) -> Vec<OskOutput> {
         std::mem::take(&mut self.window_input)
+    }
+
+    /// Moves keyboard focus to the top bar's first button on the next
+    /// frame, so it can be used without a pointer: Tab and Shift+Tab walk
+    /// it, Enter or Space press, Escape returns to the window.
+    pub fn focus_top_bar(&mut self) {
+        self.focus_bar = true;
     }
 
     /// Areas to blur under the translucent panels shown by the last
@@ -655,6 +677,9 @@ impl ShellUi {
             self.palette(ui, shell, &mut actions);
         }
         self.palette.open = shell.palette_visible();
+        if let Some(op) = shell.pending_confirmation() {
+            self.confirmation(ui, shell, op, &mut actions);
+        }
         if !frame.done {
             let painter = ui.ctx().layer_painter(egui::LayerId::new(
                 Order::Foreground,
@@ -664,6 +689,74 @@ impl ShellUi {
             ui.ctx().request_repaint();
         }
         actions
+    }
+
+    /// Asks the person to confirm a session operation an agent or injected
+    /// input requested. Only real keyboard and pointer input can accept
+    /// (the shell checks); Cancel has focus, so a stray Enter cancels.
+    fn confirmation(
+        &mut self,
+        ui: &mut Ui,
+        shell: &Shell,
+        op: SessionOp,
+        actions: &mut Vec<Action>,
+    ) {
+        let (verb, button) = match op {
+            SessionOp::Logout => ("log out", "Log out"),
+            SessionOp::Reboot => ("restart the computer", "Restart"),
+            SessionOp::PowerOff => ("power off the computer", "Power off"),
+            SessionOp::Lock | SessionOp::Suspend | SessionOp::Hibernate => {
+                ("change the session", "Continue")
+            }
+        };
+        let screen = to_rect(shell.output());
+        ui.ctx()
+            .layer_painter(egui::LayerId::new(
+                Order::Foreground,
+                Id::new("derisk-confirm-dim"),
+            ))
+            .rect_filled(screen, 0, Color32::from_black_alpha(140));
+        // Above the dimming, which shares the palette's layer order.
+        egui::Area::new(Id::new("derisk-confirm"))
+            .order(Order::Tooltip)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ui.ctx(), |ui| {
+                card(ui, &self.theme, |ui| {
+                    ui.set_max_width(420.0);
+                    let title = format!("An agent asked to {verb}");
+                    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                        node.set_role(Role::AlertDialog);
+                        node.set_label(title.clone());
+                        node.set_modal();
+                    });
+                    ui.label(RichText::new(&title).size(18.0).strong());
+                    ui.add_space(6.0);
+                    ui.label(
+                        "Unsaved work may be lost. Only you can allow this, with your own \
+                         keyboard or mouse; clicks and keys from agents do not count.",
+                    );
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        let cancel = ui.button("Cancel");
+                        // Focus goes back to Cancel after anything an agent
+                        // did, so it cannot leave the person's next Enter
+                        // on the destructive button.
+                        if shell.synthetic_input() || ui.ctx().memory(|m| m.focused().is_none()) {
+                            cancel.request_focus();
+                        }
+                        if cancel.clicked() {
+                            actions.push(Action::Confirm { accept: false });
+                        }
+                        let accept = ui.add(
+                            egui::Button::new(RichText::new(button).color(Color32::WHITE))
+                                .fill(Color32::from_rgb(185, 28, 28)),
+                        );
+                        if accept.clicked() {
+                            actions.push(Action::Confirm { accept: true });
+                        }
+                    });
+                });
+            });
     }
 
     fn drag_preview(&self, ui: &Ui, shell: &Shell) {
@@ -696,6 +789,13 @@ impl ShellUi {
         for (window, cell) in assist.candidates.iter().zip(cells) {
             let r = to_rect(inset(cell, 8));
             let response = ui.interact(r, Id::new(("derisk-assist", window.get())), Sense::click());
+            let (app, title) = shell.window_label(*window).unwrap_or_default();
+            name(
+                ui,
+                &response,
+                Role::Button,
+                format!("Snap {}", if title.is_empty() { app } else { title }),
+            );
             let stroke = if response.hovered() {
                 self.theme.accent
             } else {
@@ -746,10 +846,13 @@ impl ShellUi {
             |ui| {
                 ui.visuals_mut().override_text_color = Some(self.theme.foreground);
                 ui.spacing_mut().item_spacing.x = 12.0;
-                if action_button(ui, "◆", 16.0, self.theme.foreground)
-                    .on_hover_text("Overview")
-                    .clicked()
-                {
+                let overview =
+                    action_button(ui, "◆", 16.0, self.theme.foreground).on_hover_text("Overview");
+                name(ui, &overview, Role::Button, "Overview");
+                if std::mem::take(&mut self.focus_bar) {
+                    overview.request_focus();
+                }
+                if overview.clicked() {
                     actions.push(Action::Overview { visible: None });
                 }
                 let search = match action_texture(ui.ctx(), "system-search") {
@@ -761,16 +864,16 @@ impl ShellUi {
                         RichText::new("🔍  Search or ask…").color(self.theme.border),
                     ),
                 };
-                if ui
+                let search = ui
                     .add(
                         search
                             .fill(self.theme.surface)
                             .stroke(Stroke::new(1.0, self.theme.border))
                             .corner_radius(8),
                     )
-                    .on_hover_text("Command palette (Super+Space)")
-                    .clicked()
-                {
+                    .on_hover_text("Command palette (Super+Space)");
+                name(ui, &search, Role::Button, "Search or ask");
+                if search.clicked() {
                     actions.push(Action::Palette { visible: None });
                 }
                 if let Some(w) = focused {
@@ -793,11 +896,21 @@ impl ShellUi {
                         shell.clock.time_label()
                     ));
                     if let Some(b) = shell.battery {
-                        ui.label(format!(
+                        let battery = ui.label(format!(
                             "{}{}%",
                             if b.charging { "⚡" } else { "▮" },
                             b.percent
                         ));
+                        name(
+                            ui,
+                            &battery,
+                            Role::Label,
+                            format!(
+                                "Battery {}%{}",
+                                b.percent,
+                                if b.charging { ", charging" } else { "" }
+                            ),
+                        );
                     }
                     self.indicators(ui, shell, actions);
                     self.tray_icons(ui, shell, height, actions);
@@ -1100,12 +1213,16 @@ impl ShellUi {
     /// Failed units and agent activity, as buttons that open the palette on
     /// them. Shared by the desktop top bar and the phone status bar.
     fn indicators(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
-        if !shell.failed_units.is_empty()
-            && ui
-                .add(egui::Button::new(format!("⚠ {}", shell.failed_units.len())).frame(false))
-                .on_hover_text("Failed user services: restart or dismiss them")
-                .clicked()
-        {
+        let failed = (!shell.failed_units.is_empty()).then(|| {
+            let n = shell.failed_units.len();
+            let button = ui
+                .add(egui::Button::new(format!("⚠ {n}")).frame(false))
+                .on_hover_text("Failed user services: restart or dismiss them");
+            let noun = if n == 1 { "service" } else { "services" };
+            name(ui, &button, Role::Button, format!("{n} failed {noun}"));
+            button
+        });
+        if failed.is_some_and(|b| b.clicked()) {
             self.palette.preset = Some("> failed".to_owned());
             actions.push(Action::Palette {
                 visible: Some(true),
@@ -1118,8 +1235,8 @@ impl ShellUi {
             .filter(|t| t.id > self.palette.seen && t.source == Source::Agent)
             .count();
         let working = shell.conversation.turns().any(|t| !t.is_settled());
-        if (unseen > 0 || working)
-            && ui
+        let activity = (unseen > 0 || working).then(|| {
+            let button = ui
                 .add(
                     egui::Button::new(
                         RichText::new(if unseen > 0 {
@@ -1135,9 +1252,15 @@ impl ShellUi {
                     "derisk is working on a request"
                 } else {
                     "Agent activity: open the conversation"
-                })
-                .clicked()
-        {
+                });
+            let label = match (working, unseen) {
+                (true, _) => "Agent activity, working".to_owned(),
+                (false, n) => format!("Agent activity, {n} unseen"),
+            };
+            name(ui, &button, Role::Button, label);
+            button
+        });
+        if activity.is_some_and(|b| b.clicked()) {
             self.palette.chat_next = true;
             actions.push(Action::Palette {
                 visible: Some(true),
@@ -1179,6 +1302,7 @@ impl ShellUi {
                         .frame(false),
                 )
                 .on_hover_text(&item.title);
+            name(ui, &response, Role::Button, &item.title);
             if response.clicked() {
                 actions.push(Action::ActivateTray {
                     id: item.id.clone(),
@@ -1247,6 +1371,16 @@ impl ShellUi {
             let n = i as u64 + 1;
             let r = to_rect(*cell);
             let response = ui.interact(r, Id::new(("derisk-ws", n)), Sense::click());
+            name(
+                ui,
+                &response,
+                Role::Button,
+                if i < open.len() {
+                    format!("Workspace {n}")
+                } else {
+                    "New workspace".to_owned()
+                },
+            );
             let hot = if dragging.is_some() {
                 drop_on == Some(i)
             } else {
@@ -1346,6 +1480,13 @@ impl ShellUi {
             let r = to_rect(fit(frame, cell));
             let response =
                 ui.interact(r, Id::new(("derisk-win", w.get())), Sense::click_and_drag());
+            let (app, title) = shell.window_label(*w).unwrap_or_default();
+            name(
+                ui,
+                &response,
+                Role::Button,
+                if title.is_empty() { app } else { title },
+            );
             if response.drag_started_by(egui::PointerButton::Primary) {
                 self.overview_drag = Some(*w);
             }
@@ -2028,6 +2169,14 @@ fn palette_row(
     height: f32,
 ) -> egui::Response {
     let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    ui.ctx().accesskit_node_builder(response.id, |node| {
+        node.set_role(Role::ListBoxOption);
+        node.set_label(entry.title.clone());
+        if !entry.detail.is_empty() {
+            node.set_description(entry.detail.clone());
+        }
+        node.set_selected(selected);
+    });
     let painter = ui.painter_at(r);
     if selected || response.hovered() {
         painter.rect_filled(

@@ -1532,6 +1532,7 @@ dependencies = [
  "mcsapi-compositor",
  "mcsapi-runtime",
  "mcsapi-theme",
+ "png 0.18.1",
  "resvg 0.48.1",
  "serde",
  "serde_json",
@@ -3846,7 +3847,7 @@ dependencies = [
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#791052cd48afc9cce67f218f7eb6158d29e7de71"
+source = "git+https://github.com/dasmatus/mcsapi#5c76838f71710c89f423c414f484486dbb757537"
 dependencies = [
  "egui",
  "gpui",
@@ -3858,7 +3859,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#791052cd48afc9cce67f218f7eb6158d29e7de71"
+source = "git+https://github.com/dasmatus/mcsapi#5c76838f71710c89f423c414f484486dbb757537"
 dependencies = [
  "egui",
  "mcsapi-ui",
@@ -3867,7 +3868,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components-gpui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#791052cd48afc9cce67f218f7eb6158d29e7de71"
+source = "git+https://github.com/dasmatus/mcsapi#5c76838f71710c89f423c414f484486dbb757537"
 dependencies = [
  "gpui",
  "libc",
@@ -3879,7 +3880,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#791052cd48afc9cce67f218f7eb6158d29e7de71"
+source = "git+https://github.com/dasmatus/mcsapi#5c76838f71710c89f423c414f484486dbb757537"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3895,17 +3896,17 @@ dependencies = [
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#791052cd48afc9cce67f218f7eb6158d29e7de71"
+source = "git+https://github.com/dasmatus/mcsapi#5c76838f71710c89f423c414f484486dbb757537"
 
 [[package]]
 name = "mcsapi-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#791052cd48afc9cce67f218f7eb6158d29e7de71"
+source = "git+https://github.com/dasmatus/mcsapi#5c76838f71710c89f423c414f484486dbb757537"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi?branch=claude%2Fmobile-navigation-wwcgv6#791052cd48afc9cce67f218f7eb6158d29e7de71"
+source = "git+https://github.com/dasmatus/mcsapi#5c76838f71710c89f423c414f484486dbb757537"
 dependencies = [
  "egui",
  "mcsapi",
