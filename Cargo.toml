@@ -9,16 +9,14 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#30 (accessibility tree, AT-SPI and computer use)
-# merges, every mcsapi crate comes from its branch so the apps and the
-# compositor share one mcsapi-ui. Then drop the `branch` keys and run
-# `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/accessibility-computer-use-yl6pzm" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/accessibility-computer-use-yl6pzm" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/accessibility-computer-use-yl6pzm" }
-mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/accessibility-computer-use-yl6pzm" }
-mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/accessibility-computer-use-yl6pzm" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/accessibility-computer-use-yl6pzm" }
+# Every mcsapi crate comes from the same mcsapi revision so the apps and the
+# compositor share one mcsapi-ui; `cargo update -p mcsapi` moves them together.
+mcsapi = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
