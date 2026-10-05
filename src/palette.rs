@@ -553,6 +553,13 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
             "expose desktop show all",
         ),
         (
+            "On-Screen Keyboard",
+            "⌨",
+            Action::Keyboard { visible: None },
+            None,
+            "osk virtual touch type keys show hide",
+        ),
+        (
             "Next Window",
             "🔄",
             Action::FocusNext,
