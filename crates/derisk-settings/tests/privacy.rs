@@ -166,6 +166,19 @@ fn permission_show_output_is_parsed() {
 }
 
 #[test]
+fn piped_permission_show_output_has_no_header() {
+    // Flatpak 1.14.6's `flatpak permission-show org.example.App | cat`.
+    let text = "location\tlocation\torg.example.App\tEXACT,0\t0x00\n\
+                background\tbackground\torg.example.App\tyes\t0x00\n\
+                devices\tcamera\torg.example.App\tno\t0x00\n";
+    let found = parse_permission_show(text);
+    assert_eq!(found.get(&Portal::Location), Some(&true));
+    assert_eq!(found.get(&Portal::Background), Some(&true));
+    assert_eq!(found.get(&Portal::Camera), Some(&false));
+    assert_eq!(found.len(), 3);
+}
+
+#[test]
 fn the_privacy_page_renders_an_app() {
     let dir = temp_dir("page");
     let dirs = Dirs {
