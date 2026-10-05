@@ -7,23 +7,29 @@
 //! windows, and serves the agent protocol against the live desktop.
 
 use std::{
+    collections::HashMap,
     io::{BufReader, Write as _},
     os::unix::{
         fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
 use derisk::{
     action::{Action, Effect},
     conversation::Source,
+    decorations::Button,
     desktop::{self, DesktopEntry},
     effects::SettingsWatch,
     geom::rect,
-    ipc,
+    ipc::{self, LiveRequest},
     keys::{self, Key, Mods, SuperTap},
     overview::Battery,
     palette::{self, Entry},
@@ -35,10 +41,16 @@ use derisk::{
 };
 use mcsapi::WindowId;
 use mcsapi_compositor::{
-    self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, InstanceId,
-    KeyInput, KeyRoute, Keysym, OutputTiming, Placement, Press, Remote, Reserved, Role,
-    RuntimeClient, Theme, egui,
+    self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
+    InstanceId, KeyInput, KeyRoute, Keysym, OutputTiming, Placement, Press, Remote, Reserved, Role,
+    RuntimeClient, Theme,
+    a11y::{Origin, Snapshot, Subtree},
+    accesskit::{self, NodeId},
+    egui,
 };
+use serde_json::{Value, json};
+
+use crate::computer;
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -123,6 +135,17 @@ pub struct Session {
     installed: Vec<DesktopEntry>,
     pending_actions: PendingActions,
     settings: SettingsWatch,
+    /// Request numbers for [`Command::Describe`] and [`Command::Capture`].
+    requests: u64,
+    /// Agents waiting for the accessibility tree.
+    trees: HashMap<u64, (mpsc::Sender<String>, TreeQuery)>,
+    /// Agents waiting for a screenshot, and whether they want it inline.
+    shots: HashMap<u64, (mpsc::Sender<String>, bool)>,
+    /// Accessibility nodes programs registered for their windows, with
+    /// the agent connection that owns them.
+    registered: HashMap<WindowId, (u64, Subtree)>,
+    /// Event lines to each agent connection that registered a tree.
+    listeners: HashMap<u64, mpsc::Sender<String>>,
     /// Environment launched apps get from the published theme.
     theme_env: Vec<(String, String)>,
     /// `derisk-gpui`, when installed: see [`gpui_apps`].
@@ -131,6 +154,22 @@ pub struct Session {
     output: (i32, i32),
     reserved: Reserved,
 }
+
+/// What an agent asked of the accessibility tree.
+enum TreeQuery {
+    Tree {
+        window: Option<u64>,
+    },
+    Find {
+        role: Option<String>,
+        name: Option<String>,
+        window: Option<u64>,
+    },
+}
+
+/// Node IDs of the title-bar buttons the shell paints, in the space above
+/// [`computer::REGISTERED_ID_LIMIT`] so they never meet registered nodes.
+const TITLE_BAR_NODES: u64 = u64::MAX - 8;
 
 /// Core-app actions waiting for the compositor to launch their app, shared
 /// between [`Session`] (which queues them) and [`CoreApps`] (which takes
@@ -203,6 +242,11 @@ impl Session {
             installed,
             pending_actions,
             settings: SettingsWatch::new(derisk_settings::default_path()),
+            requests: 0,
+            trees: HashMap::new(),
+            shots: HashMap::new(),
+            registered: HashMap::new(),
+            listeners: HashMap::new(),
             theme_env: Vec::new(),
             gpui: gpui_apps(),
             output: (w, h),
@@ -244,6 +288,140 @@ impl Session {
         }
         self.theme_env =
             derisk::theme::environment(&dir, &theme, std::env::var_os("XDG_CONFIG_DIRS"));
+    }
+
+    /// Handles one agent request line from connection `conn`; the response
+    /// goes to `reply`, now or once the compositor has answered.
+    fn agent_line(
+        &mut self,
+        conn: u64,
+        line: &str,
+        reply: mpsc::Sender<String>,
+        events: &mpsc::Sender<String>,
+    ) {
+        let respond = |result: std::result::Result<Value, String>| {
+            let line = match result {
+                Ok(result) => json!({"ok": true, "result": result}),
+                Err(error) => json!({"ok": false, "error": error}),
+            };
+            let _ = reply.send(line.to_string());
+        };
+        let request = match ipc::live_request(line) {
+            None => {
+                let (response, effects) = ipc::handle_line(&mut self.shell, line);
+                self.perform(effects);
+                let _ = reply.send(response);
+                return;
+            }
+            Some(Err(e)) => return respond(Err(e)),
+            Some(Ok(request)) => request,
+        };
+        match request {
+            LiveRequest::Tree { window } => {
+                self.requests += 1;
+                self.trees
+                    .insert(self.requests, (reply, TreeQuery::Tree { window }));
+                self.commands.push(Command::Describe(self.requests));
+            }
+            LiveRequest::Find { role, name, window } => {
+                self.requests += 1;
+                self.trees.insert(
+                    self.requests,
+                    (reply, TreeQuery::Find { role, name, window }),
+                );
+                self.commands.push(Command::Describe(self.requests));
+            }
+            LiveRequest::Act {
+                element,
+                action,
+                value,
+            } => {
+                self.commands.push(Command::Act {
+                    element,
+                    action: computer::element_action(action),
+                    value,
+                });
+                respond(Ok(json!({"queued": true})));
+            }
+            LiveRequest::Screenshot { inline } => {
+                self.requests += 1;
+                self.shots.insert(self.requests, (reply, inline));
+                self.commands.push(Command::Capture(self.requests));
+            }
+            LiveRequest::Input { events } => match computer::inputs(&events) {
+                Ok(inputs) => {
+                    let n = inputs.len();
+                    self.commands.extend(inputs.into_iter().map(Command::Input));
+                    respond(Ok(json!({"queued": n})));
+                }
+                Err(e) => respond(Err(e)),
+            },
+            LiveRequest::RegisterTree { window, nodes } => {
+                let Some(id) =
+                    WindowId::new(window).filter(|w| self.shell.window_label(*w).is_some())
+                else {
+                    return respond(Err(format!("unknown window: {window}")));
+                };
+                if let Some((owner, _)) = self.registered.get(&id)
+                    && *owner != conn
+                {
+                    return respond(Err(format!(
+                        "another connection registered window {window}'s tree"
+                    )));
+                }
+                match computer::subtree(id, &nodes) {
+                    Ok(subtree) => {
+                        self.registered.insert(id, (conn, subtree));
+                        self.listeners.insert(conn, events.clone());
+                        respond(Ok(json!({"nodes": nodes.len()})));
+                    }
+                    Err(e) => respond(Err(e)),
+                }
+            }
+        }
+    }
+
+    /// An agent connection closed: its registered trees go with it.
+    fn agent_disconnected(&mut self, conn: u64) {
+        self.registered.retain(|_, (owner, _)| *owner != conn);
+        self.listeners.remove(&conn);
+    }
+
+    /// The title-bar buttons of each visible window, which the shell
+    /// paints itself, so screen readers and agents can press them.
+    fn title_bar_nodes(&self) -> Vec<Subtree> {
+        let bar = self.shell.profile().title_bar;
+        self.shell
+            .placements()
+            .into_iter()
+            .map(|p| {
+                let nodes: Vec<(NodeId, accesskit::Node)> = bar
+                    .buttons(p.frame)
+                    .map(|(button, area)| {
+                        let mut node = accesskit::Node::new(accesskit::Role::Button);
+                        node.set_label(match button {
+                            Button::Close => "Close",
+                            Button::Minimize => "Minimize",
+                            Button::Maximize => "Maximize",
+                        });
+                        node.set_bounds(accesskit::Rect {
+                            x0: f64::from(area.loc.x),
+                            y0: f64::from(area.loc.y),
+                            x1: f64::from(area.loc.x + area.size.w),
+                            y1: f64::from(area.loc.y + area.size.h),
+                        });
+                        node.add_action(accesskit::Action::Click);
+                        (NodeId(TITLE_BAR_NODES + button_index(button)), node)
+                    })
+                    .collect();
+                Subtree {
+                    window: p.window,
+                    roots: nodes.iter().map(|(id, _)| *id).collect(),
+                    nodes,
+                    origin: Origin::Shell,
+                }
+            })
+            .collect()
     }
 
     /// Applies actions from any source and carries out their effects.
@@ -523,6 +701,7 @@ impl compositor::Shell for Session {
         };
         self.shell.overview_visible()
             || self.shell.palette_visible()
+            || self.shell.pending_confirmation().is_some()
             || y < self.shell.profile().top_bar
             || self.shell.snap_assist().is_some_and(|a| inside(a.frame))
             || !self.startup_done()
@@ -554,6 +733,22 @@ impl compositor::Shell for Session {
             return KeyRoute::Consume;
         }
         if is_super {
+            return KeyRoute::Consume;
+        }
+        // The confirmation dialog takes every key until it is answered.
+        if self.shell.pending_confirmation().is_some() {
+            if key.pressed && key.sym == Keysym::Escape {
+                self.dispatch(vec![Action::Confirm { accept: false }]);
+                return KeyRoute::Consume;
+            }
+            return KeyRoute::Chrome;
+        }
+        // Super+B moves keyboard focus into the top bar; Tab and Shift+Tab
+        // walk it, Escape hands the keyboard back to the window.
+        if key.mods.logo && !key.mods.ctrl && !key.mods.alt && key.sym == Keysym::b {
+            if key.pressed {
+                self.ui.focus_top_bar();
+            }
             return KeyRoute::Consume;
         }
         let mods = Mods {
@@ -690,6 +885,97 @@ impl compositor::Shell for Session {
     fn take_commands(&mut self) -> Vec<Command> {
         std::mem::take(&mut self.commands)
     }
+
+    fn access_subtrees(&mut self) -> Vec<Subtree> {
+        let mut subtrees = self.title_bar_nodes();
+        subtrees.extend(self.registered.values().map(|(_, s)| s.clone()));
+        subtrees
+    }
+
+    fn access_action(
+        &mut self,
+        window: WindowId,
+        node: NodeId,
+        action: accesskit::Action,
+        value: Option<&str>,
+    ) {
+        if node.0 >= TITLE_BAR_NODES {
+            if action != accesskit::Action::Click {
+                return;
+            }
+            let w = Some(window.get());
+            let action = match node.0 - TITLE_BAR_NODES {
+                0 => Action::Close { window: w },
+                1 => Action::Minimize { window: w },
+                2 => Action::ToggleMaximize { window: w },
+                _ => return,
+            };
+            self.dispatch(vec![action]);
+            return;
+        }
+        // A node a program registered: tell that program.
+        if let Some((conn, _)) = self.registered.get(&window)
+            && let Some(events) = self.listeners.get(conn)
+        {
+            let event = computer::action_event(window, node, action, value);
+            let _ = events.send(event.to_string());
+        }
+    }
+
+    fn described(&mut self, request: u64, tree: Snapshot) {
+        let Some((reply, query)) = self.trees.remove(&request) else {
+            return;
+        };
+        let result = match query {
+            TreeQuery::Tree { window } => computer::tree_json(&tree, window),
+            TreeQuery::Find { role, name, window } => {
+                computer::find_json(&tree, role.as_deref(), name.as_deref(), window)
+            }
+        };
+        let _ = reply.send(json!({"ok": true, "result": result}).to_string());
+    }
+
+    fn captured(&mut self, request: u64, frame: std::result::Result<Capture, String>) {
+        let Some((reply, inline)) = self.shots.remove(&request) else {
+            return;
+        };
+        // Encoding takes a while; keep it off the compositor thread.
+        std::thread::spawn(move || {
+            let result = frame.and_then(|capture| {
+                let png = computer::png(&capture)?;
+                let dir = computer::screenshot_dir()
+                    .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_owned())?;
+                let path = computer::save_screenshot(&dir, request, &png)
+                    .map_err(|e| format!("cannot save the screenshot: {e}"))?;
+                let mut result = json!({
+                    "path": path,
+                    "width": capture.width,
+                    "height": capture.height,
+                });
+                if inline {
+                    result["png_base64"] = json!(computer::base64(&png));
+                }
+                Ok(result)
+            });
+            let line = match result {
+                Ok(result) => json!({"ok": true, "result": result}),
+                Err(error) => json!({"ok": false, "error": error}),
+            };
+            let _ = reply.send(line.to_string());
+        });
+    }
+
+    fn input_source(&mut self, synthetic: bool) {
+        self.shell.set_synthetic_input(synthetic);
+    }
+}
+
+fn button_index(button: Button) -> u64 {
+    match button {
+        Button::Close => 0,
+        Button::Minimize => 1,
+        Button::Maximize => 2,
+    }
 }
 
 /// The derisk core apps, as in-process windows.
@@ -819,31 +1105,50 @@ fn agent_socket(path: Option<PathBuf>, remote: Remote<Session>) -> Result<Option
     Ok(Some(path))
 }
 
+/// Numbers agent connections, so registered trees know their owner.
+static CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+
 fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
-    let Ok(mut writer) = stream.try_clone() else {
+    let Ok(writer) = stream.try_clone() else {
         return;
     };
+    let conn = CONNECTIONS.fetch_add(1, Ordering::Relaxed);
+    let writer = Arc::new(Mutex::new(writer));
+    // Events for trees this connection registered arrive between responses.
+    let (events, event_lines) = mpsc::channel::<String>();
+    {
+        let writer = writer.clone();
+        std::thread::spawn(move || {
+            for line in event_lines {
+                let Ok(mut w) = writer.lock() else { return };
+                if writeln!(w, "{line}").is_err() {
+                    return;
+                }
+            }
+        });
+    }
     let mut reader = BufReader::new(stream);
     while let Ok(Some(line)) = ipc::read_request(&mut reader) {
         if line.trim().is_empty() {
             continue;
         }
         let (reply, response) = mpsc::channel();
+        let events = events.clone();
         let queued = remote.run(move |session: &mut Session| {
-            let (response, effects) = ipc::handle_line(&mut session.shell, &line);
-            session.perform(effects);
-            let _ = reply.send(response);
+            session.agent_line(conn, &line, reply, &events);
         });
         if !queued {
             return;
         }
         let Ok(response) = response.recv() else {
-            return;
+            break;
         };
-        if writeln!(writer, "{response}").is_err() {
-            return;
+        let Ok(mut w) = writer.lock() else { break };
+        if writeln!(w, "{response}").is_err() {
+            break;
         }
     }
+    remote.run(move |session: &mut Session| session.agent_disconnected(conn));
 }
 
 /// Layout-independent key for shortcuts, from the unmodified keysym.
