@@ -4002,7 +4002,7 @@ dependencies = [
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#5a9920805f5055bd4c82219a05e11f0b151fbaa1"
 dependencies = [
  "egui",
  "gpui",
@@ -4014,7 +4014,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#5a9920805f5055bd4c82219a05e11f0b151fbaa1"
 dependencies = [
  "egui",
  "mcsapi-ui",
@@ -4023,7 +4023,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components-gpui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#5a9920805f5055bd4c82219a05e11f0b151fbaa1"
 dependencies = [
  "gpui",
  "libc",
@@ -4035,7 +4035,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#5a9920805f5055bd4c82219a05e11f0b151fbaa1"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4051,17 +4051,17 @@ dependencies = [
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#5a9920805f5055bd4c82219a05e11f0b151fbaa1"
 
 [[package]]
 name = "mcsapi-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#5a9920805f5055bd4c82219a05e11f0b151fbaa1"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#5a9920805f5055bd4c82219a05e11f0b151fbaa1"
 dependencies = [
  "egui",
  "mcsapi",
