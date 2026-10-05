@@ -554,9 +554,11 @@ impl Session {
         if actions.is_empty() {
             return;
         }
-        match self.shell.run(actions) {
-            Ok(effects) => self.perform(effects),
-            Err(e) => log(Priority::Info, &format!("action failed: {e}")),
+        let outcome = self.shell.run(actions);
+        // Actions before a failure stay applied, so their effects still run.
+        self.perform(outcome.effects);
+        if let Err(e) = outcome.result {
+            log(Priority::Info, &format!("action failed: {e}"));
         }
         self.palette_opened();
     }
@@ -904,11 +906,14 @@ impl compositor::Shell for Session {
                 .ui
                 .bar_rect()
                 .is_some_and(|r| r.contains(egui::pos2(x as f32, y as f32)))
-            // Below the work area on a phone: the keyboard and navigation bar.
+            // Below the work area on a phone: the navigation bar.
             || (self.shell.is_phone() && {
                 let area = self.shell.work_area();
                 y >= area.loc.y + area.size.h
             })
+            // The on-screen keyboard floats over windows, so taps on it must
+            // not fall through to the one underneath.
+            || self.shell.keyboard_area().is_some_and(inside)
             || self.shell.snap_assist().is_some_and(|a| inside(a.frame))
             || !self.startup_done()
     }
@@ -1025,8 +1030,8 @@ impl compositor::Shell for Session {
     fn paint_background(&mut self, painter: &egui::Painter, screen: egui::Rect) {
         let look = self.shell.look();
         let seen = Visibility {
-            // A maximized window keeps the gap around it; a strip that thin
-            // isn't worth decoding video for.
+            // Tiled windows leave gaps between them; strips that thin aren't
+            // worth decoding video for.
             covered: !self.shell.overview_visible()
                 && wallpaper::covered(
                     inset(self.shell.work_area(), self.shell.profile().gap),
@@ -1064,11 +1069,10 @@ impl compositor::Shell for Session {
         }
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
-        // Windows make room for the on-screen keyboard, and what it typed
-        // for them goes to the focused one. It goes through the same
-        // synthetic-input path agents use, so the keyboard can't confirm
-        // what only a direct tap may (the power-off dialog).
-        self.shell.keyboard = self.ui.keyboard_height(&self.shell);
+        // What the on-screen keyboard typed for windows goes to the focused
+        // one. It goes through the same synthetic-input path agents use, so
+        // the keyboard can't confirm what only a direct tap may (the
+        // power-off dialog).
         for typed in self.ui.take_window_input() {
             let key = |sym| Input::Key {
                 sym,
@@ -1083,9 +1087,10 @@ impl compositor::Shell for Session {
         // Requests typed in the palette; their progress shows in its
         // conversation.
         for ask in self.ui.take_asks() {
-            match self.shell.ask(&ask.text, Source::User, ask.confirmed) {
-                Ok(effects) => self.perform(effects),
-                Err(e) => log(Priority::Info, &format!("request failed: {e}")),
+            let outcome = self.shell.ask(&ask.text, Source::User, ask.confirmed);
+            self.perform(outcome.effects);
+            if let Err(e) = outcome.result {
+                log(Priority::Info, &format!("request failed: {e}"));
             }
         }
         self.palette_opened();

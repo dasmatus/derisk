@@ -47,12 +47,15 @@ pub struct TitleBar {
 }
 
 impl Default for TitleBar {
+    // 24 px is one line of title text with 6 px above and below: enough to
+    // grab and read, and 8 px less of every window spent on chrome than the
+    // 32 px bar this replaced.
     fn default() -> Self {
         Self {
-            height: 32,
-            button: 14,
-            spacing: 8,
-            padding: 12,
+            height: 24,
+            button: 12,
+            spacing: 6,
+            padding: 8,
         }
     }
 }

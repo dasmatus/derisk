@@ -411,7 +411,7 @@ impl App for CalculatorApp {
             ui.add_space(8.0);
             let size = egui::vec2(
                 ((ui.available_width() - 4.0 * 6.0) / 5.0).max(40.0),
-                ((ui.available_height() - 4.0 * 6.0) / 5.0).clamp(32.0, 72.0),
+                ((ui.available_height() - 4.0 * 6.0) / 5.0).clamp(32.0, 96.0),
             );
             egui::Grid::new("calculator-keys")
                 .spacing([6.0, 6.0])

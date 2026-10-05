@@ -81,3 +81,10 @@ host = [
 # LosOS does on PCs, where it also preloads it into every process.
 hardened-malloc = ["dep:mcsapi-hardened-malloc"]
 
+
+# One codegen unit and fat LTO across every crate, mcsapi included: release
+# builds are the ones that ship, so they trade build time for inlining across
+# crate boundaries and a smaller binary. CI tests in the dev profile.
+[profile.release]
+lto = true
+codegen-units = 1

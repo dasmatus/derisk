@@ -19,6 +19,7 @@ use crate::{
     decorations::{Button, ClickTracker, Hit},
     effects::{Effects, Look},
     geom::{Point, Rect, centered, contains, inset, rect},
+    keyboard,
     menu::{self, GlobalMenu},
     mobile::NavBar,
     overview::Battery,
@@ -37,6 +38,14 @@ pub const MAX_WORKSPACES: u64 = 9;
 
 /// Pointer travel, in logical pixels, before a title bar press becomes a drag.
 pub const DRAG_THRESHOLD: i32 = 6;
+
+/// Widest the on-screen keyboard gets on a desktop, in logical pixels: keys
+/// stretched across a 1920 px screen are too far apart to type on.
+pub const KEYBOARD_MAX_WIDTH: i32 = 960;
+
+/// Shortest a window gets when it shrinks to clear the on-screen keyboard.
+/// One that would end up shorter moves up instead, keeping its size.
+const KEYBOARD_MIN_CLIENT: i32 = 160;
 
 /// A shell operation failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,6 +106,28 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// What running a sequence of actions did.
+///
+/// A failing action stops the rest, but the actions before it stay applied,
+/// so their effects (launching an app, say) must still be carried out:
+/// `effects` holds them whether or not `result` is an error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[must_use]
+pub struct Outcome {
+    /// Effects of the actions that were applied.
+    pub effects: Vec<Effect>,
+    /// The error that stopped the run, if any.
+    pub result: Result<(), Error>,
+}
+
+impl Outcome {
+    /// The effects if every action applied, else the error (dropping the
+    /// effects of the actions before it).
+    pub fn into_result(self) -> Result<Vec<Effect>, Error> {
+        self.result.map(|()| self.effects)
+    }
+}
 
 impl From<mcsapi::Error> for Error {
     fn from(e: mcsapi::Error) -> Self {
@@ -243,10 +274,9 @@ pub struct Shell {
     pub failed_units: Vec<String>,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
-    /// Height of the on-screen keyboard above the navigation bar, updated by
-    /// the host from the chrome; 0 while it is hidden. Windows shrink to
-    /// stay above it, so the field being typed in stays visible.
-    pub keyboard: i32,
+    /// Whether the on-screen keyboard is showing (see
+    /// [`Shell::keyboard_area`]).
+    keyboard: bool,
     /// Whether the latest input was injected by an agent or came from an
     /// AT-SPI action, rather than from the keyboard or pointer.
     synthetic_input: bool,
@@ -346,7 +376,7 @@ impl Shell {
             battery: None,
             failed_units: Vec::new(),
             effects: Effects::default(),
-            keyboard: 0,
+            keyboard: false,
             synthetic_input: false,
             agent_depth: 0,
             confirmation: None,
@@ -440,14 +470,13 @@ impl Shell {
 
     /// The output minus the top bar. An auto-hidden bar slides over windows
     /// instead of taking room from them. Phones also lose the navigation bar
-    /// and the on-screen keyboard, and keep their status bar shown.
+    /// and keep their status bar shown. The on-screen keyboard takes no room
+    /// here: it floats over windows (see [`Shell::keyboard_area`]).
     pub fn work_area(&self) -> Geometry {
         let o = self.output;
         if self.is_phone() {
             let bar = self.profile.top_bar.min(o.size.h - 1);
-            let nav = (self.profile.nav_bar + self.keyboard)
-                .min(o.size.h - bar - 1)
-                .max(0);
+            let nav = self.profile.nav_bar.min(o.size.h - bar - 1).max(0);
             return rect(o.loc.x, o.loc.y + bar, o.size.w, o.size.h - bar - nav);
         }
         if self.effects.top_bar.autohide {
@@ -545,6 +574,48 @@ impl Shell {
         self.palette
     }
 
+    /// Whether the on-screen keyboard is showing.
+    pub fn keyboard_visible(&self) -> bool {
+        self.keyboard
+    }
+
+    /// Where the on-screen keyboard is drawn while it shows: along the bottom
+    /// edge, above a phone's navigation bar or a top bar moved to the bottom.
+    ///
+    /// It is an overlay, not part of the layout: it covers whatever windows
+    /// are under it, and only the focused window moves out from under it
+    /// (see [`Shell::placements`]), the way a phone resizes the app being
+    /// typed in. Other windows keep their places, so showing the keyboard
+    /// never reshuffles the desktop. On a wide screen it stays phone-sized
+    /// rather than stretching keys across the whole output.
+    pub fn keyboard_area(&self) -> Option<Geometry> {
+        if !self.keyboard {
+            return None;
+        }
+        let o = self.output;
+        let below = if self.is_phone() {
+            self.profile.nav_bar
+        } else if self.effects.top_bar.position == BarPosition::Bottom
+            && !self.effects.top_bar.autohide
+        {
+            self.bar_area().size.h
+        } else {
+            0
+        };
+        let height = keyboard::HEIGHT.min(o.size.h - below).max(0);
+        let width = if self.profile.form_factor == FormFactor::Desktop {
+            o.size.w.min(KEYBOARD_MAX_WIDTH)
+        } else {
+            o.size.w
+        };
+        Some(rect(
+            o.loc.x + (o.size.w - width) / 2,
+            o.loc.y + o.size.h - below - height,
+            width,
+            height,
+        ))
+    }
+
     /// The pending Snap Assist offer, if any.
     pub fn snap_assist(&self) -> Option<&SnapAssist> {
         self.snap_assist.as_ref()
@@ -632,14 +703,22 @@ impl Shell {
             .position(|(app, _)| *app == key || key.contains(app.as_str()))
         {
             let (_, actions) = self.pending.remove(i);
+            // Like `run_steps`: the first failure stops the rest.
+            let mut failed = false;
             for (action, step) in actions {
-                // Queued actions are best-effort: the window may already be gone.
-                let status = match self.apply(action) {
-                    Ok(more) => {
-                        effects.extend(more);
-                        StepStatus::Done
+                let status = if failed {
+                    StepStatus::Skipped
+                } else {
+                    match self.apply(action) {
+                        Ok(more) => {
+                            effects.extend(more);
+                            StepStatus::Done
+                        }
+                        Err(e) => {
+                            failed = true;
+                            StepStatus::Failed(e.to_string())
+                        }
                     }
-                    Err(e) => StepStatus::Failed(e.to_string()),
                 };
                 if let Some(step) = step {
                     self.conversation.set(step, status);
@@ -942,6 +1021,14 @@ impl Shell {
             Action::Palette { visible } => {
                 self.palette = visible.unwrap_or(!self.palette);
                 self.drag = None;
+                // The palette's search field is the one to type in on a
+                // phone: bring the keyboard up with it, and down again after.
+                if self.is_phone() {
+                    self.keyboard = self.palette;
+                }
+            }
+            Action::Keyboard { visible } => {
+                self.keyboard = visible.unwrap_or(!self.keyboard);
             }
             Action::Open { path } => {
                 if !openable(Path::new(&path)) {
@@ -1010,8 +1097,9 @@ impl Shell {
     /// Window actions without an explicit window that follow a `Launch` are
     /// deferred until that app maps a window, so "open firefox and snap it
     /// left" acts on Firefox. Stops at the first error; earlier actions stay
-    /// applied.
-    pub fn run(&mut self, actions: impl IntoIterator<Item = Action>) -> Result<Vec<Effect>, Error> {
+    /// applied, and [`Outcome::effects`] holds their effects for the host to
+    /// carry out either way.
+    pub fn run(&mut self, actions: impl IntoIterator<Item = Action>) -> Outcome {
         self.run_steps(actions.into_iter().collect(), None)
     }
 
@@ -1022,12 +1110,7 @@ impl Shell {
     /// `confirmed` confirms destructive session operations; only pass it
     /// when the person explicitly confirmed this request (the palette asks
     /// again first). Agents never do.
-    pub fn ask(
-        &mut self,
-        text: &str,
-        source: Source,
-        confirmed: bool,
-    ) -> Result<Vec<Effect>, Error> {
+    pub fn ask(&mut self, text: &str, source: Source, confirmed: bool) -> Outcome {
         match assistant::interpret(text) {
             Ok(actions) => {
                 let actions = actions
@@ -1045,24 +1128,22 @@ impl Shell {
             Err(e) => {
                 self.conversation
                     .not_understood(source, text, &e.to_string());
-                Err(Error::NotUnderstood(e.0))
+                Outcome {
+                    effects: Vec::new(),
+                    result: Err(Error::NotUnderstood(e.0)),
+                }
             }
         }
     }
 
     /// Runs `actions` like [`Shell::run`], recording them as one turn of
     /// the conversation under `request`.
-    pub fn run_recorded(
-        &mut self,
-        request: &str,
-        source: Source,
-        actions: Vec<Action>,
-    ) -> Result<Vec<Effect>, Error> {
+    pub fn run_recorded(&mut self, request: &str, source: Source, actions: Vec<Action>) -> Outcome {
         let turn = self.conversation.start(source, request, &actions);
         self.run_steps(actions, Some(turn))
     }
 
-    fn run_steps(&mut self, actions: Vec<Action>, turn: Option<u64>) -> Result<Vec<Effect>, Error> {
+    fn run_steps(&mut self, actions: Vec<Action>, turn: Option<u64>) -> Outcome {
         let step = |i: usize| turn.map(|t| (t, i));
         let total = actions.len();
         let mut effects = Vec::new();
@@ -1089,7 +1170,10 @@ impl Shell {
                             self.conversation.set((t, rest), StepStatus::Skipped);
                         }
                     }
-                    return Err(e);
+                    return Outcome {
+                        effects,
+                        result: Err(e),
+                    };
                 }
             }
             if let Some(key) = launched {
@@ -1102,7 +1186,10 @@ impl Shell {
                 }
             }
         }
-        Ok(effects)
+        Outcome {
+            effects,
+            result: Ok(()),
+        }
     }
 
     /// Frames for the active workspace, bottom to top.
@@ -1110,6 +1197,20 @@ impl Shell {
     /// Tiled windows come first (only the topmost in monocle), then snapped and
     /// floating windows in stacking order. Minimized windows are omitted.
     pub fn placements(&self) -> Vec<WindowPlacement> {
+        let mut out = self.arranged();
+        if let Some(keyboard) = self.keyboard_area() {
+            let title = self.profile.title_bar;
+            for p in out.iter_mut().filter(|p| p.focused) {
+                p.frame = clear_of_keyboard(p.frame, keyboard, self.work_area());
+                p.client = title.client(p.frame);
+            }
+        }
+        out
+    }
+
+    /// [`Shell::placements`] as the layout has them, before the focused
+    /// window makes room for the on-screen keyboard.
+    fn arranged(&self) -> Vec<WindowPlacement> {
         let ws = self.desktop.active();
         let members: BTreeSet<WindowId> = ws.windows().collect();
         let focused = self.focused();
@@ -1147,14 +1248,13 @@ impl Shell {
         let topmost_tiled = self.stack.iter().rev().find(|w| tiled.contains(w)).copied();
         let layout = ws.layout();
         let mut out: Vec<WindowPlacement> = match layout.arrange(tile_area, tiled.iter().copied()) {
-            Ok(placements) if layout != Layout::Monocle => placements
+            Ok(placements) if layout != Layout::Monocle && tiled.len() > 1 => placements
                 .map(|p| place(p.window, inset(p.geometry, gap - gap / 2)))
                 .collect(),
-            // Monocle, or too little space to tile: show the topmost tiled window.
-            _ => topmost_tiled
-                .map(|w| place(w, inset(tile_area, gap - gap / 2)))
-                .into_iter()
-                .collect(),
+            // Monocle, a lone tiled window, or too little space to tile: the
+            // topmost tiled window fills the work area. Gaps separate tiles
+            // from each other, and one tile has nothing to be separated from.
+            _ => topmost_tiled.map(|w| place(w, area)).into_iter().collect(),
         };
 
         for &w in &self.stack {
@@ -1326,4 +1426,27 @@ impl Shell {
     pub fn is_phone(&self) -> bool {
         self.profile.form_factor == FormFactor::Phone
     }
+}
+
+/// `frame` moved out from under the on-screen keyboard at `keyboard`, staying
+/// inside `area`: its bottom edge rises to the keyboard's top when enough of
+/// it is left, and otherwise the whole window slides up. A frame the
+/// keyboard does not cover is returned as it is.
+pub fn clear_of_keyboard(frame: Geometry, keyboard: Geometry, area: Geometry) -> Geometry {
+    let top = keyboard.loc.y;
+    let overlaps_x = frame.loc.x < keyboard.loc.x + keyboard.size.w
+        && keyboard.loc.x < frame.loc.x + frame.size.w;
+    if !overlaps_x || frame.loc.y + frame.size.h <= top {
+        return frame;
+    }
+    if top - frame.loc.y >= KEYBOARD_MIN_CLIENT {
+        return rect(frame.loc.x, frame.loc.y, frame.size.w, top - frame.loc.y);
+    }
+    let y = (top - frame.size.h).max(area.loc.y);
+    rect(
+        frame.loc.x,
+        y,
+        frame.size.w,
+        (top - y).clamp(1, frame.size.h),
+    )
 }

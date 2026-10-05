@@ -47,7 +47,10 @@ impl Profile {
         let short = width.min(height);
         let form_factor = if short < 600 {
             FormFactor::Phone
-        } else if short < 900 || (touch && width < 1600) {
+        } else if touch && (short < 900 || width < 1600) {
+            // Only a touchscreen earns the larger targets. A 1280×800 or
+            // 1366×768 laptop driven by a pointer used to land here too and
+            // lost a title bar's worth of every window to finger-sized chrome.
             FormFactor::Tablet
         } else {
             FormFactor::Desktop
@@ -80,11 +83,13 @@ impl Profile {
                 gap: 10,
                 top_bar: 32,
                 nav_bar: 0,
+                // Buttons stay a fingertip wide with their slop (see
+                // TitleBar::hit), while the bar itself loses 8 px.
                 title_bar: TitleBar {
-                    height: 40,
-                    button: 18,
-                    spacing: 12,
-                    padding: 14,
+                    height: 32,
+                    button: 16,
+                    spacing: 10,
+                    padding: 12,
                 },
                 snap: SnapConfig {
                     edge: 24,

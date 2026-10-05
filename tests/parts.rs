@@ -64,6 +64,11 @@ fn profiles_adapt_to_the_output() {
         Profile::detect(2560, 1440, false).form_factor,
         FormFactor::Desktop
     );
+    // A small laptop screen without touch gets desktop chrome.
+    assert_eq!(
+        Profile::detect(1280, 800, false).form_factor,
+        FormFactor::Desktop
+    );
 }
 
 #[test]

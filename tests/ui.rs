@@ -104,10 +104,22 @@ fn overview_button_in_the_top_bar_toggles_the_overview() {
     assert_eq!(actions, vec![Action::Overview { visible: None }]);
 }
 
+/// Opens workspace 2 with one window on it (workspaces are dynamic).
+fn open_second_workspace(shell: &mut Shell) {
+    let (w, _) = shell.map_window("foot", "sh");
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(w.get()),
+            workspace: 2,
+        })
+        .unwrap();
+}
+
 #[test]
 fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
     let (w, h) = (1280.0, 800.0);
     let mut shell = Shell::new(rect(0, 0, 1280, 800), false);
+    open_second_workspace(&mut shell);
     shell.map_window("editor", "notes.md");
     shell.apply(Action::Palette { visible: None }).unwrap();
     let mut ui = ShellUi::new(&shell, true);
@@ -128,7 +140,7 @@ fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
         &mut ui,
         &shell,
         (w, h),
-        vec![text("workspace 3")],
+        vec![text("workspace 2")],
         5000,
     );
     let actions = frame(
@@ -142,7 +154,7 @@ fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
     assert_eq!(
         actions,
         [
-            Action::SwitchWorkspace { workspace: 3 },
+            Action::SwitchWorkspace { workspace: 2 },
             Action::Palette {
                 visible: Some(false)
             }
@@ -158,7 +170,7 @@ fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
         &mut ui,
         &shell,
         (w, h),
-        vec![text("workspace 3")],
+        vec![text("workspace 2")],
         5000,
     );
     let actions = frame(
@@ -173,7 +185,7 @@ fn palette_runs_the_selected_entry_and_confirms_destructive_ones() {
         actions[0],
         Action::MoveToWorkspace {
             window: None,
-            workspace: 3
+            workspace: 2
         }
     );
 
@@ -272,7 +284,10 @@ fn palette_hands_requests_to_the_assistant_and_shows_the_conversation() {
             confirmed: false
         }]
     );
-    shell.ask(&asks[0].text, Source::User, false).unwrap();
+    shell
+        .ask(&asks[0].text, Source::User, false)
+        .into_result()
+        .unwrap();
     frame(&ctx, &mut ui, &shell, (w, h), vec![], 5000);
 
     // Follow-ups go straight to the assistant, and shutting down needs a
@@ -324,7 +339,7 @@ fn palette_hands_requests_to_the_assistant_and_shows_the_conversation() {
         &mut ui,
         &shell,
         (w, h),
-        vec![egui::Event::Text("workspace 3".into())],
+        vec![egui::Event::Text("lock screen".into())],
         5000,
     );
     let actions = frame(
@@ -335,7 +350,16 @@ fn palette_hands_requests_to_the_assistant_and_shows_the_conversation() {
         vec![key(egui::Key::Enter)],
         5000,
     );
-    assert_eq!(actions[0], Action::SwitchWorkspace { workspace: 3 });
+    assert!(
+        matches!(
+            actions[0],
+            Action::Session {
+                op: derisk::systemd::SessionOp::Lock,
+                ..
+            }
+        ),
+        "{actions:?}"
+    );
 }
 
 #[test]
@@ -391,7 +415,7 @@ fn typing_on_the_overview_opens_the_palette() {
             visible: Some(true)
         }]
     );
-    shell.run(actions).unwrap();
+    shell.run(actions).into_result().unwrap();
     frame(
         &ctx,
         &mut ui,
@@ -585,7 +609,7 @@ fn dragging_a_window_onto_plus_opens_a_new_workspace() {
             workspace: 2
         }]
     );
-    shell.run(actions).unwrap();
+    shell.run(actions).into_result().unwrap();
     assert_eq!(shell.workspaces().len(), 2);
     assert!(shell.overview_visible());
 }
@@ -816,7 +840,7 @@ fn the_keyboard_types_into_the_palette_and_completes_words() {
     let ctx = egui::Context::default();
     frame(&ctx, &mut ui, &shell, size, vec![], 5000);
     // Opening the palette brings the keyboard up above the navigation bar.
-    assert!(ui.keyboard_visible(&shell));
+    assert!(shell.keyboard_visible());
     let nav = shell.nav_bar().area(shell.output());
     let area = rect(
         nav.loc.x,
@@ -824,6 +848,7 @@ fn the_keyboard_types_into_the_palette_and_completes_words() {
         nav.size.w,
         keyboard::HEIGHT,
     );
+    assert_eq!(shell.keyboard_area(), Some(area));
     let keys = ui.keyboard.keys(area);
     let at = |k: Key| to_rect(keys.iter().find(|(key, _)| *key == k).unwrap().1).center();
     for c in "tom".chars() {
@@ -849,14 +874,17 @@ fn the_keyboard_button_types_into_the_focused_window() {
     let mut ui = ShellUi::new(&shell, true);
     let ctx = egui::Context::default();
     frame(&ctx, &mut ui, &shell, size, vec![], 5000);
-    assert!(!ui.keyboard_visible(&shell));
+    assert!(!shell.keyboard_visible());
     let button = to_rect(shell.nav_bar().buttons(shell.output())[3].1).center();
-    touch(&ctx, &mut ui, &shell, size, button, &[]);
-    assert!(ui.keyboard_visible(&shell));
-    // Windows make room for it.
-    let before = shell.work_area();
-    shell.keyboard = ui.keyboard_height(&shell);
-    assert_eq!(shell.work_area().size.h, before.size.h - keyboard::HEIGHT);
+    let outcome = shell.run(touch(&ctx, &mut ui, &shell, size, button, &[]));
+    assert!(outcome.result.is_ok());
+    assert!(shell.keyboard_visible());
+    // It floats over the app, which shrinks to stay above it; the work area
+    // itself is unchanged.
+    let work = shell.work_area();
+    assert_eq!(work.size.h, 872 - 32 - 56);
+    let app = shell.placements()[0].frame;
+    assert_eq!(app.size.h, work.size.h - keyboard::HEIGHT);
     let nav = shell.nav_bar().area(shell.output());
     let area = rect(
         nav.loc.x,
@@ -876,5 +904,60 @@ fn the_keyboard_button_types_into_the_focused_window() {
             Output::Text("i".into()),
             Output::Backspace
         ]
+    );
+}
+
+#[test]
+fn the_keyboard_floats_over_desktop_windows_and_only_the_focused_one_moves() {
+    use derisk::{keyboard, shell::KEYBOARD_MAX_WIDTH};
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let (a, _) = shell.map_window("files", "Files");
+    let (b, _) = shell.map_window("editor", "notes.md");
+    shell.apply(Action::Focus { window: b.get() }).unwrap();
+    let before = shell.placements();
+    assert_eq!(shell.keyboard_area(), None);
+    shell.apply(Action::Keyboard { visible: None }).unwrap();
+    let area = shell.keyboard_area().unwrap();
+    // Phone-sized on a wide screen, centered along the bottom edge.
+    assert_eq!(area.size.w, KEYBOARD_MAX_WIDTH);
+    assert_eq!(area.size.h, keyboard::HEIGHT);
+    assert_eq!(area.loc.x, (1920 - KEYBOARD_MAX_WIDTH) / 2);
+    assert_eq!(area.loc.y + area.size.h, 1080);
+    let after = shell.placements();
+    let frame =
+        |ps: &[derisk::shell::WindowPlacement], w| ps.iter().find(|p| p.window == w).unwrap().frame;
+    // The unfocused window stays where it was, under the keyboard.
+    assert_eq!(frame(&before, a), frame(&after, a));
+    // The focused one ends at the keyboard's top edge.
+    let focused = frame(&after, b);
+    assert_eq!(focused.loc.y, frame(&before, b).loc.y);
+    assert_eq!(focused.loc.y + focused.size.h, area.loc.y);
+    shell
+        .apply(Action::Keyboard {
+            visible: Some(false),
+        })
+        .unwrap();
+    assert_eq!(shell.placements(), before);
+}
+
+#[test]
+fn a_short_window_slides_up_over_the_keyboard_instead_of_shrinking() {
+    use derisk::shell::clear_of_keyboard;
+    let area = rect(0, 28, 1280, 772);
+    let keyboard = rect(160, 552, 960, 248);
+    // Too short to lose 150 px: it moves up whole.
+    let frame = rect(300, 500, 400, 200);
+    assert_eq!(
+        clear_of_keyboard(frame, keyboard, area),
+        rect(300, 352, 400, 200)
+    );
+    // Beside the keyboard: untouched.
+    let beside = rect(0, 500, 150, 300);
+    assert_eq!(clear_of_keyboard(beside, keyboard, area), beside);
+    // Taller than the room above the keyboard: pinned to the top and cut.
+    let tall = rect(300, 100, 400, 680);
+    assert_eq!(
+        clear_of_keyboard(tall, keyboard, area),
+        rect(300, 100, 400, 452)
     );
 }

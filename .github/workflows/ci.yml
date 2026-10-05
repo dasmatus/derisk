@@ -22,7 +22,7 @@ jobs:
       matrix:
         features: ["", "--features derisk/host"]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - run: rustup toolchain install 1.95 --profile minimal --component clippy,rustfmt && rustup default 1.95
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libpam0g-dev libinput-dev libudev-dev libgbm-dev libseat-dev libdrm-dev
@@ -33,7 +33,7 @@ jobs:
   nix:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       # Clippy and tests for the default and host builds, rustfmt and the

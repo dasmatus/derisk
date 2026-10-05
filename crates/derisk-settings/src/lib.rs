@@ -211,6 +211,12 @@ impl SettingsApp {
         let s = &mut self.settings;
         ui.heading(egui::RichText::new(self.page.label()).color(theme.foreground));
         ui.add_space(8.0);
+        // Sliders and fields grow with the window instead of sitting at
+        // egui's 100 and 280 pixels in a wide page, up to where a row is
+        // still easy to read across. The label column takes about 160.
+        let control = (ui.available_width() - 160.0).clamp(160.0, 560.0);
+        ui.spacing_mut().slider_width = control - 64.0;
+        ui.spacing_mut().text_edit_width = control;
         if self.page == Page::Privacy {
             return privacy::page(ui, &mut s.privacy, &mut self.privacy, theme);
         }
@@ -462,7 +468,7 @@ impl App for SettingsApp {
     fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         let narrow = ui.available_width() < NARROW;
         if narrow {
-            // A 180-pixel sidebar would leave a phone half a page, so the
+            // A sidebar would leave a phone half a page, so the
             // pages become a row of tabs across the top that scrolls sideways.
             egui::Panel::top("settings-pages").show(ui, |ui| {
                 egui::ScrollArea::horizontal().show(ui, |ui| {
@@ -470,9 +476,10 @@ impl App for SettingsApp {
                 });
             });
         } else {
+            let sidebar = (ui.available_width() * 0.16).clamp(140.0, 200.0);
             egui::Panel::left("settings-pages")
                 .resizable(false)
-                .exact_size(180.0)
+                .exact_size(sidebar)
                 .show(ui, |ui| self.page_buttons(ui));
         }
         egui::Panel::bottom("settings-actions").show(ui, |ui| {
