@@ -1615,9 +1615,27 @@ name = "derisk-portal"
 version = "0.1.0"
 dependencies = [
  "ashpd 0.13.13",
+ "derisk",
+ "derisk-portal-ui",
  "derisk-settings",
+ "image",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "derisk-portal-ui"
+version = "0.1.0"
+dependencies = [
+ "derisk",
+ "derisk-files",
+ "derisk-settings",
+ "eframe",
+ "image",
+ "mcsapi-components",
+ "mcsapi-ui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

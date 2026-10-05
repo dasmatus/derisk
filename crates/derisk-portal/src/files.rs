@@ -144,6 +144,13 @@ fn now() -> u64 {
 /// folder, where it outlives the few the session keeps in the runtime
 /// directory, and returns the copy.
 pub fn keep_screenshot(capture: &Path, pictures: &Path) -> io::Result<PathBuf> {
+    let path = new_screenshot(pictures)?;
+    fs::copy(capture, &path)?;
+    Ok(path)
+}
+
+/// A free `Screenshots/Screenshot from <time>.png` under `pictures`.
+fn new_screenshot(pictures: &Path) -> io::Result<PathBuf> {
     let dir = pictures.join("Screenshots");
     fs::create_dir_all(&dir)?;
     let stamp = utc_timestamp(now());
@@ -153,7 +160,31 @@ pub fn keep_screenshot(capture: &Path, pictures: &Path) -> io::Result<PathBuf> {
         n += 1;
         path = dir.join(format!("Screenshot from {stamp} ({n}).png"));
     }
-    fs::copy(capture, &path)?;
+    Ok(path)
+}
+
+/// [`keep_screenshot`], cropped to `area` (left, top, right, bottom as
+/// fractions of the capture). The whole screen is copied as it is.
+pub fn keep_screenshot_area(
+    capture: &Path,
+    area: [f32; 4],
+    pictures: &Path,
+) -> io::Result<PathBuf> {
+    if area == [0.0, 0.0, 1.0, 1.0] {
+        return keep_screenshot(capture, pictures);
+    }
+    let image = image::open(capture).map_err(io::Error::other)?;
+    let (w, h) = (image.width() as f32, image.height() as f32);
+    let [l, t, r, b] = area.map(|v| v.clamp(0.0, 1.0));
+    let x = (l * w).round() as u32;
+    let y = (t * h).round() as u32;
+    let cw = (((r - l) * w).round() as u32).max(1);
+    let ch = (((b - t) * h).round() as u32).max(1);
+    let path = new_screenshot(pictures)?;
+    image
+        .crop_imm(x, y, cw, ch)
+        .save_with_format(&path, image::ImageFormat::Png)
+        .map_err(io::Error::other)?;
     Ok(path)
 }
 
@@ -199,6 +230,22 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn crops_a_screenshot_to_the_chosen_area() {
+        let dir = scratch("crop");
+        let capture = dir.join("screen.png");
+        image::RgbaImage::from_pixel(200, 100, image::Rgba([10, 20, 30, 255]))
+            .save(&capture)
+            .unwrap();
+        let kept = keep_screenshot_area(&capture, [0.25, 0.5, 0.75, 1.0], &dir).unwrap();
+        assert!(kept.starts_with(dir.join("Screenshots")));
+        let out = image::open(&kept).unwrap();
+        assert_eq!((out.width(), out.height()), (100, 50));
+        // The whole screen is copied byte for byte.
+        let whole = keep_screenshot_area(&capture, [0.0, 0.0, 1.0, 1.0], &dir).unwrap();
+        assert_eq!(fs::read(&whole).unwrap(), fs::read(&capture).unwrap());
     }
 
     #[test]

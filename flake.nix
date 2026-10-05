@@ -87,7 +87,7 @@
           # The CI matrix (default and host) plus the apps' preview window.
           variants = {
             default = "";
-            host = "--features derisk/host,derisk-apps/preview";
+            host = "--features derisk/host,derisk-apps/preview,derisk-portal-ui/window";
           };
 
           depsFor =
@@ -134,7 +134,7 @@
               // {
                 pname = "derisk";
                 cargoArtifacts = deps.host;
-                cargoExtraArgs = "--locked -p derisk -p derisk-portal --features derisk/host";
+                cargoExtraArgs = "--locked -p derisk -p derisk-portal -p derisk-portal-ui --features derisk/host,derisk-portal-ui/window";
                 doCheck = false;
                 postInstall = ''
                   install -Dm644 -t $out/share/systemd/user data/systemd/user/*

@@ -1,0 +1,32 @@
+[package]
+name = "derisk-portal-ui"
+description = "derisk's portal dialogs: file chooser, screen share, screenshot, access, open with and background"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Desktop entries and freedesktop icon lookup, shared with the shell.
+derisk.workspace = true
+derisk-files.workspace = true
+# Screenshot previews.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+mcsapi-components.workspace = true
+mcsapi-ui.workspace = true
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+
+# The dialog window.
+derisk-settings = { workspace = true, optional = true }
+eframe = { workspace = true, optional = true }
+
+[features]
+# Off by default like derisk-apps/preview: the window needs Wayland or X11
+# libraries at run time, and the dialogs themselves build and test without.
+window = ["dep:derisk-settings", "dep:eframe"]
+
+[[bin]]
+name = "derisk-portal-dialog"
+required-features = ["window"]

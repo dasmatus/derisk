@@ -303,21 +303,39 @@ notifications, screenshots) are set to Ask, Allow or Deny through
 `xdg-desktop-portal-derisk` (`crates/derisk-portal`, on
 [ashpd](https://github.com/bilelmoussaoui/ashpd)'s backend traits) is the
 xdg-desktop-portal backend for a derisk session. It serves what only the
-session knows, and `data/portal/derisk-portals.conf` leaves everything else
-(file chooser, access dialog, printing, ...) to the GTK backend:
+session knows and the portals derisk has its own dialogs for;
+`data/portal/derisk-portals.conf` leaves everything else (printing,
+inhibit, ...) to the GTK backend:
 
 | Portal | What it does |
 | --- | --- |
 | Settings | `org.freedesktop.appearance` from the published `theme.json`, so GTK 4, Qt, Firefox and Electron apps follow dark mode and the accent, live |
-| Screenshot | The whole screen from the compositor, over the agent socket, saved to Pictures/Screenshots |
+| Screenshot | The screen from the compositor, over the agent socket, saved to Pictures/Screenshots. Interactive requests show the Screenshot dialog: a preview, Entire screen / Window / Selected area (S, W, A; drag on the preview to draw an area) and a 0–10 s delay |
 | Wallpaper | Sets a picture as the background through `settings.conf`, which the session reloads |
-| Background | Which apps have windows, over the agent socket; apps running without one are allowed for that run and nothing is stored |
+| Background | Which apps have windows, over the agent socket. An app running in the background without a stored choice gets the Background dialog: Run in the background (off allows this run only), Start at login (writes `~/.config/autostart/<app>.desktop`), with the command it runs |
+| FileChooser | The File Chooser dialog: places, breadcrumb, search, the folder's files with size and date, the app's type filters; Open, Save with a name field, or Save Here for several files |
+| Access | The Device Access dialog (Camera and any other access prompt): who is asking (icon, name, app ID, Flatpak badge), the question, the app's choices as selects and checkboxes |
+| AppChooser | The Open With dialog: the apps that can open the file, search, and "Always use for …", which runs `xdg-mime default` |
+
+The dialogs live in `crates/derisk-portal-ui`. Each is an `mcsapi_ui::App`
+built from a serializable request, in the spacious control sizes (44 px
+fields and switches, 48 px buttons, 48–52 px rows), stretching its lists,
+grids and previews to fill the window. The backend draws nothing itself: it
+runs `derisk-portal-dialog --dialog` per request (next to it, else on
+`PATH`, or `$DERISK_PORTAL_DIALOG`), so a failing dialog only ends its
+request and an app closing the request closes the window. A Screen Share
+dialog is drawn too, but the compositor does not publish PipeWire streams
+yet, so ScreenCast stays with another backend.
+
+```console
+$ cargo run -p derisk-portal-ui --features window -- --preview file-chooser   # or screen-cast, screenshot, access, app-chooser, background
+```
 
 xdg-desktop-portal asks before a non-interactive screenshot or a wallpaper
-without a preview. The interactive and preview cases are the backend's to
-confirm, and it asks through the GTK backend's access dialog
-(`$DERISK_PORTAL_ACCESS` names another). There is no area picker or color
-picker yet, and the lock screen draws its own gradient, so a wallpaper for
+without a preview. A wallpaper with a preview is the backend's to confirm,
+and it asks with the Access dialog (`$DERISK_PORTAL_ACCESS` names another
+backend's instead). There is no color picker yet, the session's capture has
+no pointer, and the lock screen draws its own gradient, so a wallpaper for
 the lock screen alone is refused.
 
 Install `data/portal/derisk.portal` to `share/xdg-desktop-portal/portals`,
@@ -425,7 +443,7 @@ $ sudo apt install libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libinp
 $ cargo build
 $ cargo test --workspace
 $ cargo clippy --workspace --all-targets -- -D warnings
-$ cargo clippy --workspace --all-targets --features derisk/host -- -D warnings
+$ cargo clippy --workspace --all-targets --features derisk/host,derisk-portal-ui/window -- -D warnings
 ```
 
 ### Nix

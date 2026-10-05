@@ -10,6 +10,7 @@ use std::{
 use ashpd::{backend::Builder, zbus};
 use derisk_portal::{
     BUS_NAME,
+    dialogs::Portals,
     portal::{self, Apps, Screenshots, Settings, Wallpaper},
 };
 
@@ -32,15 +33,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&appearance),
     ));
     tokio::spawn(portal::watch_apps(connection.clone()));
+    let portals = Portals::default();
+    let dialogs = portals.dialogs.clone();
     Builder::new(BUS_NAME)?
         .settings(Settings { appearance })
         .screenshot(Screenshots {
-            connection: connection.clone(),
+            dialogs: dialogs.clone(),
         })
         .wallpaper(Wallpaper {
             connection: connection.clone(),
+            dialogs: dialogs.clone(),
         })
-        .background(Apps)
+        .background(Apps { dialogs })
+        .file_chooser(portals.clone())
+        .access(portals.clone())
+        .app_chooser(portals)
         // Serves until the bus connection closes.
         .build_with_connection(connection)
         .await?;

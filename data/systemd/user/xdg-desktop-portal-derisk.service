@@ -17,4 +17,6 @@ NoNewPrivileges=yes
 LockPersonality=yes
 RestrictRealtime=yes
 SystemCallArchitectures=native
-MemoryDenyWriteExecute=yes
+# No MemoryDenyWriteExecute: the dialogs run as children of this service and
+# draw with OpenGL, and Mesa's shader JITs (llvmpipe, for one) need memory
+# they write and then execute.
