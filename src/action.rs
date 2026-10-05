@@ -127,6 +127,12 @@ pub enum Action {
         #[serde(default)]
         visible: Option<bool>,
     },
+    /// Show, hide (`Some`) or toggle (`None`) the on-screen keyboard.
+    Keyboard {
+        /// Desired visibility.
+        #[serde(default)]
+        visible: Option<bool>,
+    },
     /// Open a file or folder with its default application.
     ///
     /// Only absolute paths to existing, non-executable files and folders are
@@ -231,6 +237,13 @@ impl Action {
             } => "Hide the overview".into(),
             Self::Overview { visible: None } => "Toggle the overview".into(),
             Self::Palette { .. } => "Toggle the command palette".into(),
+            Self::Keyboard {
+                visible: Some(true),
+            } => "Show the on-screen keyboard".into(),
+            Self::Keyboard {
+                visible: Some(false),
+            } => "Hide the on-screen keyboard".into(),
+            Self::Keyboard { visible: None } => "Toggle the on-screen keyboard".into(),
             Self::Open { path } => format!("Open {path}"),
             Self::ActivateMenu { item, .. } => format!("Choose menu item {item}"),
             Self::Session { op, .. } => format!("{op:?}"),

@@ -213,7 +213,7 @@ fn file_rows(
     let edit = ui.add(
         egui::TextEdit::singleline(&mut drafts.path)
             .hint_text("/home/you/Pictures/wallpaper.jpg")
-            .desired_width(320.0),
+            .desired_width(ui.spacing().text_edit_width),
     );
     let typed = PathBuf::from(drafts.path.trim());
     let valid = drafts.path.trim().is_empty() || typed.is_absolute();

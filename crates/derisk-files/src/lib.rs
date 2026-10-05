@@ -406,69 +406,158 @@ impl FilesApp {
         let (key, descending) = browser.sort();
         let arrow = if descending { "pan-down" } else { "pan-up" };
         let mut activate = None;
+        let mut clicked = None;
+        let row_height = ui.spacing().interact_size.y;
+        // The name column takes whatever the fixed columns leave, so the
+        // table spans the window instead of huddling in its left third.
+        let columns = |width: f32| {
+            let size = 80.0_f32.min(width * 0.15);
+            let modified = 136.0_f32.min(width * 0.4);
+            [(width - size - modified).max(0.0), size, modified]
+        };
+        let width = ui.available_width();
+        let header_rect = ui
+            .allocate_exact_size(egui::vec2(width, row_height), egui::Sense::hover())
+            .0;
+        let mut x = header_rect.left();
+        for ((label, column), w) in [
+            ("Name", SortKey::Name),
+            ("Size", SortKey::Size),
+            ("Modified", SortKey::Modified),
+        ]
+        .into_iter()
+        .zip(columns(width))
+        {
+            let cell = egui::Rect::from_min_size(
+                egui::pos2(x, header_rect.top()),
+                egui::vec2(w, row_height),
+            );
+            // Flat headers under one thin rule, like the table below them,
+            // rather than a row of framed buttons.
+            let button = if key == column {
+                let color = ui.visuals().text_color();
+                derisk_icons::button_with_text(ui.ctx(), arrow, label, 12.0, color)
+            } else {
+                egui::Button::new(label)
+            }
+            .frame(false);
+            if ui
+                .put(cell, |ui: &mut egui::Ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(button)
+                    })
+                    .inner
+                })
+                .clicked()
+            {
+                browser.sort_by(column);
+            }
+            x += w;
+        }
+        ui.painter().hline(
+            header_rect.x_range(),
+            header_rect.bottom(),
+            egui::Stroke::new(1.0, theme.border),
+        );
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                egui::Grid::new("files-listing")
-                    .num_columns(3)
-                    .striped(true)
-                    .spacing([24.0, 4.0])
-                    .min_col_width(80.0)
-                    .show(ui, |ui| {
-                        for (label, column) in [
-                            ("Name", SortKey::Name),
-                            ("Size", SortKey::Size),
-                            ("Modified", SortKey::Modified),
-                        ] {
-                            let header = if key == column {
-                                let color = ui.visuals().text_color();
-                                derisk_icons::button_with_text(ui.ctx(), arrow, label, 12.0, color)
-                            } else {
-                                egui::Button::new(label)
-                            };
-                            if ui.add(header).clicked() {
-                                browser.sort_by(column);
-                            }
-                        }
-                        ui.end_row();
-                        let mut clicked = None;
-                        for entry in browser.visible() {
-                            let icon = match (entry.kind, entry.symlink) {
-                                (Kind::Directory, _) => "folder",
-                                (_, true) => "insert-link",
-                                (Kind::File, _) => "text-x-generic",
-                                (Kind::Other, _) => "dialog-question",
-                            };
-                            let selected = browser.is_selected(&entry.path);
-                            let mut text = egui::RichText::new(&entry.name);
-                            let mut color = ui.visuals().text_color();
-                            if entry.is_hidden() {
-                                text = text.color(theme.border);
-                                color = theme.border;
-                            }
-                            let icon = derisk_icons::atom(ui.ctx(), icon, 16.0, color);
-                            let row = ui.add(egui::Button::selectable(selected, (icon, text)));
-                            if row.double_clicked() {
-                                activate = Some(entry.path.clone());
-                            } else if row.clicked() {
-                                let extend = ui.input(|i| i.modifiers.command || i.modifiers.shift);
-                                clicked = Some((entry.path.clone(), extend));
-                            }
-                            ui.label(match entry.kind {
-                                Kind::Directory => "—".to_owned(),
-                                _ => fs_ops::human_size(entry.size),
-                            });
-                            ui.label(entry.modified.map_or_else(
-                                || "—".to_owned(),
-                                |t| fs_ops::timestamp(t)[..16].replace('T', " "),
-                            ));
-                            ui.end_row();
-                        }
-                        if let Some((path, extend)) = clicked {
-                            browser.select(&path, extend);
-                        }
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let width = ui.available_width();
+                let [name_w, size_w, _] = columns(width);
+                for (i, entry) in browser.visible().enumerate() {
+                    let icon = match (entry.kind, entry.symlink) {
+                        (Kind::Directory, _) => "folder",
+                        (_, true) => "insert-link",
+                        (Kind::File, _) => "text-x-generic",
+                        (Kind::Other, _) => "dialog-question",
+                    };
+                    let selected = browser.is_selected(&entry.path);
+                    // The whole row is one target, so a click anywhere along
+                    // it selects the entry, not only on the name's text.
+                    let (rect, row) =
+                        ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
+                    let name = entry.name.clone();
+                    row.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            true,
+                            selected,
+                            &name,
+                        )
                     });
+                    let visuals = ui.visuals();
+                    let fill = if selected {
+                        Some(visuals.selection.bg_fill)
+                    } else if row.hovered() {
+                        Some(visuals.widgets.hovered.weak_bg_fill)
+                    } else if i % 2 == 1 {
+                        Some(visuals.faint_bg_color)
+                    } else {
+                        None
+                    };
+                    if let Some(fill) = fill {
+                        ui.painter().rect_filled(rect, 2.0, fill);
+                    }
+                    let mut text = egui::RichText::new(&entry.name);
+                    let mut color = ui.visuals().text_color();
+                    if entry.is_hidden() {
+                        text = text.color(theme.border);
+                        color = theme.border;
+                    }
+                    let size = match entry.kind {
+                        Kind::Directory => "—".to_owned(),
+                        _ => fs_ops::human_size(entry.size),
+                    };
+                    let modified = entry.modified.map_or_else(
+                        || "—".to_owned(),
+                        |t| fs_ops::timestamp(t)[..16].replace('T', " "),
+                    );
+                    // Cells keep a small inset whatever the touch padding, so
+                    // a full date still fits beside the name on a phone.
+                    let pad = 4.0;
+                    // The entry's icon leads the name cell, which starts
+                    // after it so a truncated name never runs under it.
+                    let icon_size = 16.0;
+                    let icon_rect = egui::Rect::from_min_size(
+                        egui::pos2(rect.left() + pad, rect.center().y - icon_size / 2.0),
+                        egui::vec2(icon_size, icon_size),
+                    );
+                    derisk_icons::paint(ui.painter(), icon_rect, icon, color);
+                    let mut x = rect.left();
+                    for (text, w, inset) in [
+                        (text, name_w, icon_size + pad),
+                        (egui::RichText::new(size), size_w, 0.0),
+                        (
+                            egui::RichText::new(modified),
+                            rect.right() - (x + name_w + size_w),
+                            0.0,
+                        ),
+                    ] {
+                        let cell = egui::Rect::from_min_size(
+                            egui::pos2(x + pad + inset, rect.top()),
+                            egui::vec2((w - 2.0 * pad - inset).max(0.0), row_height),
+                        );
+                        // `put` centers what it adds; cells read from the left.
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(cell)
+                                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                            |ui| ui.add(egui::Label::new(text).truncate().selectable(false)),
+                        );
+                        x += w;
+                    }
+                    if row.double_clicked() {
+                        activate = Some(entry.path.clone());
+                    } else if row.clicked() {
+                        let extend = ui.input(|i| i.modifiers.command || i.modifiers.shift);
+                        clicked = Some((entry.path.clone(), extend));
+                    }
+                }
             });
+        if let Some((path, extend)) = clicked {
+            browser.select(&path, extend);
+        }
         if let Some(path) = activate {
             self.activate(&path);
         }
@@ -532,9 +621,12 @@ impl App for FilesApp {
                 egui::ScrollArea::horizontal().show(ui, |ui| ui.horizontal(&mut places));
             });
         } else {
+            // Wide enough for the longest place name, and no wider: on a big
+            // window the listing gets the room, not the sidebar.
+            let sidebar = (ui.available_width() * 0.16).clamp(140.0, 220.0);
             egui::Panel::left("files-places")
                 .resizable(false)
-                .exact_size(170.0)
+                .exact_size(sidebar)
                 .show(ui, places);
         }
         if let Some(path) = place {
