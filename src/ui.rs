@@ -1132,123 +1132,13 @@ impl ShellUi {
     }
 
     fn keyboard_keys(&mut self, ui: &mut Ui, shell: &Shell, area: Geometry) {
-        let theme = self.theme;
-        let r = to_rect(area);
-        // Opaque, so nothing reads through the keys.
-        ui.painter().rect_filled(r, 0, theme.surface);
-        ui.painter()
-            .hline(r.x_range(), r.top(), Stroke::new(1.0, theme.border));
-        let mut out = Vec::new();
-
-        let suggestions = self.keyboard.suggestions();
-        for (i, cell) in Keyboard::suggestion_cells(area).into_iter().enumerate() {
-            let cell = to_rect(cell);
-            if i > 0 {
-                ui.painter().vline(
-                    cell.left(),
-                    cell.y_range().shrink(10.0),
-                    Stroke::new(1.0, theme.border),
-                );
-            }
-            let Some(word) = suggestions.get(i) else {
-                continue;
-            };
-            let response = ui.interact(cell, Id::new(("derisk-osk-suggestion", i)), Sense::click());
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    true,
-                    format!("Suggestion: {word}"),
-                )
-            });
-            if response.is_pointer_button_down_on() {
-                ui.painter()
-                    .rect_filled(cell.shrink(3.0), 8, theme.accent.gamma_multiply(0.2));
-            }
-            ui.painter().text(
-                cell.center(),
-                Align2::CENTER_CENTER,
-                elide(word, cell.width() - 12.0, 16.0),
-                FontId::proportional(16.0),
-                theme.foreground,
-            );
-            if response.clicked() {
-                out.extend(self.keyboard.choose(word));
-            }
-        }
-
-        let now = ui.input(|i| i.time);
-        let mut backspace_down = false;
-        for (key, cell) in self.keyboard.keys(area) {
-            let cell = to_rect(cell).shrink2(vec2(2.5, 4.0));
-            let response = ui.interact(cell, Id::new(("derisk-osk-key", key)), Sense::click());
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, key.name())
-            });
-            let down = response.is_pointer_button_down_on();
-            let modifier = !matches!(key, OskKey::Char(_) | OskKey::Space);
-            let lit = matches!(key, OskKey::Shift) && self.keyboard.shift() != Shift::Off;
-            let fill = if down {
-                theme.accent.gamma_multiply(0.35)
-            } else if lit {
-                // Caps Lock reads stronger than a one-letter Shift.
-                theme
-                    .accent
-                    .gamma_multiply(if self.keyboard.shift() == Shift::Lock {
-                        0.55
-                    } else {
-                        0.25
-                    })
-            } else if modifier {
-                theme.border.gamma_multiply(0.45)
-            } else {
-                theme.background
-            };
-            ui.painter().rect_filled(cell, 6, fill);
-            let size = if matches!(key, OskKey::Char(_)) {
-                20.0
-            } else {
-                15.0
-            };
-            let color = if lit { theme.accent } else { theme.foreground };
-            match key.icon() {
-                Some(icon) => icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(cell.center(), vec2(20.0, 20.0)),
-                    icon,
-                    color,
-                ),
-                None => {
-                    ui.painter().text(
-                        cell.center(),
-                        Align2::CENTER_CENTER,
-                        key.label(&self.keyboard),
-                        FontId::proportional(size),
-                        color,
-                    );
-                }
-            }
-            // Holding Backspace repeats it, after a pause, like a hardware key.
-            if key == OskKey::Backspace && down {
-                backspace_down = true;
-                match self.backspace_repeat {
-                    None => self.backspace_repeat = Some(now + 0.45),
-                    Some(at) if now >= at => {
-                        out.extend(self.keyboard.press(key));
-                        self.backspace_repeat = Some(now + 0.06);
-                    }
-                    Some(_) => {}
-                }
-                ui.ctx().request_repaint();
-            }
-            if response.clicked() {
-                out.extend(self.keyboard.press(key));
-            }
-        }
-        if !backspace_down {
-            self.backspace_repeat = None;
-        }
-
+        let out = keyboard_keys(
+            ui,
+            &mut self.keyboard,
+            area,
+            &self.theme,
+            &mut self.backspace_repeat,
+        );
         if out.is_empty() {
             return;
         }
@@ -2431,6 +2321,134 @@ fn entries(
             }
         }
     }
+}
+
+/// Draws the on-screen keyboard's suggestion strip and keys into `area` and
+/// returns what was typed this frame. The shell's floating keyboard and the
+/// setup screens (see [`crate::wizard`]) both draw it with this.
+/// `backspace_repeat` holds when a held Backspace next repeats.
+pub fn keyboard_keys(
+    ui: &mut Ui,
+    keyboard: &mut Keyboard,
+    area: Geometry,
+    theme: &Theme,
+    backspace_repeat: &mut Option<f64>,
+) -> Vec<OskOutput> {
+    let r = to_rect(area);
+    // Opaque, so nothing reads through the keys.
+    ui.painter().rect_filled(r, 0, theme.surface);
+    ui.painter()
+        .hline(r.x_range(), r.top(), Stroke::new(1.0, theme.border));
+    let mut out = Vec::new();
+
+    let suggestions = keyboard.suggestions();
+    for (i, cell) in Keyboard::suggestion_cells(area).into_iter().enumerate() {
+        let cell = to_rect(cell);
+        if i > 0 {
+            ui.painter().vline(
+                cell.left(),
+                cell.y_range().shrink(10.0),
+                Stroke::new(1.0, theme.border),
+            );
+        }
+        let Some(word) = suggestions.get(i) else {
+            continue;
+        };
+        let response = ui.interact(cell, Id::new(("derisk-osk-suggestion", i)), Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                format!("Suggestion: {word}"),
+            )
+        });
+        if response.is_pointer_button_down_on() {
+            ui.painter()
+                .rect_filled(cell.shrink(3.0), 8, theme.accent.gamma_multiply(0.2));
+        }
+        ui.painter().text(
+            cell.center(),
+            Align2::CENTER_CENTER,
+            elide(word, cell.width() - 12.0, 16.0),
+            FontId::proportional(16.0),
+            theme.foreground,
+        );
+        if response.clicked() {
+            out.extend(keyboard.choose(word));
+        }
+    }
+
+    let now = ui.input(|i| i.time);
+    let mut backspace_down = false;
+    for (key, cell) in keyboard.keys(area) {
+        let cell = to_rect(cell).shrink2(vec2(2.5, 4.0));
+        let response = ui.interact(cell, Id::new(("derisk-osk-key", key)), Sense::click());
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, key.name()));
+        let down = response.is_pointer_button_down_on();
+        let modifier = !matches!(key, OskKey::Char(_) | OskKey::Space);
+        let lit = matches!(key, OskKey::Shift) && keyboard.shift() != Shift::Off;
+        let fill = if down {
+            theme.accent.gamma_multiply(0.35)
+        } else if lit {
+            // Caps Lock reads stronger than a one-letter Shift.
+            theme
+                .accent
+                .gamma_multiply(if keyboard.shift() == Shift::Lock {
+                    0.55
+                } else {
+                    0.25
+                })
+        } else if modifier {
+            theme.border.gamma_multiply(0.45)
+        } else {
+            theme.background
+        };
+        ui.painter().rect_filled(cell, 6, fill);
+        let size = if matches!(key, OskKey::Char(_)) {
+            20.0
+        } else {
+            15.0
+        };
+        let color = if lit { theme.accent } else { theme.foreground };
+        match key.icon() {
+            Some(icon) => icons::paint(
+                ui.painter(),
+                Rect::from_center_size(cell.center(), vec2(20.0, 20.0)),
+                icon,
+                color,
+            ),
+            None => {
+                ui.painter().text(
+                    cell.center(),
+                    Align2::CENTER_CENTER,
+                    key.label(keyboard),
+                    FontId::proportional(size),
+                    color,
+                );
+            }
+        }
+        // Holding Backspace repeats it, after a pause, like a hardware key.
+        if key == OskKey::Backspace && down {
+            backspace_down = true;
+            match *backspace_repeat {
+                None => *backspace_repeat = Some(now + 0.45),
+                Some(at) if now >= at => {
+                    out.extend(keyboard.press(key));
+                    *backspace_repeat = Some(now + 0.06);
+                }
+                Some(_) => {}
+            }
+            ui.ctx().request_repaint();
+        }
+        if response.clicked() {
+            out.extend(keyboard.press(key));
+        }
+    }
+    if !backspace_down {
+        *backspace_repeat = None;
+    }
+    out
 }
 
 /// Paints the desktop wallpaper: a vertical gradient with a soft accent glow

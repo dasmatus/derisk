@@ -1,0 +1,475 @@
+//! `derisk setup`: the first-boot setup, before the login screen.
+//!
+//! Run as root on the seat by the system (LosOS orders it before the display
+//! manager). When the machine already has a regular user it exits at once,
+//! so it can be started on every boot; otherwise it asks for a language, a
+//! keyboard layout, a time zone, a network and the first account (see
+//! [`derisk::setup`]), saves them through localectl, timedatectl and homectl,
+//! and exits, and the login screen takes the seat with that one user filled
+//! in.
+
+use std::{
+    process::{Command as Process, Stdio},
+    sync::mpsc::{self, Receiver},
+    thread,
+};
+
+use derisk::{
+    locale::{self, Language, Layout},
+    setup::{self, Account, Choices, Step, Task},
+    systemd::{self, Priority},
+    wifi::{NetworkPage, Wifi},
+    wizard::{self, Nav, Next, Page, Row, ScreenLayout},
+};
+use egui::{RichText, Ui};
+use mcsapi::widgets::Theme;
+use mcsapi_compositor::{Command, egui};
+
+use crate::wizard_host::{self, Flow};
+
+type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// What `derisk setup` was asked to do.
+#[derive(Debug)]
+pub struct Options {
+    /// Show the pages even when a regular user exists (for trying them).
+    pub force: bool,
+    /// Draw the pages but run nothing: no localectl, no account.
+    pub dry_run: bool,
+    /// The window's size when nested.
+    pub size: (i32, i32),
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            force: false,
+            dry_run: false,
+            size: (1280, 800),
+        }
+    }
+}
+
+enum Progress {
+    Started(usize),
+    Failed(usize, String),
+    Done,
+}
+
+struct Applying {
+    tasks: Vec<Task>,
+    current: usize,
+    error: Option<String>,
+    done: bool,
+    events: Receiver<Progress>,
+}
+
+struct Setup {
+    step: Step,
+    dry_run: bool,
+    languages: Vec<Language>,
+    language: Option<usize>,
+    layouts: Vec<Layout>,
+    layout: Option<usize>,
+    layout_search: String,
+    layout_try: String,
+    zones: Vec<String>,
+    zone: Option<usize>,
+    zone_search: String,
+    /// Bring the current choice into view the first frame a list shows.
+    scroll: bool,
+    wifi: Wifi,
+    network: NetworkPage,
+    account: Account,
+    account_error: Option<String>,
+    applying: Option<Applying>,
+}
+
+impl Setup {
+    fn new(dry_run: bool) -> Self {
+        let languages = locale::installed_languages();
+        let current = std::env::var("LANG").unwrap_or_default();
+        let language = languages
+            .iter()
+            .position(|l| l.locale == current)
+            .or_else(|| languages.iter().position(|l| l.locale.starts_with("en_US")));
+        let layouts = locale::installed_layouts();
+        let saved = locale::saved_keyboard(std::path::Path::new(locale::X11_KEYBOARD_CONF));
+        let wanted = if saved.layout.is_empty() {
+            "us".to_owned()
+        } else {
+            saved.layout
+        };
+        let layout = layouts.iter().position(|l| l.name == wanted);
+        let zones = locale::installed_time_zones();
+        let zone_now = locale::current_time_zone();
+        let zone = zones.iter().position(|z| *z == zone_now);
+        Self {
+            step: Step::Language,
+            dry_run,
+            languages,
+            language,
+            layouts,
+            layout,
+            layout_search: String::new(),
+            layout_try: String::new(),
+            zones,
+            zone,
+            zone_search: String::new(),
+            scroll: true,
+            wifi: Wifi::start(!dry_run),
+            network: NetworkPage::default(),
+            account: Account::default(),
+            account_error: None,
+            applying: None,
+        }
+    }
+
+    fn choices(&self) -> Choices {
+        Choices {
+            locale: self
+                .language
+                .and_then(|i| self.languages.get(i))
+                .map(|l| l.locale.clone())
+                .unwrap_or_default(),
+            layout: self
+                .layout
+                .and_then(|i| self.layouts.get(i))
+                .map(|l| l.name.clone())
+                .unwrap_or_default(),
+            time_zone: self
+                .zone
+                .and_then(|i| self.zones.get(i))
+                .cloned()
+                .unwrap_or_default(),
+            account: self.account.clone(),
+        }
+    }
+
+    fn go(&mut self, step: Step) {
+        self.step = step;
+        self.scroll = true;
+    }
+
+    fn apply(&mut self) {
+        let tasks = setup::plan(&self.choices());
+        let (tx, events) = mpsc::channel();
+        let run = tasks.clone();
+        let dry_run = self.dry_run;
+        thread::spawn(move || {
+            for (i, task) in run.iter().enumerate() {
+                let _ = tx.send(Progress::Started(i));
+                if dry_run {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    continue;
+                }
+                if let Err(e) = execute(task) {
+                    let _ = tx.send(Progress::Failed(i, e));
+                    return;
+                }
+            }
+            let _ = tx.send(Progress::Done);
+        });
+        self.applying = Some(Applying {
+            tasks,
+            current: 0,
+            error: None,
+            done: false,
+            events,
+        });
+        self.go(Step::Applying);
+    }
+
+    fn language_page(&mut self, ui: &mut Ui) {
+        if self.languages.is_empty() {
+            wizard::notice(ui, "No languages are installed; English it is.", false);
+            return;
+        }
+        let languages = &self.languages;
+        let scroll = std::mem::take(&mut self.scroll)
+            .then_some(self.language)
+            .flatten();
+        if let Some(i) = wizard::list(
+            ui,
+            "languages",
+            languages.len(),
+            self.language,
+            scroll,
+            |i| Row {
+                title: languages[i].name.clone(),
+                detail: languages[i].locale.clone(),
+            },
+        ) {
+            self.language = Some(i);
+        }
+    }
+
+    fn keyboard_page(&mut self, ui: &mut Ui, out: &mut Vec<Command>) {
+        wizard::field(
+            ui,
+            "Try it",
+            &mut self.layout_try,
+            wizard::Entry::Text,
+            "Type here to test the layout",
+        );
+        let search = wizard::field(
+            ui,
+            "Search",
+            &mut self.layout_search,
+            wizard::Entry::Text,
+            "Layout or language",
+        );
+        let shown: Vec<usize> = (0..self.layouts.len())
+            .filter(|&i| {
+                let l = &self.layouts[i];
+                locale::matches(
+                    &format!("{} {}", l.description, l.name),
+                    &self.layout_search,
+                )
+            })
+            .collect();
+        let selected = self.layout.and_then(|l| shown.iter().position(|&i| i == l));
+        let scroll = (std::mem::take(&mut self.scroll) || search.changed())
+            .then_some(selected)
+            .flatten();
+        let layouts = &self.layouts;
+        if let Some(row) = wizard::list(ui, "layouts", shown.len(), selected, scroll, |row| {
+            let l = &layouts[shown[row]];
+            Row {
+                title: l.description.clone(),
+                detail: l.name.clone(),
+            }
+        }) {
+            let i = shown[row];
+            self.layout = Some(i);
+            // Live, so "Try it" types in the layout just picked.
+            out.push(Command::Keymap {
+                layout: self.layouts[i].name.clone(),
+                variant: String::new(),
+                options: String::new(),
+            });
+        }
+    }
+
+    fn zone_page(&mut self, ui: &mut Ui) {
+        let search = wizard::field(
+            ui,
+            "Search",
+            &mut self.zone_search,
+            wizard::Entry::Text,
+            "City or region",
+        );
+        let shown: Vec<usize> = (0..self.zones.len())
+            .filter(|&i| {
+                let z = &self.zones[i];
+                locale::matches(
+                    &format!("{} {z}", locale::time_zone_label(z)),
+                    &self.zone_search,
+                )
+            })
+            .collect();
+        let selected = self.zone.and_then(|z| shown.iter().position(|&i| i == z));
+        let scroll = (std::mem::take(&mut self.scroll) || search.changed())
+            .then_some(selected)
+            .flatten();
+        let zones = &self.zones;
+        if let Some(row) = wizard::list(ui, "zones", shown.len(), selected, scroll, |row| {
+            let z = &zones[shown[row]];
+            Row {
+                title: locale::time_zone_label(z),
+                detail: z.clone(),
+            }
+        }) {
+            self.zone = Some(shown[row]);
+        }
+    }
+
+    fn account_page(&mut self, ui: &mut Ui) {
+        let mut real_name = self.account.real_name.clone();
+        if wizard::field(
+            ui,
+            "Full name",
+            &mut real_name,
+            wizard::Entry::Text,
+            "Ada Lovelace",
+        )
+        .changed()
+        {
+            self.account.set_real_name(real_name);
+        }
+        if wizard::field(
+            ui,
+            "User name",
+            &mut self.account.user_name,
+            wizard::Entry::Text,
+            "ada",
+        )
+        .changed()
+        {
+            self.account.user_name_edited = true;
+        }
+        wizard::field(
+            ui,
+            "Password",
+            &mut self.account.password,
+            wizard::Entry::Secret,
+            "Password",
+        );
+        wizard::field(
+            ui,
+            "Confirm password",
+            &mut self.account.confirm,
+            wizard::Entry::Secret,
+            "Password again",
+        );
+        if let Some(error) = &self.account_error {
+            wizard::notice(ui, error, true);
+        } else if let Some(problem) = self.account.problem() {
+            // Only once there is something to judge: an empty form is not
+            // an error.
+            if !self.account.real_name.is_empty() && !self.account.password.is_empty() {
+                wizard::notice(ui, problem, false);
+            }
+        }
+    }
+
+    fn applying_page(&mut self, ui: &mut Ui) {
+        let Some(applying) = &mut self.applying else {
+            return;
+        };
+        while let Ok(event) = applying.events.try_recv() {
+            match event {
+                Progress::Started(i) => applying.current = i,
+                Progress::Failed(i, e) => {
+                    applying.current = i;
+                    applying.error = Some(e);
+                }
+                Progress::Done => {
+                    applying.current = applying.tasks.len();
+                    applying.done = true;
+                }
+            }
+        }
+        let labels: Vec<&str> = applying.tasks.iter().map(|t| t.label).collect();
+        wizard::steps(ui, &labels, applying.current, applying.error.is_some());
+        if let Some(error) = &applying.error {
+            ui.add_space(8.0);
+            wizard::notice(ui, error, true);
+        } else if applying.done {
+            ui.add_space(8.0);
+            ui.label(RichText::new("All set. Log in with your new account.").strong());
+        }
+    }
+}
+
+impl Flow for Setup {
+    fn show(&mut self, ui: &mut Ui, layout: &ScreenLayout, theme: &Theme, out: &mut Vec<Command>) {
+        let status = self.wifi.status();
+        let step = self.step;
+        let (next, back) = match step {
+            Step::Network => (
+                Next::new(if status.online { "Next" } else { "Skip" }, true),
+                true,
+            ),
+            Step::Account => (Next::new("Set up", self.account.problem().is_none()), true),
+            Step::Applying => {
+                let applying = self.applying.as_ref();
+                let done = applying.is_some_and(|a| a.done);
+                let failed = applying.is_some_and(|a| a.error.is_some());
+                (Next::new("Continue", done), failed)
+            }
+            Step::Language => (
+                Next::new("Next", self.language.is_some() || self.languages.is_empty()),
+                false,
+            ),
+            _ => (Next::new("Next", true), step.back().is_some()),
+        };
+        let page = Page {
+            title: step.title(),
+            subtitle: step.subtitle(),
+            index: (step != Step::Applying).then(|| step.index()),
+            count: Step::PAGES.len(),
+            back,
+            next: Some(next),
+        };
+        let nav = wizard::page(ui, layout, theme, page, |ui| match step {
+            Step::Language => self.language_page(ui),
+            Step::Keyboard => self.keyboard_page(ui, out),
+            Step::TimeZone => self.zone_page(ui),
+            Step::Network => self.network.show(ui, &self.wifi, &status),
+            Step::Account => self.account_page(ui),
+            Step::Applying => self.applying_page(ui),
+        });
+        match (nav, step) {
+            (Nav::Back, Step::Applying) => {
+                // Only after a failure: back to the account, the step most
+                // likely refused (the password policy).
+                self.account_error = self.applying.take().and_then(|a| a.error);
+                self.go(Step::Account);
+            }
+            (Nav::Back, _) => {
+                if let Some(back) = step.back() {
+                    self.go(back);
+                }
+            }
+            (Nav::Next, Step::Account) => {
+                self.account_error = None;
+                self.apply();
+            }
+            (Nav::Next, Step::Applying) => {
+                log(Priority::Notice, "setup finished");
+                out.push(Command::Quit);
+            }
+            (Nav::Next, _) => self.go(step.next()),
+            (Nav::None, _) => {}
+        }
+    }
+}
+
+/// Runs one task, returning what it said on failure.
+fn execute(task: &Task) -> std::result::Result<(), String> {
+    let output = Process::new(&task.argv[0])
+        .args(&task.argv[1..])
+        .envs(task.env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{}: {e}", task.argv[0]))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&output.stderr);
+    let said = said.trim();
+    Err(if said.is_empty() {
+        format!("{} failed ({})", task.argv[0], output.status)
+    } else {
+        said.lines().last().unwrap_or(said).to_owned()
+    })
+}
+
+/// Whether a regular user exists, by userdb (which includes homed's).
+fn configured() -> bool {
+    Process::new("userdbctl")
+        .args([
+            "user",
+            "--disposition=regular",
+            "--json=short",
+            "--no-pager",
+        ])
+        .stderr(Stdio::null())
+        .output()
+        .map(|o| setup::has_regular_users(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or(false)
+}
+
+/// Runs the setup, or returns at once when there is nothing to set up.
+pub fn run(options: Options) -> Result {
+    if !options.force && configured() {
+        log(Priority::Info, "a regular user exists; nothing to set up");
+        return Ok(());
+    }
+    wizard_host::run(Setup::new(options.dry_run), "derisk setup", options.size)
+}
+
+fn log(priority: Priority, message: &str) {
+    systemd::log(priority, message, &[]);
+}

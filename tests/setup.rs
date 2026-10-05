@@ -1,0 +1,257 @@
+//! The installer's and first-boot setup's rules, without a screen: languages,
+//! layouts and time zones, the account form, the commands that save it, the
+//! installer backend's protocol and where the pages go on a screen.
+
+use derisk::{
+    install::{self, Disk, Event, Request},
+    locale::{self, Keyboard},
+    setup::{self, Account, Choices, Step},
+    wizard,
+};
+
+#[test]
+fn languages_are_utf8_locales_by_native_name() {
+    let list = "C.UTF-8\nde_DE.UTF-8\nen_US.UTF-8\nsk_SK.utf8\ncs_CZ.UTF-8\nfr_FR\nxx_YY.UTF-8\n";
+    let languages = locale::languages(list);
+    let names: Vec<&str> = languages.iter().map(|l| l.name.as_str()).collect();
+    // Čeština sorts with the Cs, not after the Zs; an unknown locale shows
+    // under its code; C and non-UTF-8 locales are left out.
+    assert_eq!(
+        names,
+        [
+            "Čeština",
+            "Deutsch (Deutschland)",
+            "English (United States)",
+            "Slovenčina",
+            "xx_YY.UTF-8"
+        ]
+    );
+    assert_eq!(
+        locale::language_name("de_DE.UTF-8@euro"),
+        Some("Deutsch (Deutschland)")
+    );
+}
+
+#[test]
+fn layouts_come_from_the_layout_section_of_base_lst() {
+    let base = "! model\n  pc105           Generic 105-key PC\n\n! layout\n  us              English (US)\n  de              German\n  sk              Slovak\n\n! variant\n  chr             us: Cherokee\n";
+    let layouts = locale::layouts(base);
+    let seen: Vec<(&str, &str)> = layouts
+        .iter()
+        .map(|l| (l.name.as_str(), l.description.as_str()))
+        .collect();
+    assert_eq!(
+        seen,
+        [("us", "English (US)"), ("de", "German"), ("sk", "Slovak")]
+    );
+}
+
+#[test]
+fn saved_keyboard_becomes_xkb_defaults() {
+    let conf = "# Written by systemd-localed(8)\nSection \"InputClass\"\n        Identifier \"system-keyboard\"\n        MatchIsKeyboard \"on\"\n        Option \"XkbLayout\" \"de,ru\"\n        Option \"XkbOptions\" \"grp:alt_shift_toggle\"\nEndSection\n";
+    let keyboard = locale::parse_x11_keyboard(conf);
+    assert_eq!(
+        keyboard,
+        Keyboard {
+            layout: "de,ru".into(),
+            variant: String::new(),
+            options: "grp:alt_shift_toggle".into(),
+        }
+    );
+    assert_eq!(
+        locale::xkb_environment(&keyboard),
+        [
+            "XKB_DEFAULT_LAYOUT=de,ru",
+            "XKB_DEFAULT_OPTIONS=grp:alt_shift_toggle"
+        ]
+    );
+    assert!(locale::xkb_environment(&Keyboard::default()).is_empty());
+}
+
+#[test]
+fn time_zones_read_and_match_by_city() {
+    assert_eq!(
+        locale::time_zone_label("America/Argentina/Buenos_Aires"),
+        "Buenos Aires, America, Argentina"
+    );
+    assert_eq!(locale::time_zone_label("UTC"), "UTC");
+    assert!(locale::matches(
+        "Bratislava, Europe Europe/Bratislava",
+        "brat eur"
+    ));
+    assert!(!locale::matches("Berlin, Europe", "brat"));
+    assert_eq!(
+        locale::time_zone_of(std::path::Path::new("/etc/zoneinfo/Europe/Bratislava")).as_deref(),
+        Some("Europe/Bratislava")
+    );
+}
+
+#[test]
+fn user_names_derive_from_the_full_name() {
+    assert_eq!(setup::user_name_for("Matúš Novák"), "matus");
+    assert_eq!(setup::user_name_for("Zoë"), "zoe");
+    assert_eq!(setup::user_name_for("  Łukasz  "), "lukasz");
+    assert_eq!(setup::user_name_for("42 Douglas"), "");
+    assert_eq!(setup::user_name_for(""), "");
+
+    let mut account = Account::default();
+    account.set_real_name("Ada Lovelace".into());
+    assert_eq!(account.user_name, "ada");
+    // Once typed, the user name stays what was typed.
+    account.user_name = "countess".into();
+    account.user_name_edited = true;
+    account.set_real_name("Ada King".into());
+    assert_eq!(account.user_name, "countess");
+}
+
+#[test]
+fn account_problems_in_order() {
+    let mut account = Account::default();
+    assert_eq!(account.problem(), Some("Enter your name."));
+    account.set_real_name("Ada".into());
+    assert_eq!(account.problem(), Some("Choose a password."));
+    account.password = "hunter2".into();
+    assert_eq!(account.problem(), Some("The passwords do not match."));
+    account.confirm = "hunter2".into();
+    assert_eq!(account.problem(), None);
+    account.user_name = "root".into();
+    assert!(account.problem().is_some());
+    for bad in ["Ada", "1ada", "ada lovelace", "ä", &"a".repeat(32)] {
+        assert!(setup::user_name_problem(bad).is_some(), "{bad}");
+    }
+    for good in ["ada", "_ada", "ada-l", "ada_2"] {
+        assert_eq!(setup::user_name_problem(good), None, "{good}");
+    }
+}
+
+#[test]
+fn the_plan_saves_everything_and_creates_the_account_last() {
+    let choices = Choices {
+        locale: "sk_SK.UTF-8".into(),
+        layout: "sk".into(),
+        time_zone: "Europe/Bratislava".into(),
+        account: Account {
+            real_name: "Matúš Novák ".into(),
+            user_name: "matus".into(),
+            password: "correct horse".into(),
+            confirm: "correct horse".into(),
+            user_name_edited: false,
+        },
+    };
+    let plan = setup::plan(&choices);
+    let argv: Vec<Vec<&str>> = plan
+        .iter()
+        .map(|t| t.argv.iter().map(String::as_str).collect())
+        .collect();
+    assert_eq!(
+        argv,
+        [
+            vec!["localectl", "set-locale", "LANG=sk_SK.UTF-8"],
+            vec!["localectl", "set-x11-keymap", "sk"],
+            vec!["timedatectl", "set-timezone", "Europe/Bratislava"],
+            vec![
+                "homectl",
+                "create",
+                "matus",
+                "--real-name=Matúš Novák",
+                "--member-of=wheel",
+                "--language=sk_SK.UTF-8",
+                "--timezone=Europe/Bratislava",
+            ],
+        ]
+    );
+    // The password is never on a command line.
+    assert!(
+        plan.iter()
+            .all(|t| !t.argv.iter().any(|a| a.contains("horse")))
+    );
+    assert_eq!(
+        plan[3].env,
+        [("NEWPASSWORD".to_owned(), "correct horse".to_owned())]
+    );
+
+    // Nothing chosen: only the account.
+    let bare = setup::plan(&Choices {
+        account: choices.account.clone(),
+        ..Choices::default()
+    });
+    assert_eq!(bare.len(), 1);
+    assert!(!bare[0].argv.iter().any(|a| a.starts_with("--language")));
+}
+
+#[test]
+fn steps_run_in_order() {
+    assert_eq!(Step::Language.back(), None);
+    assert_eq!(Step::Language.next(), Step::Keyboard);
+    assert_eq!(Step::Account.next(), Step::Applying);
+    assert_eq!(Step::Account.back(), Some(Step::Network));
+    assert_eq!(Step::Applying.index(), Step::PAGES.len());
+}
+
+#[test]
+fn setup_runs_only_without_regular_users() {
+    assert!(!setup::has_regular_users(""));
+    let homed = "\u{1e}{\"userName\":\"ada\",\"disposition\":\"regular\"}\n";
+    assert!(setup::has_regular_users(homed));
+}
+
+#[test]
+fn backend_protocol_round_trips() {
+    assert_eq!(
+        install::request_line(&Request::Disks),
+        "{\"method\":\"disks\"}\n"
+    );
+    assert_eq!(
+        install::request_line(&Request::Install {
+            disk: "/dev/vda".into()
+        }),
+        "{\"method\":\"install\",\"disk\":\"/dev/vda\"}\n"
+    );
+    assert_eq!(
+        install::parse_event("{\"event\":\"hello\",\"name\":\"LosOS Desktop\"}"),
+        Some(Event::Hello {
+            name: "LosOS Desktop".into(),
+            source: None
+        })
+    );
+    let disks = install::parse_event(
+        "{\"event\":\"disks\",\"disks\":[{\"path\":\"/dev/vda\",\"name\":\"vda\",\"size\":21474836480}]}",
+    );
+    let Some(Event::Disks { disks }) = disks else {
+        panic!("not disks: {disks:?}");
+    };
+    assert_eq!(
+        disks,
+        [Disk {
+            path: "/dev/vda".into(),
+            name: "vda".into(),
+            model: String::new(),
+            size: 21_474_836_480,
+            removable: false,
+        }]
+    );
+    assert_eq!(disks[0].title(), "vda");
+    assert_eq!(disks[0].size_text(), "21.5 GB");
+    assert_eq!(install::parse_event("not json"), None);
+    assert_eq!(install::parse_event("{\"event\":\"unknown\"}"), None);
+}
+
+#[test]
+fn pages_fill_a_phone_and_float_on_a_desktop() {
+    let phone = wizard::screen_layout((392, 872), false);
+    assert!(phone.phone);
+    assert_eq!(phone.card.width(), 392.0);
+    assert_eq!(phone.card.height(), 872.0);
+    let typing = wizard::screen_layout((392, 872), true);
+    let keyboard = typing.keyboard.expect("a keyboard");
+    assert_eq!(keyboard.loc.y + keyboard.size.h, 872);
+    assert_eq!(typing.card.bottom(), keyboard.loc.y as f32);
+
+    let desktop = wizard::screen_layout((1920, 1080), false);
+    assert!(!desktop.phone);
+    assert!(desktop.card.width() <= 600.0);
+    assert!((desktop.card.center().x - 960.0).abs() < 1.0);
+    let typing = wizard::screen_layout((1920, 1080), true);
+    let keyboard = typing.keyboard.expect("a keyboard");
+    assert!(typing.card.bottom() <= keyboard.loc.y as f32);
+}
