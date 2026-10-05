@@ -71,9 +71,24 @@ fn fuzzy_prefers_prefixes_and_word_starts() {
     assert!(palette::fuzzy("System Monitor", "sysmon").is_some());
 }
 
+/// Opens workspaces 2 and 3 (each holding one window); workspaces are
+/// dynamic, so empty ones do not exist.
+fn open_three_workspaces(shell: &mut Shell) {
+    for n in [2, 3] {
+        let (w, _) = shell.map_window("foot", "sh");
+        shell
+            .apply(Action::MoveToWorkspace {
+                window: Some(w.get()),
+                workspace: n,
+            })
+            .unwrap();
+    }
+}
+
 #[test]
 fn search_spans_apps_windows_commands_and_workspaces() {
     let mut shell = shell();
+    open_three_workspaces(&mut shell);
     shell.map_window("kitty", "~/src");
     let entries = palette::entries(&shell, &apps(), &[]);
     let found = |q: &str| titles(&entries, &palette::search(&entries, q, &History::default()));
@@ -84,7 +99,53 @@ fn search_spans_apps_windows_commands_and_workspaces() {
     assert_eq!(found("maxim")[0], "Maximize");
     assert!(found("workspace 3").contains(&"Go to Workspace 3".to_owned()));
     assert!(found("workspace 3").contains(&"Move Window to Workspace 3".to_owned()));
+    assert!(found("workspace 4").is_empty(), "only open workspaces");
+    assert_eq!(found("new workspace")[0], "Move Window to New Workspace");
     assert_eq!(found("lock")[0], "Lock Screen");
+}
+
+#[test]
+fn workspaces_are_listed_by_position_after_one_closes() {
+    let mut shell = shell();
+    // Workspaces 1 (kitty), 2 (foot) and 3 (htop).
+    let (foot, _) = shell.map_window("foot", "sh");
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(foot.get()),
+            workspace: 2,
+        })
+        .unwrap();
+    let (htop, _) = shell.map_window("htop", "htop");
+    shell
+        .apply(Action::MoveToWorkspace {
+            window: Some(htop.get()),
+            workspace: 3,
+        })
+        .unwrap();
+    shell.map_window("kitty", "~");
+    // Closing foot empties workspace 2, so htop's workspace becomes 2.
+    shell.unmap_window(foot).unwrap();
+    assert_eq!(shell.workspaces().len(), 2);
+
+    let entries = palette::entries(&shell, &[], &[]);
+    let go: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| e.title.starts_with("Go to Workspace"))
+        .collect();
+    assert_eq!(go.len(), 1);
+    assert_eq!(go[0].title, "Go to Workspace 2");
+    assert_eq!(go[0].actions, [Action::SwitchWorkspace { workspace: 2 }]);
+    assert_eq!(go[0].detail, "1 window");
+    let htop = entries.iter().find(|e| e.title == "htop").unwrap();
+    assert!(htop.detail.contains("workspace 2"), "{}", htop.detail);
+
+    // The entry takes you to htop.
+    shell.run(go[0].actions.clone()).into_result().unwrap();
+    assert_eq!(shell.active_workspace(), 2);
+    assert_eq!(
+        shell.window_label(shell.focused().unwrap()).unwrap().0,
+        "htop"
+    );
 }
 
 #[test]
@@ -99,7 +160,7 @@ fn window_entries_focus_across_workspaces() {
     let entry = &entries[hits[0]];
     assert_eq!(entry.category, Category::Window);
     assert!(entry.detail.contains("workspace 1"));
-    shell.run(entry.actions.clone()).unwrap();
+    shell.run(entry.actions.clone()).into_result().unwrap();
     assert_eq!(shell.focused(), Some(editor));
     assert_eq!(shell.desktop().active().id().get(), 1);
 }
@@ -138,7 +199,10 @@ fn app_menus_become_palette_commands() {
     assert_eq!(app[1].detail, "Editor · File › Export › As PDF");
 
     let hits = palette::search(&entries, "> export pdf", &History::default());
-    let effects = shell.run(entries[hits[0]].actions.clone()).unwrap();
+    let effects = shell
+        .run(entries[hits[0]].actions.clone())
+        .into_result()
+        .unwrap();
     assert_eq!(
         serde_json::to_value(&effects).unwrap(),
         serde_json::json!([{"effect": "menu_activated", "window": w.get(), "item": "pdf"}])
@@ -256,7 +320,7 @@ fn files_are_indexed_and_opened_safely() {
     let hits = palette::search(&entries, "/todo", &History::default());
     let todo = &entries[hits[0]];
     assert_eq!(todo.title, "todo.md");
-    let effects = shell.run(todo.actions.clone()).unwrap();
+    let effects = shell.run(todo.actions.clone()).into_result().unwrap();
     assert_eq!(serde_json::to_value(&effects).unwrap()[0]["effect"], "open");
 
     // Launchers that dodge a lowercase `.desktop` check: shared-mime-info
@@ -296,6 +360,7 @@ fn files_are_indexed_and_opened_safely() {
 #[test]
 fn close_title_matches_beat_the_assistant() {
     let mut shell = shell();
+    open_three_workspaces(&mut shell);
     shell.map_window("kitty", "~");
     let entries = palette::entries(&shell, &[], &[]);
     for query in [
