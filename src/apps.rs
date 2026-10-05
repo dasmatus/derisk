@@ -138,16 +138,15 @@ impl Apps {
     /// The name and icon to show for windows of `app_id`.
     pub fn look<'a>(&'a self, app_id: &'a str) -> AppLook<'a> {
         let key = app_id.to_lowercase();
+        // The palette launches apps by desktop file ID, `.desktop` and all.
+        let key = stem(&key);
         // `org.mozilla.firefox` for an app installed as `firefox.desktop`.
-        let found = self
-            .keys
-            .get(&key)
-            .or_else(|| self.keys.get(last_part(&key)));
+        let found = self.keys.get(key).or_else(|| self.keys.get(last_part(key)));
         match found.map(|&i| &self.apps[i]) {
             Some(app) => AppLook {
                 name: Cow::Borrowed(&app.name),
                 icon: if app.icon.is_empty() {
-                    app_id
+                    stem(app_id)
                 } else {
                     &app.icon
                 },

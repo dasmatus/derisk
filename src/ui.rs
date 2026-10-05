@@ -27,7 +27,7 @@ use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 use crate::{
     action::Action,
     animation::{StartupAnimation, StartupFrame},
-    apps::AppLook,
+    apps::{AppLook, Apps},
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
     effects::{BlurArea, Look},
@@ -38,7 +38,7 @@ use crate::{
     lock::LockScreen,
     menu::{Menu, MenuEntry},
     mobile::{self, NavState},
-    overview::{OverviewLayout, Widget, fit, grid, row},
+    overview::{Battery, OverviewLayout, Widget, fit, grid, row},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
     systemd::SessionOp,
@@ -72,54 +72,87 @@ fn button_color(button: Button) -> Color32 {
     }
 }
 
-/// Pixels action icons are decoded at: 16 points at up to 3x.
-const ACTION_PX: u32 = 48;
+/// Decoded app icons by icon theme generation and icon name, `None` for
+/// names no theme has.
+type AppIcons = RefCell<HashMap<(u64, String), Option<Arc<egui::ColorImage>>>>;
 
-/// The Papirus action icon `name` as a texture of `ctx`, or `None` when no
-/// Papirus theme is installed. Each egui context uploads it once.
-fn action_texture(ctx: &egui::Context, name: &str) -> Option<TextureHandle> {
-    let id = Id::new(("derisk-action-icon", name));
-    if let Some(cached) = ctx.data(|d| d.get_temp::<Option<TextureHandle>>(id)) {
-        return cached;
-    }
-    let texture = icons::find_action(name)
-        .and_then(|path| icons::load_mask(&path, ACTION_PX))
-        .map(|image| {
-            ctx.load_texture(
-                format!("derisk-action-icon:{name}"),
-                image,
-                TextureOptions::LINEAR,
-            )
-        });
-    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
-    texture
+/// The battery as its symbolic icon and percentage.
+fn battery(ui: &mut Ui, b: Battery, color: Color32) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        let icon = icons::battery(b.percent, b.charging);
+        let text = RichText::new(format!("{}%", b.percent)).color(color);
+        // In the top bar's right-to-left half the first widget lands
+        // rightmost, so the icon goes second there to read "▮ 80%".
+        if ui.layout().prefer_right_to_left() {
+            ui.label(text);
+            icons::show(ui, &icon, 16.0, color);
+        } else {
+            icons::show(ui, &icon, 16.0, color);
+            ui.label(text);
+        }
+    })
+    .response
 }
 
-/// Paints the Papirus action icon `name` into `r` in `color`, greyscale like
-/// the theme's text. Returns `false`, painting nothing, without Papirus.
-fn paint_action(painter: &Painter, r: Rect, name: &str, color: Color32) -> bool {
-    let Some(texture) = action_texture(painter.ctx(), name) else {
-        return false;
-    };
-    painter.image(
-        texture.id(),
-        r,
-        Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-        color,
-    );
-    true
-}
-
-/// A frameless top bar button showing the Papirus icon for `glyph`, or the
-/// glyph itself without Papirus.
-fn action_button(ui: &mut Ui, glyph: &str, size: f32, color: Color32) -> egui::Response {
-    let texture = icons::action_for_glyph(glyph).and_then(|name| action_texture(ui.ctx(), name));
-    match texture {
-        Some(texture) => ui.add(
-            egui::Button::image(egui::Image::new((texture.id(), vec2(size, size))).tint(color))
-                .frame(false),
-        ),
-        None => ui.add(egui::Button::new(RichText::new(glyph).color(color)).frame(false)),
+/// Paints an app's icon into `r`: the icon theme's, else the app's
+/// glyph, else its initial on an accent tile, so every window has one.
+fn paint_app_icon(app_icons: &AppIcons, theme: &Theme, painter: &Painter, r: Rect, look: &AppLook) {
+    // Keyed by the icon theme too, so changing it shows its icons.
+    let generation = icons::generation();
+    let image = app_icons
+        .borrow_mut()
+        .entry((generation, look.icon.to_owned()))
+        .or_insert_with(|| icons::load(&icons::find(look.icon, ICON_PX)?, ICON_PX).map(Arc::new))
+        .clone();
+    // Title bars and the chrome are separate egui contexts with their own
+    // textures, so each context uploads the icon once and keeps it.
+    let texture = image.map(|image| {
+        let ctx = painter.ctx();
+        let id = Id::new(("derisk-app-icon", generation, look.icon));
+        ctx.data(|d| d.get_temp::<TextureHandle>(id))
+            .unwrap_or_else(|| {
+                let texture = ctx.load_texture(
+                    format!("derisk-app-icon:{}", look.icon),
+                    image,
+                    TextureOptions::LINEAR,
+                );
+                ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+                texture
+            })
+    });
+    if let Some(texture) = texture {
+        let [w, h] = texture.size().map(|n| n.max(1) as f32);
+        let scale = r.width().min(r.height()) / w.max(h);
+        painter.image(
+            texture.id(),
+            Rect::from_center_size(r.center(), vec2(w, h) * scale),
+            Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    } else if !look.glyph.is_empty() {
+        painter.text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            look.glyph,
+            FontId::proportional(r.height() * 0.8),
+            theme.foreground,
+        );
+    } else {
+        painter.rect_filled(r, r.height() * 0.25, theme.accent);
+        let initial: String = look
+            .name
+            .chars()
+            .take(1)
+            .flat_map(char::to_uppercase)
+            .collect();
+        painter.text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            initial,
+            FontId::proportional(r.height() * 0.6),
+            theme.background,
+        );
     }
 }
 
@@ -188,7 +221,7 @@ pub struct ShellUi {
     focus_bar: bool,
     /// Decoded app icons by theme name or path, `None` when the theme has
     /// none. Behind a `RefCell` because title bars paint through `&self`.
-    icons: RefCell<HashMap<String, Option<Arc<egui::ColorImage>>>>,
+    icons: AppIcons,
 }
 
 /// Pixels app icons are decoded at: crisp up to 32 points at 2x, the largest
@@ -349,66 +382,9 @@ impl ShellUi {
         }
     }
 
-    /// Paints an app's icon into `r`: the icon theme's, else the app's
-    /// glyph, else its initial on an accent tile, so every window has one.
+    /// Paints an app's icon into `r`; see [`paint_app_icon`].
     fn paint_app_icon(&self, painter: &Painter, r: Rect, look: &AppLook) {
-        let image = self
-            .icons
-            .borrow_mut()
-            .entry(look.icon.to_owned())
-            .or_insert_with(|| {
-                icons::load(&icons::find(look.icon, ICON_PX)?, ICON_PX).map(Arc::new)
-            })
-            .clone();
-        // Title bars and the chrome are separate egui contexts with their own
-        // textures, so each context uploads the icon once and keeps it.
-        let texture = image.map(|image| {
-            let ctx = painter.ctx();
-            let id = Id::new(("derisk-app-icon", look.icon));
-            ctx.data(|d| d.get_temp::<TextureHandle>(id))
-                .unwrap_or_else(|| {
-                    let texture = ctx.load_texture(
-                        format!("derisk-app-icon:{}", look.icon),
-                        image,
-                        TextureOptions::LINEAR,
-                    );
-                    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
-                    texture
-                })
-        });
-        if let Some(texture) = texture {
-            let [w, h] = texture.size().map(|n| n.max(1) as f32);
-            let scale = r.width().min(r.height()) / w.max(h);
-            painter.image(
-                texture.id(),
-                Rect::from_center_size(r.center(), vec2(w, h) * scale),
-                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
-        } else if !look.glyph.is_empty() {
-            painter.text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                look.glyph,
-                FontId::proportional(r.height() * 0.8),
-                self.theme.foreground,
-            );
-        } else {
-            painter.rect_filled(r, r.height() * 0.25, self.theme.accent);
-            let initial: String = look
-                .name
-                .chars()
-                .take(1)
-                .flat_map(char::to_uppercase)
-                .collect();
-            painter.text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                initial,
-                FontId::proportional(r.height() * 0.6),
-                self.theme.background,
-            );
-        }
+        paint_app_icon(&self.icons, &self.theme, painter, r, look);
     }
 
     /// Paints an app icon and `text` on one line, the pair centered on
@@ -612,8 +588,7 @@ impl ShellUi {
                 Button::Minimize => "window-minimize",
                 Button::Maximize => "window-maximize",
             };
-            // Greyscale Papirus buttons on a faint disc; the colored dots
-            // remain for systems without Papirus.
+            // Greyscale Papirus buttons on a faint disc.
             painter.circle_filled(
                 r.center(),
                 r.width() / 2.0,
@@ -624,14 +599,7 @@ impl ShellUi {
             } else {
                 theme.border
             };
-            if !paint_action(painter, r.shrink(r.width() * 0.15), name, icon_color) {
-                let color = if p.focused {
-                    button_color(button)
-                } else {
-                    theme.border
-                };
-                painter.circle_filled(r.center(), r.width() / 2.0, color);
-            }
+            icons::paint(painter, r.shrink(r.width() * 0.15), name, icon_color);
         }
         let title_area = to_rect(bar.title(p.frame));
         let (app, title) = shell.window_label(p.window).unwrap_or_default();
@@ -906,8 +874,12 @@ impl ShellUi {
             |ui| {
                 ui.visuals_mut().override_text_color = Some(self.theme.foreground);
                 ui.spacing_mut().item_spacing.x = 12.0;
-                let overview =
-                    action_button(ui, "◆", 16.0, self.theme.foreground).on_hover_text("Overview");
+                let overview = ui
+                    .add(
+                        icons::button(ui.ctx(), "view-app-grid", 16.0, self.theme.foreground)
+                            .frame(false),
+                    )
+                    .on_hover_text("Overview");
                 name(ui, &overview, Role::Button, "Overview");
                 if std::mem::take(&mut self.focus_bar) {
                     overview.request_focus();
@@ -915,15 +887,13 @@ impl ShellUi {
                 if overview.clicked() {
                     actions.push(Action::Overview { visible: None });
                 }
-                let search = match action_texture(ui.ctx(), "system-search") {
-                    Some(texture) => egui::Button::image_and_text(
-                        egui::Image::new((texture.id(), vec2(14.0, 14.0))).tint(self.theme.border),
-                        RichText::new("Search or ask…").color(self.theme.border),
-                    ),
-                    None => egui::Button::new(
-                        RichText::new("🔍  Search or ask…").color(self.theme.border),
-                    ),
-                };
+                let search = icons::button_with_text(
+                    ui.ctx(),
+                    "system-search",
+                    RichText::new("Search or ask…").color(self.theme.border),
+                    14.0,
+                    self.theme.border,
+                );
                 let search = prefs.search.then(|| {
                     ui.add(
                         search
@@ -964,11 +934,7 @@ impl ShellUi {
                         time
                     });
                     if let Some(b) = shell.battery.filter(|_| prefs.battery) {
-                        let battery = ui.label(format!(
-                            "{}{}%",
-                            if b.charging { "⚡" } else { "▮" },
-                            b.percent
-                        ));
+                        let battery = battery(ui, b, self.theme.foreground);
                         name(
                             ui,
                             &battery,
@@ -1039,11 +1005,7 @@ impl ShellUi {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let Some(b) = shell.battery {
-                        ui.label(format!(
-                            "{}{}%",
-                            if b.charging { "⚡" } else { "▮" },
-                            b.percent
-                        ));
+                        battery(ui, b, self.theme.foreground);
                     }
                     self.indicators(ui, shell, actions);
                     self.tray_icons(ui, shell, height, actions);
@@ -1123,11 +1085,10 @@ impl ShellUi {
                 ui.painter()
                     .rect_filled(r.shrink(4.0), 12, self.theme.accent.gamma_multiply(0.18));
             }
-            ui.painter().text(
-                r.center(),
-                Align2::CENTER_CENTER,
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(r.center(), vec2(22.0, 22.0)),
                 button.icon(),
-                FontId::proportional(22.0),
                 if active {
                     self.theme.accent
                 } else {
@@ -1249,13 +1210,24 @@ impl ShellUi {
             } else {
                 15.0
             };
-            ui.painter().text(
-                cell.center(),
-                Align2::CENTER_CENTER,
-                key.label(&self.keyboard),
-                FontId::proportional(size),
-                if lit { theme.accent } else { theme.foreground },
-            );
+            let color = if lit { theme.accent } else { theme.foreground };
+            match key.icon() {
+                Some(icon) => icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(cell.center(), vec2(20.0, 20.0)),
+                    icon,
+                    color,
+                ),
+                None => {
+                    ui.painter().text(
+                        cell.center(),
+                        Align2::CENTER_CENTER,
+                        key.label(&self.keyboard),
+                        FontId::proportional(size),
+                        color,
+                    );
+                }
+            }
             // Holding Backspace repeats it, after a pause, like a hardware key.
             if key == OskKey::Backspace && down {
                 backspace_down = true;
@@ -1304,11 +1276,16 @@ impl ShellUi {
         }
         let button = ui
             .add(
-                egui::Button::new(RichText::new("⌨").color(if shell.keyboard_visible() {
-                    self.theme.accent
-                } else {
-                    self.theme.foreground
-                }))
+                icons::button(
+                    ui.ctx(),
+                    "input-keyboard",
+                    16.0,
+                    if shell.keyboard_visible() {
+                        self.theme.accent
+                    } else {
+                        self.theme.foreground
+                    },
+                )
                 .frame(false),
             )
             .on_hover_text("On-screen keyboard");
@@ -1322,7 +1299,16 @@ impl ShellUi {
         let failed = (!shell.failed_units.is_empty()).then(|| {
             let n = shell.failed_units.len();
             let button = ui
-                .add(egui::Button::new(format!("⚠ {n}")).frame(false))
+                .add(
+                    icons::button_with_text(
+                        ui.ctx(),
+                        "dialog-warning",
+                        n.to_string(),
+                        14.0,
+                        self.theme.foreground,
+                    )
+                    .frame(false),
+                )
                 .on_hover_text("Failed user services: restart or dismiss them");
             let noun = if n == 1 { "service" } else { "services" };
             name(ui, &button, Role::Button, format!("{n} failed {noun}"));
@@ -1344,14 +1330,17 @@ impl ShellUi {
         let activity = (unseen > 0 || working).then(|| {
             let button = ui
                 .add(
-                    egui::Button::new(
-                        RichText::new(if unseen > 0 {
-                            format!("✨ {unseen}")
-                        } else {
-                            "✨".to_owned()
-                        })
-                        .color(self.theme.accent),
-                    )
+                    if unseen > 0 {
+                        icons::button_with_text(
+                            ui.ctx(),
+                            "tool-magic",
+                            RichText::new(unseen.to_string()).color(self.theme.accent),
+                            14.0,
+                            self.theme.accent,
+                        )
+                    } else {
+                        icons::button(ui.ctx(), "tool-magic", 14.0, self.theme.accent)
+                    }
                     .frame(false),
                 )
                 .on_hover_text(if working {
@@ -1521,20 +1510,12 @@ impl ShellUi {
                 } else {
                     self.theme.foreground
                 };
-                if !paint_action(
+                icons::paint(
                     ui.painter(),
                     Rect::from_center_size(r.center(), vec2(20.0, 20.0)),
                     "list-add",
                     plus,
-                ) {
-                    ui.painter().text(
-                        r.center(),
-                        Align2::CENTER_CENTER,
-                        "+",
-                        FontId::proportional(24.0),
-                        plus,
-                    );
-                }
+                );
                 if response.on_hover_text("New workspace").clicked() {
                     actions.push(Action::SwitchWorkspace { workspace: n });
                 }
@@ -1661,11 +1642,10 @@ impl ShellUi {
                         },
                     ),
                 );
-                ui.painter().text(
-                    close.center(),
-                    Align2::CENTER_CENTER,
-                    "×",
-                    FontId::proportional(18.0),
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(close.center(), vec2(16.0, 16.0)),
+                    "window-close",
                     Color32::WHITE,
                 );
                 if hit.clicked() {
@@ -1788,7 +1768,10 @@ impl ShellUi {
             Widget::Units => card(ui, &theme, |ui| {
                 ui.label(RichText::new("Services").strong());
                 if shell.failed_units.is_empty() {
-                    ui.label(RichText::new("All user services running ✓").color(theme.border));
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("All user services running").color(theme.border));
+                        icons::show(ui, "object-select", 14.0, theme.border);
+                    });
                 }
                 for unit in &shell.failed_units {
                     ui.horizontal(|ui| {
@@ -1989,7 +1972,7 @@ impl ShellUi {
                         ui.visuals_mut().override_text_color = Some(theme.foreground);
                         ui.horizontal(|ui| {
                             if state.chat {
-                                ui.label(RichText::new("✨").size(18.0).color(theme.accent));
+                                icons::show(ui, "tool-magic", 18.0, theme.accent);
                             }
                             let input = ui.add(
                                 egui::TextEdit::singleline(&mut state.query)
@@ -2051,6 +2034,8 @@ impl ShellUi {
                                         let response = palette_row(
                                             ui,
                                             &theme,
+                                            &shell.apps,
+                                            &self.icons,
                                             entry,
                                             i == selected,
                                             row_height,
@@ -2236,14 +2221,23 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
                 });
                 for step in &turn.steps {
                     let (icon, color) = match &step.status {
-                        StepStatus::Done => ("✔", theme.accent),
-                        StepStatus::Waiting => ("⟳", theme.border),
-                        StepStatus::Failed(_) => ("✖", button_color(Button::Close)),
-                        StepStatus::Skipped => ("·", theme.border),
+                        StepStatus::Done => (Some("object-select"), theme.accent),
+                        StepStatus::Waiting => (Some("view-refresh"), theme.border),
+                        StepStatus::Failed(_) => {
+                            (Some("dialog-error"), button_color(Button::Close))
+                        }
+                        StepStatus::Skipped => (None, theme.border),
                     };
                     ui.horizontal(|ui| {
                         ui.add_space(12.0);
-                        ui.label(RichText::new(icon).color(color));
+                        match icon {
+                            Some(icon) => {
+                                icons::show(ui, icon, 14.0, color);
+                            }
+                            None => {
+                                ui.label(RichText::new("·").color(color));
+                            }
+                        }
                         ui.label(RichText::new(&step.label).color(
                             if step.status == StepStatus::Skipped {
                                 theme.border
@@ -2275,6 +2269,8 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
 fn palette_row(
     ui: &mut Ui,
     theme: &Theme,
+    apps: &Apps,
+    app_icons: &AppIcons,
     entry: &Entry,
     selected: bool,
     height: f32,
@@ -2299,21 +2295,23 @@ fn palette_row(
         );
     }
     let mid = r.center().y;
-    // Apps keep their own glyph; every other row is an action and gets its
-    // greyscale Papirus icon when one is installed.
-    let action = match entry.category {
-        Category::App | Category::AppAction => None,
-        _ => icons::action_for_glyph(&entry.icon),
-    };
-    let icon_area = Rect::from_center_size(pos2(r.left() + 18.0, mid), vec2(16.0, 16.0));
-    if !action.is_some_and(|name| paint_action(&painter, icon_area, name, theme.foreground)) {
-        painter.text(
-            pos2(r.left() + 18.0, mid),
-            Align2::CENTER_CENTER,
-            &entry.icon,
-            FontId::proportional(16.0),
-            theme.foreground,
-        );
+    // Apps show their own icon in color, as in title bars; every other row
+    // is an action with a greyscale Papirus icon.
+    let app = entry.actions.iter().find_map(|a| match a {
+        Action::Launch { app } | Action::LaunchAction { app, .. } => Some(app),
+        _ => None,
+    });
+    match app.filter(|_| matches!(entry.category, Category::App | Category::AppAction)) {
+        Some(app) => {
+            let mut look = apps.look(app);
+            look.glyph = &entry.icon;
+            let icon_area = Rect::from_center_size(pos2(r.left() + 18.0, mid), vec2(20.0, 20.0));
+            paint_app_icon(app_icons, theme, &painter, icon_area, &look);
+        }
+        None => {
+            let icon_area = Rect::from_center_size(pos2(r.left() + 18.0, mid), vec2(16.0, 16.0));
+            icons::paint(&painter, icon_area, &entry.icon, theme.foreground);
+        }
     }
     let shortcut_width = entry
         .shortcut

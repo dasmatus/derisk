@@ -307,9 +307,11 @@ impl MonitorApp {
         // Wraps on a phone. A row wider than the window would widen the
         // panel under it and push the table's columns off the screen.
         ui.horizontal_wrapped(|ui| {
+            let color = ui.visuals().weak_text_color();
+            derisk_icons::show(ui, "system-search", 16.0, color);
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("🔍 Name or PID")
+                    .hint_text("Name or PID")
                     .desired_width((ui.available_width() * 0.4).min(240.0)),
             );
             ui.label("Sort");

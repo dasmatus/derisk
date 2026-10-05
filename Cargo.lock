@@ -1542,6 +1542,7 @@ version = "0.1.0"
 dependencies = [
  "derisk-apps",
  "derisk-gpui",
+ "derisk-icons",
  "derisk-settings",
  "image",
  "libc",
@@ -1550,7 +1551,6 @@ dependencies = [
  "mcsapi-runtime",
  "mcsapi-theme",
  "png 0.18.1",
- "resvg 0.48.1",
  "serde",
  "serde_json",
 ]
@@ -1573,6 +1573,7 @@ dependencies = [
 name = "derisk-calculator"
 version = "0.1.0"
 dependencies = [
+ "derisk-icons",
  "mcsapi-ui",
 ]
 
@@ -1587,6 +1588,7 @@ dependencies = [
 name = "derisk-files"
 version = "0.1.0"
 dependencies = [
+ "derisk-icons",
  "libc",
  "mcsapi-ui",
 ]
@@ -1604,9 +1606,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "derisk-icons"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "mcsapi-ui",
+ "resvg 0.48.1",
+]
+
+[[package]]
 name = "derisk-monitor"
 version = "0.1.0"
 dependencies = [
+ "derisk-icons",
  "mcsapi-ui",
 ]
 
@@ -1624,6 +1636,7 @@ dependencies = [
 name = "derisk-settings"
 version = "0.1.0"
 dependencies = [
+ "derisk-icons",
  "image",
  "mcsapi-theme",
  "mcsapi-ui",
@@ -4002,7 +4015,7 @@ dependencies = [
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
 dependencies = [
  "egui",
  "gpui",
@@ -4014,7 +4027,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
 dependencies = [
  "egui",
  "mcsapi-ui",
@@ -4023,7 +4036,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components-gpui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
 dependencies = [
  "gpui",
  "libc",
@@ -4035,7 +4048,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4051,17 +4064,17 @@ dependencies = [
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
 
 [[package]]
 name = "mcsapi-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#9485e5677dfedba6d39c54577ef65a62562e8ff1"
+source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
 dependencies = [
  "egui",
  "mcsapi",

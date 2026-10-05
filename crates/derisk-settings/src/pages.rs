@@ -376,7 +376,7 @@ fn preview(
                 }
             }
             match w.kind {
-                WallpaperKind::Video => Some("▶ Video"),
+                WallpaperKind::Video => Some("Video"),
                 WallpaperKind::Slideshow => Some("Slideshow"),
                 _ => None,
             }
@@ -388,13 +388,21 @@ fn preview(
             egui::FontId::proportional(11.0),
             egui::Color32::WHITE,
         );
-        let at = rect.left_bottom() + egui::vec2(6.0, -6.0 - galley.size().y);
+        // A video's badge leads with a play icon.
+        let icon = (w.kind == WallpaperKind::Video).then_some("media-playback-start");
+        let side = galley.size().y;
+        let lead = if icon.is_some() { side + 3.0 } else { 0.0 };
+        let at = rect.left_bottom() + egui::vec2(6.0, -6.0 - side);
         painter.rect_filled(
-            egui::Rect::from_min_size(at, galley.size()).expand(3.0),
+            egui::Rect::from_min_size(at, galley.size() + egui::vec2(lead, 0.0)).expand(3.0),
             4,
             egui::Color32::from_black_alpha(160),
         );
-        painter.galley(at, galley, egui::Color32::WHITE);
+        if let Some(icon) = icon {
+            let r = egui::Rect::from_min_size(at, egui::vec2(side, side));
+            derisk_icons::paint(&painter, r, icon, egui::Color32::WHITE);
+        }
+        painter.galley(at + egui::vec2(lead, 0.0), galley, egui::Color32::WHITE);
     }
     painter.rect_stroke(
         rect,
