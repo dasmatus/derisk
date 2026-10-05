@@ -461,16 +461,13 @@ fn round(options: &Options, greeter: &Account) -> Result {
     let Some(user) = account(&username) else {
         return Err("an authenticated user has no account".into());
     };
-    // Sessions are logged by uid, as logind logs them; the name came from
-    // the greeter's text field.
-    let uid = user.uid;
-    log(
-        Priority::Notice,
-        &format!("starting a session for uid {uid}"),
-    );
+    // Whose session it is goes to logind, which records it with the session;
+    // the log says only that one started, since the name came from the
+    // greeter's text field.
+    log(Priority::Notice, "starting a session");
     let worker = spawn_session(pam, &user, options.vt, "user", &cmd, &env, true)?;
     wait(worker);
-    log(Priority::Notice, &format!("session for uid {uid} ended"));
+    log(Priority::Notice, "the session ended");
     Ok(())
 }
 
