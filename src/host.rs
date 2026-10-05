@@ -399,6 +399,9 @@ impl Session {
             );
         }
         self.ui.theme = Theme::from(&theme);
+        // The chrome and the core apps share this process, so they all
+        // draw from the icon theme the theme names.
+        derisk::icons::set_theme(&theme.icons.theme);
         let id = match settings.appearance.theme {
             id if id.is_automatic() => match settings.appearance.scheme {
                 derisk_settings::ColorScheme::Dark => "derisk-dark".to_owned(),

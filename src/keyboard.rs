@@ -48,13 +48,24 @@ pub enum Key {
 }
 
 impl Key {
-    /// What the key shows, given the keyboard's state.
+    /// The symbolic icon the key shows instead of a label, if any (see
+    /// [`crate::icons`]). Caps Lock shows as a lit Shift.
+    pub fn icon(self) -> Option<&'static str> {
+        match self {
+            Self::Shift => Some("keyboard-shift-filled"),
+            Self::Backspace => Some("edit-clear"),
+            _ => None,
+        }
+    }
+
+    /// What the key shows, given the keyboard's state: its text, or for a
+    /// key with an [`icon`](Self::icon) the glyph standing in for it.
     pub fn label(self, keyboard: &Keyboard) -> String {
         match self {
             Self::Char(c) => keyboard.shifted(c).to_string(),
-            // Glyphs egui's built-in fonts have; Caps Lock shows as a lit Shift.
-            Self::Shift => "⬆".into(),
-            Self::Backspace => "⬅".into(),
+            Self::Shift | Self::Backspace => {
+                crate::icons::glyph(self.icon().unwrap_or_default()).into()
+            }
             Self::Page => match keyboard.page {
                 Page::Letters => "?123".into(),
                 Page::Symbols => "ABC".into(),

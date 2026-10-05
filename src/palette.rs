@@ -114,7 +114,8 @@ pub struct Entry {
     pub detail: String,
     /// Extra search terms, not shown.
     pub keywords: String,
-    /// An emoji icon from egui's built-in font.
+    /// The symbolic icon (see [`crate::icons`]); for app rows, which show
+    /// the app's own icon, the glyph standing in when no theme has it.
     pub icon: String,
     /// Keyboard shortcut hint, if the command has one.
     pub shortcut: Option<String>,
@@ -411,7 +412,7 @@ pub fn ask(query: &str) -> Entry {
             let steps = actions.len();
             let mut entry = Entry::new(
                 Category::Ask,
-                "✨",
+                "tool-magic",
                 format!("Ask derisk: {text}"),
                 actions
                     .into_iter()
@@ -434,7 +435,7 @@ pub fn ask(query: &str) -> Entry {
         }
         Err(e) => Entry::new(
             Category::Ask,
-            "✨",
+            "tool-magic",
             format!("Ask derisk: {text}"),
             Vec::new(),
         )
@@ -496,7 +497,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
                 detail.push_str(" · focused");
             }
             out.push(
-                Entry::new(Category::Window, "🗗", name, vec![action])
+                Entry::new(Category::Window, "view-restore", name, vec![action])
                     .detail(detail)
                     .keywords("window switch"),
             );
@@ -512,7 +513,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
             flatten(&m.entries, &m.title, &mut |id, path, shortcut| {
                 let mut e = Entry::new(
                     Category::AppCommand,
-                    "☰",
+                    "open-menu",
                     path.rsplit(" › ").next().unwrap_or(path),
                     vec![Action::ActivateMenu {
                         window,
@@ -535,7 +536,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
             } else {
                 title.to_owned()
             };
-            let mut e = Entry::new(Category::Command, "🗖", title, vec![action])
+            let mut e = Entry::new(Category::Command, "window-maximize", title, vec![action])
                 .detail(format!("Window · {app}"))
                 .keywords("window");
             e.shortcut = shortcut.map(str::to_owned);
@@ -547,35 +548,35 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
     let commands = [
         (
             "Overview",
-            "⊞",
+            "view-app-grid",
             Action::Overview { visible: None },
             Some("Super"),
             "expose desktop show all",
         ),
         (
             "On-Screen Keyboard",
-            "⌨",
+            "input-keyboard",
             Action::Keyboard { visible: None },
             None,
             "osk virtual touch type keys show hide",
         ),
         (
             "Next Window",
-            "🔄",
+            "go-next",
             Action::FocusNext,
             Some("Alt+Tab"),
             "focus switch cycle",
         ),
         (
             "Previous Window",
-            "🔃",
+            "go-previous",
             Action::FocusPrevious,
             Some("Alt+Shift+Tab"),
             "focus switch cycle back",
         ),
         (
             "Tall Layout",
-            "⊟",
+            "view-dual",
             Action::SetLayout {
                 layout: LayoutKind::Tall,
             },
@@ -584,7 +585,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
         ),
         (
             "Monocle Layout",
-            "▣",
+            "view-fullscreen",
             Action::SetLayout {
                 layout: LayoutKind::Monocle,
             },
@@ -608,7 +609,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
             let count = shell.windows_on(ws).len();
             let mut e = Entry::new(
                 Category::Workspace,
-                "🖥",
+                "video-display",
                 format!("Go to Workspace {n}"),
                 vec![Action::SwitchWorkspace { workspace: n }],
             )
@@ -623,7 +624,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
             if focused.is_some() {
                 let mut e = Entry::new(
                     Category::Workspace,
-                    "⎆",
+                    "go-jump",
                     format!("Move Window to Workspace {n}"),
                     vec![Action::MoveToWorkspace {
                         window: None,
@@ -640,7 +641,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
         let n = shell.workspaces().len() as u64 + 1;
         let mut e = Entry::new(
             Category::Workspace,
-            "⎆",
+            "go-jump",
             "Move Window to New Workspace",
             vec![Action::MoveToWorkspace {
                 window: None,
@@ -656,27 +657,37 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
     for (title, icon, op, keywords) in [
         (
             "Lock Screen",
-            "🔒",
+            "system-lock-screen",
             SessionOp::Lock,
             "lock away system session",
         ),
-        ("Suspend", "🌙", SessionOp::Suspend, "sleep system power"),
+        (
+            "Suspend",
+            "system-suspend",
+            SessionOp::Suspend,
+            "sleep system power",
+        ),
         (
             "Hibernate",
-            "❄",
+            "system-hibernate",
             SessionOp::Hibernate,
             "sleep disk system power",
         ),
         (
             "Log Out",
-            "🚪",
+            "system-log-out",
             SessionOp::Logout,
             "sign out logout exit system session",
         ),
-        ("Restart", "⟳", SessionOp::Reboot, "reboot system power"),
+        (
+            "Restart",
+            "system-reboot",
+            SessionOp::Reboot,
+            "reboot system power",
+        ),
         (
             "Shut Down",
-            "✖",
+            "system-shutdown",
             SessionOp::PowerOff,
             "power off poweroff shutdown system",
         ),
@@ -700,7 +711,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
         out.push(
             Entry::new(
                 Category::System,
-                "★",
+                "starred",
                 item.title.clone(),
                 vec![Action::ActivateTray {
                     id: item.id.clone(),
@@ -715,7 +726,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
         out.push(
             Entry::new(
                 Category::System,
-                "⚠",
+                "dialog-warning",
                 format!("Restart {unit}"),
                 vec![Action::RestartUnit { unit: unit.clone() }],
             )
@@ -725,7 +736,7 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
         out.push(
             Entry::new(
                 Category::System,
-                "⚠",
+                "dialog-warning",
                 format!("Dismiss {unit}"),
                 vec![Action::ResetFailed { unit: unit.clone() }],
             )
@@ -756,7 +767,11 @@ pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> 
             },
             None => path.display().to_string(),
         };
-        let icon = if path.is_dir() { "🗀" } else { "🗋" };
+        let icon = if path.is_dir() {
+            "folder"
+        } else {
+            "text-x-generic"
+        };
         out.push(
             Entry::new(
                 Category::File,
