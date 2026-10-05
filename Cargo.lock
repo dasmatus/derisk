@@ -4017,7 +4017,7 @@ dependencies = [
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#b027f20964291b9bc0204502fc5a49ee3b361906"
+source = "git+https://github.com/dasmatus/mcsapi#89ad260a2aacf6d167dbd60c01a559e6b0af45d8"
 dependencies = [
  "egui",
  "gpui",
@@ -4029,7 +4029,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#b027f20964291b9bc0204502fc5a49ee3b361906"
+source = "git+https://github.com/dasmatus/mcsapi#89ad260a2aacf6d167dbd60c01a559e6b0af45d8"
 dependencies = [
  "egui",
  "mcsapi-ui",
@@ -4038,7 +4038,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components-gpui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#b027f20964291b9bc0204502fc5a49ee3b361906"
+source = "git+https://github.com/dasmatus/mcsapi#89ad260a2aacf6d167dbd60c01a559e6b0af45d8"
 dependencies = [
  "gpui",
  "libc",
@@ -4050,7 +4050,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#b027f20964291b9bc0204502fc5a49ee3b361906"
+source = "git+https://github.com/dasmatus/mcsapi#89ad260a2aacf6d167dbd60c01a559e6b0af45d8"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4066,22 +4066,22 @@ dependencies = [
 [[package]]
 name = "mcsapi-hardened-malloc"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#b027f20964291b9bc0204502fc5a49ee3b361906"
+source = "git+https://github.com/dasmatus/mcsapi#89ad260a2aacf6d167dbd60c01a559e6b0af45d8"
 
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#b027f20964291b9bc0204502fc5a49ee3b361906"
+source = "git+https://github.com/dasmatus/mcsapi#89ad260a2aacf6d167dbd60c01a559e6b0af45d8"
 
 [[package]]
 name = "mcsapi-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#b027f20964291b9bc0204502fc5a49ee3b361906"
+source = "git+https://github.com/dasmatus/mcsapi#89ad260a2aacf6d167dbd60c01a559e6b0af45d8"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#b027f20964291b9bc0204502fc5a49ee3b361906"
+source = "git+https://github.com/dasmatus/mcsapi#89ad260a2aacf6d167dbd60c01a559e6b0af45d8"
 dependencies = [
  "egui",
  "mcsapi",
