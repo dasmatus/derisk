@@ -1,0 +1,9 @@
+#%PAM-1.0
+# Logins through `derisk display-manager`: the same stack as a console login,
+# which on a systemd system includes pam_systemd (registers the session with
+# logind) and, with homed, pam_systemd_home. Install as
+# /etc/pam.d/derisk-login.
+auth     include  login
+account  include  login
+password include  login
+session  include  login

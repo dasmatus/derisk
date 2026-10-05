@@ -23,6 +23,8 @@
 //! - [`assistant`] and [`ipc`]: natural-language and agent control.
 //! - [`conversation`]: requests and their progress, shown in the palette.
 //! - [`keys`]: keyboard shortcuts.
+//! - [`lock`] and [`greetd`]: the lock screen, and the login conversation
+//!   `derisk greeter` holds with `derisk display-manager` (or greetd).
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
 //!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.
@@ -53,10 +55,12 @@ pub mod decorations;
 pub mod desktop;
 pub mod effects;
 pub mod geom;
+pub mod greetd;
 pub mod icons;
 pub mod ipc;
 pub mod keyboard;
 pub mod keys;
+pub mod lock;
 pub mod menu;
 pub mod mobile;
 pub mod overview;

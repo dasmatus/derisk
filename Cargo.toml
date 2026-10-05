@@ -53,9 +53,21 @@ mcsapi-compositor = { workspace = true, optional = true }
 mcsapi-runtime = { workspace = true, optional = true }
 # Only its list of ported apps; the GPUI build is its own binary.
 derisk-gpui = { workspace = true, optional = true }
+# The lock screen's PAM conversation allocates with libc, which PAM frees.
+libc = { version = "0.2", optional = true }
 # Screenshots for agents (`{"method":"screenshot"}`).
 png = { version = "0.18.1", optional = true }
 
 [features]
-host = ["dep:derisk-apps", "dep:derisk-gpui", "dep:mcsapi-compositor", "dep:mcsapi-runtime", "dep:png"]
+host = [
+    "dep:derisk-apps",
+    "dep:derisk-gpui",
+    "dep:libc",
+    "dep:mcsapi-compositor",
+    # The display manager starts the login screen and the session on the
+    # bare seat, with no compositor underneath to nest in.
+    "mcsapi-compositor/kms",
+    "dep:mcsapi-runtime",
+    "dep:png",
+]
 

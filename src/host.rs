@@ -4,7 +4,14 @@
 //! The compositor (in the mcsapi workspace) owns the display, Wayland socket,
 //! input and rendering. This module adapts [`Shell`] and [`ShellUi`] to its
 //! [`compositor::Shell`] trait, provides the core apps as in-process
-//! windows, and serves the agent protocol against the live desktop.
+//! windows, serves the agent protocol against the live desktop, and locks
+//! the screen.
+//!
+//! While locked the compositor is given no window placements and no focus,
+//! so no client is drawn or receives input; every key goes to the lock
+//! screen's password field, which PAM checks (`crate::pam`). The screen locks
+//! on derisk's own Lock action and, with `--execute`, whenever logind asks
+//! this session to lock (`loginctl lock-session`, `lock-sessions`).
 
 use std::{
     collections::HashMap,
@@ -14,6 +21,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
+    process::{Child, Command as ProcessCommand, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -32,18 +40,21 @@ use derisk::{
     ipc::{self, LiveRequest},
     keyboard::{Output as Typed, Predictor},
     keys::{self, Key, Mods, SuperTap},
+    lock::LockScreen,
     overview::Battery,
     palette::{self, Entry},
     privacy,
     shell::{Mode, PointerOutcome, Shell},
     snap::{Direction, SnapZone},
-    systemd::{self, Priority},
+    systemd::{self, Priority, SessionOp},
     time::Clock,
-    ui::{ShellUi, set_touch_style},
+    ui::{ShellUi, set_touch_style, show_lock},
     wallpaper::{self, Visibility, WallpaperPainter},
 };
 use derisk_settings::{Privacy, Shortcuts};
 use mcsapi::WindowId;
+
+use crate::pam;
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
     Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press,
@@ -168,6 +179,15 @@ pub struct Session {
     /// The output's size, and the strips runtime panels cover in it.
     output: (i32, i32),
     reserved: Reserved,
+    lock: LockScreen,
+    /// Who the lock screen authenticates.
+    user: String,
+    /// The running password check, if any.
+    unlock: Option<mpsc::Receiver<bool>>,
+    /// This logind session, from `XDG_SESSION_ID`.
+    session_id: Option<String>,
+    /// Its logind object path, for the lock signal and the locked hint.
+    session_path: Option<String>,
 }
 
 /// What an agent asked of the accessibility tree.
@@ -253,6 +273,14 @@ impl Session {
             200,
         );
         ui.palette.extra = palette_entries(&core_apps, &installed);
+        let session_id = systemd::session_id();
+        let session_path = session_id
+            .as_deref()
+            .filter(|_| options.execute)
+            .and_then(systemd::session_path);
+        let user = pam::current_user()
+            .or_else(|| std::env::var("USER").ok())
+            .unwrap_or_default();
         shell.apps = app_index(&core_apps, &installed);
         Self {
             shell,
@@ -286,6 +314,68 @@ impl Session {
             gpui: gpui_apps(),
             output: (w, h),
             reserved: Reserved::default(),
+            lock: LockScreen::default(),
+            user,
+            unlock: None,
+            session_id,
+            session_path,
+        }
+    }
+
+    /// Locks the screen now, and tells logind the session is locked.
+    fn lock_screen(&mut self) {
+        if self.lock.is_locked() {
+            return;
+        }
+        // PAM would be asked about user "" and refuse every password, so the
+        // lock could only be left from another VT.
+        if self.user.is_empty() {
+            log(
+                Priority::Warning,
+                "not locking: the session's user name is unknown, so no password could unlock it",
+            );
+            return;
+        }
+        self.lock.lock();
+        self.shell.pointer_up();
+        self.set_locked_hint(true);
+        log(Priority::Notice, "screen locked");
+    }
+
+    fn set_locked_hint(&self, locked: bool) {
+        if self.execute
+            && let Some(path) = &self.session_path
+        {
+            let _ = systemd::run(&systemd::locked_hint_argv(path, locked));
+        }
+    }
+
+    /// Checks a submitted password on a background thread, since PAM may
+    /// take seconds (pam_faildelay) and the frame must keep drawing.
+    fn check_password(&mut self, password: String) {
+        let (tx, rx) = mpsc::channel();
+        let user = self.user.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(pam::authenticate(&user, password));
+        });
+        self.unlock = Some(rx);
+    }
+
+    /// Applies the result of a finished password check.
+    fn poll_unlock(&mut self) {
+        let Some(rx) = &self.unlock else { return };
+        let ok = match rx.try_recv() {
+            Ok(ok) => ok,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        };
+        self.unlock = None;
+        self.lock.finish(ok);
+        if ok {
+            self.set_locked_hint(false);
+            log(Priority::Notice, "screen unlocked");
+        } else {
+            log(Priority::Notice, "lock screen: authentication failed");
         }
     }
 
@@ -588,9 +678,20 @@ impl Session {
                 Effect::Session { .. }
                 | Effect::RestartUnit { .. }
                 | Effect::ResetFailed { .. } => {
+                    // Lock at once rather than waiting for logind's signal
+                    // to come back, and without --execute too.
+                    if matches!(
+                        effect,
+                        Effect::Session {
+                            op: SessionOp::Lock
+                        }
+                    ) {
+                        self.lock_screen();
+                    }
                     if self.execute {
                         self.launches += 1;
-                        if let Some(argv) = systemd::effect_argv(&effect, self.launches, None) {
+                        let session = self.session_id.as_deref();
+                        if let Some(argv) = systemd::effect_argv(&effect, self.launches, session) {
                             let _ = systemd::run(&argv);
                         }
                     } else {
@@ -606,7 +707,10 @@ impl Session {
                 Effect::Open { path } => {
                     if self.execute {
                         self.launches += 1;
-                        if let Some(mut argv) = systemd::effect_argv(&effect, self.launches, None) {
+                        let session = self.session_id.as_deref();
+                        if let Some(mut argv) =
+                            systemd::effect_argv(&effect, self.launches, session)
+                        {
                             let split = argv.iter().position(|a| a == "--").unwrap_or(argv.len());
                             argv.insert(
                                 split,
@@ -692,10 +796,17 @@ impl compositor::Shell for Session {
     }
 
     fn focused(&self) -> Option<WindowId> {
+        if self.lock.is_locked() {
+            return None;
+        }
         self.shell.focused()
     }
 
+    /// None while locked, which unmaps every client window.
     fn placements(&self) -> Vec<Placement> {
+        if self.lock.is_locked() {
+            return Vec::new();
+        }
         self.shell
             .placements()
             .into_iter()
@@ -718,6 +829,9 @@ impl compositor::Shell for Session {
     }
 
     fn focus(&mut self, window: WindowId) {
+        if self.lock.is_locked() {
+            return;
+        }
         self.dispatch(vec![Action::Focus {
             window: window.get(),
         }]);
@@ -782,7 +896,8 @@ impl compositor::Shell for Session {
         let inside = |g: mcsapi::Geometry| {
             x >= g.loc.x && y >= g.loc.y && x < g.loc.x + g.size.w && y < g.loc.y + g.size.h
         };
-        self.shell.overview_visible()
+        self.lock.is_locked()
+            || self.shell.overview_visible()
             || self.shell.palette_visible()
             || self.shell.pending_confirmation().is_some()
             || self
@@ -800,6 +915,9 @@ impl compositor::Shell for Session {
 
     fn pointer_down(&mut self, at: (i32, i32), time_ms: u64) -> Press {
         self.super_tap.cancel();
+        if self.lock.is_locked() {
+            return Press::Handled;
+        }
         match self.shell.pointer_down(at, time_ms) {
             Ok(PointerOutcome::Handled { effects }) => {
                 self.perform(effects);
@@ -810,14 +928,23 @@ impl compositor::Shell for Session {
     }
 
     fn pointer_motion(&mut self, at: (i32, i32)) {
-        self.shell.pointer_motion(at);
+        if !self.lock.is_locked() {
+            self.shell.pointer_motion(at);
+        }
     }
 
     fn pointer_up(&mut self) {
-        self.shell.pointer_up();
+        if !self.lock.is_locked() {
+            self.shell.pointer_up();
+        }
     }
 
     fn key(&mut self, key: &KeyInput) -> KeyRoute {
+        // Every key goes to the password field: no shortcut, and no client.
+        if self.lock.is_locked() {
+            self.super_tap.cancel();
+            return KeyRoute::Chrome;
+        }
         let is_super = matches!(key.sym, Keysym::Super_L | Keysym::Super_R);
         if self.super_tap.key(is_super, key.pressed) {
             self.dispatch(vec![Action::Overview { visible: None }]);
@@ -878,6 +1005,9 @@ impl compositor::Shell for Session {
     }
 
     fn client_request(&mut self, window: WindowId, request: ClientRequest) {
+        if self.lock.is_locked() {
+            return;
+        }
         let window = Some(window.get());
         let action = match request {
             ClientRequest::Maximize => Action::ToggleMaximize { window },
@@ -920,6 +1050,18 @@ impl compositor::Shell for Session {
     }
 
     fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {
+        if self.lock.is_locked() {
+            self.poll_unlock();
+        }
+        if self.lock.is_locked() {
+            let theme = self.ui.theme;
+            if show_lock(ui, &mut self.lock, &self.shell, &theme, &self.user)
+                && let Some(password) = self.lock.submit()
+            {
+                self.check_password(password);
+            }
+            return;
+        }
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
         // Windows make room for the on-screen keyboard, and what it typed
@@ -950,6 +1092,9 @@ impl compositor::Shell for Session {
     }
 
     fn blur_regions(&self) -> Vec<Blur> {
+        if self.lock.is_locked() {
+            return Vec::new();
+        }
         self.ui
             .blur_regions()
             .iter()
@@ -1007,7 +1152,11 @@ impl compositor::Shell for Session {
         std::mem::take(&mut self.commands)
     }
 
+    /// Nothing while locked: window titles would show through the lock.
     fn access_subtrees(&mut self) -> Vec<Subtree> {
+        if self.lock.is_locked() {
+            return Vec::new();
+        }
         let mut subtrees = self.title_bar_nodes();
         subtrees.extend(self.registered.values().map(|(_, s)| s.clone()));
         subtrees
@@ -1020,6 +1169,9 @@ impl compositor::Shell for Session {
         action: accesskit::Action,
         value: Option<&str>,
     ) {
+        if self.lock.is_locked() {
+            return;
+        }
         if node.0 >= TITLE_BAR_NODES {
             if action != accesskit::Action::Click {
                 return;
@@ -1158,6 +1310,10 @@ pub fn run(options: Options) -> Result {
     let pending_actions = PendingActions::default();
     let phone = Arc::new(AtomicBool::new(false));
     let session = Session::new(&options, pending_actions.clone(), phone.clone());
+    let lock_path = session.session_path.clone();
+    if options.execute {
+        let _ = systemd::run(&systemd::stop_headless_agent_argv());
+    }
     let apps = CoreApps {
         session: derisk_apps::Session::new()?,
         pending_actions,
@@ -1168,21 +1324,155 @@ pub fn run(options: Options) -> Result {
         .title("derisk")
         .size(w, h)
         .apps(apps);
-    if let Some(path) = agent_socket(options.socket, compositor.remote())? {
+    // One remote for everything: each call to `remote()` replaces the
+    // compositor's job channel, which would disconnect the earlier handles.
+    let remote = compositor.remote();
+    if let Some(path) = agent_socket(options.socket, remote.clone())? {
         log(
             Priority::Notice,
             &format!("agent protocol on {}", path.display()),
         );
     }
+    let lock_watch = lock_path.map(|path| LockWatch::start(path, remote));
     for app in options.launch {
         compositor = compositor.launch(app);
     }
     for client in options.runtime {
         compositor = compositor.runtime(client);
     }
-    compositor.run()?;
+    let result = compositor.run();
+    if let Some(watch) = lock_watch {
+        watch.stop();
+    }
+    result?;
     systemd::notify_stopping();
     Ok(())
+}
+
+/// Locks the screen whenever logind sends this session `Lock`, until the
+/// session ends or `busctl wait` stops working.
+const LOCK_WATCH_RETRY_MIN: Duration = Duration::from_secs(1);
+const LOCK_WATCH_RETRY_MAX: Duration = Duration::from_secs(30);
+
+/// Sleeps for `delay`, waking early when the watch is stopped. Returns
+/// whether the watch should go on.
+fn sleep_unless_stopped(delay: Duration, stopping: &AtomicBool) -> bool {
+    let until = Instant::now() + delay;
+    while Instant::now() < until {
+        if stopping.load(Ordering::SeqCst) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    !stopping.load(Ordering::SeqCst)
+}
+
+struct LockWatch {
+    child: Arc<Mutex<Option<Child>>>,
+    stopping: Arc<AtomicBool>,
+}
+
+impl LockWatch {
+    fn start(path: String, remote: Remote<Session>) -> Self {
+        let child = Arc::new(Mutex::new(None::<Child>));
+        let stopping = Arc::new(AtomicBool::new(false));
+        let watch = Self {
+            child: child.clone(),
+            stopping: stopping.clone(),
+        };
+        std::thread::spawn(move || {
+            let argv = systemd::lock_signal_argv(&path);
+            let mut backoff = LOCK_WATCH_RETRY_MIN;
+            loop {
+                match wait_for_lock(&argv, &child, &stopping) {
+                    Ok(true) => {
+                        backoff = LOCK_WATCH_RETRY_MIN;
+                        if !remote.run(Session::lock_screen) {
+                            return;
+                        }
+                    }
+                    Ok(false) => return,
+                    // A bus restart or a missing busctl must not turn lock
+                    // requests off for the rest of the session: keep trying,
+                    // more slowly, until the session ends.
+                    Err(e) => {
+                        log(
+                            Priority::Warning,
+                            &format!(
+                                "lost logind lock requests ({e}); retrying in {}s",
+                                backoff.as_secs()
+                            ),
+                        );
+                        if !sleep_unless_stopped(backoff, &stopping) {
+                            return;
+                        }
+                        backoff = (backoff * 2).min(LOCK_WATCH_RETRY_MAX);
+                    }
+                }
+            }
+        });
+        watch
+    }
+
+    /// Ends the watch and the `busctl` it is waiting in, so a session that
+    /// closes leaves no process behind.
+    fn stop(self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        if let Ok(mut child) = self.child.lock()
+            && let Some(mut child) = child.take()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Runs one `busctl wait`. Returns whether the signal arrived, or `false`
+/// when the watch was stopped.
+fn wait_for_lock(
+    argv: &[String],
+    slot: &Mutex<Option<Child>>,
+    stopping: &AtomicBool,
+) -> std::io::Result<bool> {
+    {
+        let mut slot = slot.lock().map_err(|_| std::io::Error::other("poisoned"))?;
+        if stopping.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        let (program, args) = argv.split_first().ok_or(std::io::ErrorKind::InvalidInput)?;
+        *slot = Some(
+            ProcessCommand::new(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()?,
+        );
+    }
+    // The child stays in the slot, where stop() can kill it; poll it rather
+    // than block in wait() while holding the lock.
+    loop {
+        let mut slot = slot.lock().map_err(|_| std::io::Error::other("poisoned"))?;
+        let Some(child) = slot.as_mut() else {
+            return Ok(false);
+        };
+        if let Some(status) = child.try_wait()? {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
+            }
+            *slot = None;
+            if stopping.load(Ordering::SeqCst) {
+                return Ok(false);
+            }
+            if status.success() {
+                return Ok(true);
+            }
+            return Err(std::io::Error::other(stderr.trim().to_owned()));
+        }
+        drop(slot);
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn log(priority: Priority, message: &str) {
@@ -1260,6 +1550,14 @@ fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
         let (reply, response) = mpsc::channel();
         let events = events.clone();
         let queued = remote.run(move |session: &mut Session| {
+            // A locked desktop answers nothing: no window titles, no
+            // launches, no actions.
+            if session.lock.is_locked() {
+                let _ = reply.send(
+                    serde_json::json!({"ok": false, "error": "the session is locked"}).to_string(),
+                );
+                return;
+            }
             session.agent_line(conn, &line, reply, &events);
         });
         if !queued {
@@ -1324,6 +1622,20 @@ fn tiled_edges(mode: Mode) -> Edges {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_sleep_ends_early_when_stopped() {
+        let stopping = AtomicBool::new(true);
+        let start = Instant::now();
+        assert!(!sleep_unless_stopped(Duration::from_secs(30), &stopping));
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn retry_sleep_goes_on_when_not_stopped() {
+        let stopping = AtomicBool::new(false);
+        assert!(sleep_unless_stopped(Duration::from_millis(150), &stopping));
+    }
 
     #[test]
     fn runtime_roles_parse() {

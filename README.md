@@ -175,14 +175,46 @@ same theme.
   and pulls in XDG autostart; the compositor exports `WAYLAND_DISPLAY` and
   friends to the user manager and D-Bus activation environment first
   (`systemd::session_start_argv`).
-- **Socket-activated agent.** `derisk-agent.socket` listens on
-  `$XDG_RUNTIME_DIR/derisk/agent.sock` (mode 0600) and starts
-  `derisk-agent.service` (`Type=notify`, watchdog, hardening) on demand.
+- **Socket-activated agent.** Without a desktop, `derisk-agent.socket`
+  listens on `$XDG_RUNTIME_DIR/derisk/agent.sock` (mode 0600) and starts
+  `derisk-agent.service` (`Type=notify`, watchdog, hardening) on demand. A
+  `derisk session` serves that socket itself against the live desktop, so it
+  stops the headless agent first and the socket unit conflicts with
+  `derisk-session.target`.
 - **sd_notify, watchdog and journald.** Readiness, status, watchdog
   keep-alives and stopping are reported to the service manager; logs go to
   the journal with structured fields (stderr outside systemd).
 - **logind.** Lock, suspend, hibernate, log out, reboot and power off from the
-  command palette, assistant or agents.
+  command palette, assistant or agents, acting on this session
+  (`XDG_SESSION_ID`): Log out ends the logind session, not just the target.
+- **Lock screen.** Locking hides every window and sends every key to a
+  password field checked by PAM (the `derisk` service, `data/pam.d/derisk`).
+  With `--execute` the session also locks when logind asks it to (`loginctl
+  lock-session`, `lock-sessions`, `busctl wait` on the session's `Lock`
+  signal) and sets logind's `LockedHint`. While locked every agent request,
+  `tree`, `screenshot` and `input` included, gets `"the session is locked"`,
+  and the AT-SPI tree is empty and ignores actions, since window titles
+  would show through the lock.
+- **Display manager.** `derisk display-manager` replaces gdm: run as root
+  from a system service, it starts `derisk greeter` (the lock screen as a
+  login screen) on a VT as an unprivileged user, checks the password it is
+  given with PAM (`data/pam.d/derisk-login`), and then opens the user's PAM
+  session, so pam_systemd registers it with logind and pam_systemd_home
+  unlocks a homed home area, and runs the session command as the user. When
+  the session ends the greeter comes back. The root half draws nothing; the
+  greeter talks to it over greetd's protocol on a socket only the greeter
+  user can open, so `derisk greeter` also runs unchanged under greetd. The
+  greeter and the session each drive the display themselves, through
+  DRM/KMS, libinput and logind, whenever there is no Wayland or X11 session
+  to nest in (`MCSAPI_BACKEND=kms` or `=winit` decides instead):
+
+  ```console
+  # derisk display-manager --vt 1 -- \
+      derisk greeter -- derisk session --execute
+  ```
+
+  It needs a `derisk-greeter` system user and the two PAM services in
+  `data/pam.d`.
 - **Failed units widget.** Failed user units show in the top bar and overview
   with restart and reset actions.
 
@@ -192,7 +224,9 @@ Install the units:
 $ cargo install --path .
 $ cp data/systemd/user/* ~/.config/systemd/user/
 $ systemctl --user daemon-reload
-$ systemctl --user start derisk-agent.socket
+$ systemctl --user start derisk-agent.socket   # headless only; a session serves the socket itself
+$ sudo install -m644 data/pam.d/derisk /etc/pam.d/derisk   # for the lock screen
+$ sudo install -m644 data/pam.d/derisk-login data/pam.d/derisk-greeter /etc/pam.d/   # for the display manager
 ```
 
 ## Usage
@@ -360,7 +394,7 @@ Requires Rust 1.95 and the system libraries mcsapi links against, for
 example on Debian/Ubuntu:
 
 ```console
-$ sudo apt install libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libinput-dev libudev-dev libgbm-dev libseat-dev libdrm-dev
+$ sudo apt install libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libinput-dev libudev-dev libgbm-dev libseat-dev libdrm-dev libpam0g-dev
 $ cargo build
 $ cargo test --workspace
 $ cargo clippy --workspace --all-targets -- -D warnings

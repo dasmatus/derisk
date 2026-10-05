@@ -5,7 +5,9 @@ Documentation=https://github.com/dasmatus/derisk
 # (see derisk::systemd::session_start_argv). Pulls in the generic graphical
 # session so portals, tray hosts and XDG autostart units follow it.
 BindsTo=graphical-session.target
-Wants=graphical-session-pre.target xdg-desktop-autostart.target derisk-agent.socket
+# Not derisk-agent.socket: `derisk session` serves the agent socket itself,
+# on the live desktop, and a headless agent on the same path would refuse it.
+Wants=graphical-session-pre.target xdg-desktop-autostart.target
 After=graphical-session-pre.target
 Before=xdg-desktop-autostart.target
 RefuseManualStart=no

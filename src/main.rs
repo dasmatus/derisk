@@ -8,7 +8,13 @@
 #[cfg(feature = "host")]
 mod computer;
 #[cfg(feature = "host")]
+mod dm;
+#[cfg(feature = "host")]
+mod greeter;
+#[cfg(feature = "host")]
 mod host;
+#[cfg(feature = "host")]
+mod pam;
 
 use std::{
     io::{self, BufRead, BufReader, Write},
@@ -46,6 +52,13 @@ derisk: an adaptive, agent-first Wayland desktop shell built on mcsapi
 
 USAGE:
     derisk session [OPTIONS]      Run the desktop (needs the `host` feature)
+    derisk greeter [OPTIONS] -- <session command...>
+                                  Log in through greetd on the lock screen,
+                                  then start the command (needs `host`)
+    derisk display-manager [OPTIONS] -- <greeter command...>
+                                  Be the display manager: run the greeter on
+                                  a VT, check passwords with PAM, and start
+                                  sessions (as root; needs `host`)
     derisk demo                   Run a headless walkthrough
     derisk ask <request...>       Show how the assistant interprets a request
     derisk do <request...>        Ask the running session's assistant to do it
@@ -67,6 +80,17 @@ SESSION OPTIONS:
                           overlay, or panel:<top|bottom|left|right>:<size>
                           [:keyboard]. For GPUI programs (repeatable)
 
+GREETER OPTIONS:
+    --user <NAME>         Fill in this user (default: the only regular user)
+    --env <KEY=VALUE>     Set in the session's environment (repeatable)
+
+DISPLAY MANAGER OPTIONS:
+    --vt <N>                  The VT to run on (default 1)
+    --greeter-user <USER>     Who the greeter runs as (default derisk-greeter)
+    --greeter-service <NAME>  PAM service for the greeter (default derisk-greeter)
+    --service <NAME>          PAM service users log in with (default derisk-login)
+    --runtime-dir <DIR>       Where the greeter's socket goes (default /run/derisk-dm)
+
 AGENT OPTIONS:
     --socket <PATH>       Listen on a Unix socket (default: stdin/stdout)
     --socket-activated    Use the socket passed by systemd (derisk-agent.socket)
@@ -80,6 +104,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("session") => session(&args[1..]),
+        Some("greeter") => greeter(&args[1..]),
+        Some("display-manager") => display_manager(&args[1..]),
         Some("demo") => demo(),
         Some("ask") => ask(&args[1..].join(" ")),
         Some("do") => {
@@ -145,6 +171,66 @@ fn session(args: &[String]) -> Result {
 #[cfg(not(feature = "host"))]
 fn session(_args: &[String]) -> Result {
     Err("this derisk was built without the compositor host; rebuild with `--features host`".into())
+}
+
+#[cfg(feature = "host")]
+fn greeter(args: &[String]) -> Result {
+    let mut options = greeter::Options::default();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--user" => options.user = Some(it.next().ok_or("--user needs a name")?.clone()),
+            "--env" => {
+                let pair = it.next().ok_or("--env needs KEY=VALUE")?;
+                if !pair.contains('=') {
+                    return Err("--env needs KEY=VALUE".into());
+                }
+                options.env.push(pair.clone());
+            }
+            "--" => {
+                options.command = it.cloned().collect();
+                break;
+            }
+            other => return Err(format!("unknown greeter option: {other}").into()),
+        }
+    }
+    greeter::run(options)
+}
+
+#[cfg(not(feature = "host"))]
+fn greeter(_args: &[String]) -> Result {
+    session(&[])
+}
+
+#[cfg(feature = "host")]
+fn display_manager(args: &[String]) -> Result {
+    let mut options = dm::Options::default();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let mut value = |name: &str| {
+            it.next()
+                .cloned()
+                .ok_or_else(|| format!("{name} needs a value"))
+        };
+        match arg.as_str() {
+            "--vt" => options.vt = value("--vt")?.parse()?,
+            "--greeter-user" => options.greeter_user = value("--greeter-user")?,
+            "--greeter-service" => options.greeter_service = value("--greeter-service")?,
+            "--service" => options.service = value("--service")?,
+            "--runtime-dir" => options.runtime_dir = PathBuf::from(value("--runtime-dir")?),
+            "--" => {
+                options.greeter = it.cloned().collect();
+                break;
+            }
+            other => return Err(format!("unknown display-manager option: {other}").into()),
+        }
+    }
+    dm::run(options)
+}
+
+#[cfg(not(feature = "host"))]
+fn display_manager(_args: &[String]) -> Result {
+    session(&[])
 }
 
 fn ask(text: &str) -> Result {
