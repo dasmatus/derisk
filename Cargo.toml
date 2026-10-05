@@ -71,3 +71,10 @@ host = [
     "dep:png",
 ]
 
+
+# One codegen unit and fat LTO across every crate, mcsapi included: release
+# builds are the ones that ship, so they trade build time for inlining across
+# crate boundaries and a smaller binary. CI tests in the dev profile.
+[profile.release]
+lto = true
+codegen-units = 1
