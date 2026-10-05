@@ -1547,6 +1547,7 @@ dependencies = [
  "image",
  "libc",
  "mcsapi",
+ "mcsapi-components",
  "mcsapi-compositor",
  "mcsapi-hardened-malloc",
  "mcsapi-runtime",

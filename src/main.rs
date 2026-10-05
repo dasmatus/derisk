@@ -10,11 +10,17 @@ mod computer;
 #[cfg(feature = "host")]
 mod dm;
 #[cfg(feature = "host")]
+mod firstboot;
+#[cfg(feature = "host")]
 mod greeter;
 #[cfg(feature = "host")]
 mod host;
 #[cfg(feature = "host")]
+mod installer;
+#[cfg(feature = "host")]
 mod pam;
+#[cfg(feature = "host")]
+mod wizard_host;
 
 use std::{
     io::{self, BufRead, BufReader, Write},
@@ -59,6 +65,12 @@ USAGE:
                                   Be the display manager: run the greeter on
                                   a VT, check passwords with PAM, and start
                                   sessions (as root; needs `host`)
+    derisk setup [OPTIONS]        First-boot setup: language, keyboard, time
+                                  zone, network and the first account, when
+                                  no regular user exists (as root; needs `host`)
+    derisk installer -- <backend command...>
+                                  Install the system, with the backend doing
+                                  the disk work (as root; needs `host`)
     derisk demo                   Run a headless walkthrough
     derisk ask <request...>       Show how the assistant interprets a request
     derisk do <request...>        Ask the running session's assistant to do it
@@ -91,6 +103,11 @@ DISPLAY MANAGER OPTIONS:
     --service <NAME>          PAM service users log in with (default derisk-login)
     --runtime-dir <DIR>       Where the greeter's socket goes (default /run/derisk-dm)
 
+SETUP AND INSTALLER OPTIONS:
+    --force               Show the setup even when a regular user exists
+    --dry-run             Show the setup's pages but save nothing
+    --size <WxH>          Window size when nested (default 1280x800)
+
 AGENT OPTIONS:
     --socket <PATH>       Listen on a Unix socket (default: stdin/stdout)
     --socket-activated    Use the socket passed by systemd (derisk-agent.socket)
@@ -114,6 +131,8 @@ fn main() {
         Some("session") => session(&args[1..]),
         Some("greeter") => greeter(&args[1..]),
         Some("display-manager") => display_manager(&args[1..]),
+        Some("setup") => setup(&args[1..]),
+        Some("installer") => installer(&args[1..]),
         Some("demo") => demo(),
         Some("ask") => ask(&args[1..].join(" ")),
         Some("do") => {
@@ -238,6 +257,52 @@ fn display_manager(args: &[String]) -> Result {
 
 #[cfg(not(feature = "host"))]
 fn display_manager(_args: &[String]) -> Result {
+    session(&[])
+}
+
+#[cfg(feature = "host")]
+fn setup(args: &[String]) -> Result {
+    let mut options = firstboot::Options::default();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--force" => options.force = true,
+            "--dry-run" => options.dry_run = true,
+            "--size" => options.size = parse_size(it.next())?,
+            other => return Err(format!("unknown setup option: {other}").into()),
+        }
+    }
+    firstboot::run(options)
+}
+
+#[cfg(not(feature = "host"))]
+fn setup(_args: &[String]) -> Result {
+    session(&[])
+}
+
+#[cfg(feature = "host")]
+fn installer(args: &[String]) -> Result {
+    let mut size = (1280, 800);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--size" => size = parse_size(it.next())?,
+            "--" => return installer::run(it.cloned().collect(), size),
+            other => return Err(format!("unknown installer option: {other}").into()),
+        }
+    }
+    Err("derisk installer needs `--` and the backend's command".into())
+}
+
+#[cfg(feature = "host")]
+fn parse_size(arg: Option<&String>) -> Result<(i32, i32)> {
+    let size = arg.ok_or("--size needs WxH")?;
+    let (w, h) = size.split_once('x').ok_or("--size needs WxH")?;
+    Ok((w.parse()?, h.parse()?))
+}
+
+#[cfg(not(feature = "host"))]
+fn installer(_args: &[String]) -> Result {
     session(&[])
 }
 

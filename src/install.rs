@@ -1,0 +1,161 @@
+//! The protocol between `derisk installer` and the program that installs.
+//!
+//! derisk draws the installer; it does not know how an operating system is
+//! put on a disk. That is the backend's: a program the installer starts and
+//! talks to in JSON lines, requests on its stdin and events on its stdout.
+//! LosOS's backend is `losos-installer serve`, which lays the disk out with
+//! systemd-repart and fills it with systemd-sysupdate; any other system can
+//! supply its own.
+//!
+//! The backend speaks first, with [`Event::Hello`], and answers each
+//! [`Request`] with events. An install sends [`Event::Step`] and
+//! [`Event::Line`] as it goes and ends with [`Event::Installed`] or
+//! [`Event::Failed`]. What the backend prints to stderr goes to the journal.
+//!
+//! ```text
+//! → {"event":"hello","name":"LosOS Desktop","source":"https://…"}
+//! ← {"method":"disks"}
+//! → {"event":"disks","disks":[{"path":"/dev/vda","name":"vda","model":"","size":21474836480,"removable":false}]}
+//! ← {"method":"install","disk":"/dev/vda"}
+//! → {"event":"steps","labels":["Partitioning the disk","…"]}
+//! → {"event":"step","index":0,"count":4,"label":"Partitioning the disk"}
+//! → {"event":"line","text":"…"}
+//! → {"event":"installed"}
+//! ← {"method":"reboot"}
+//! ```
+//!
+//! Getting online is not the backend's: the installer joins networks itself
+//! (see [`crate::network`]), since a live system and an installed one do
+//! that the same way.
+
+use serde::{Deserialize, Serialize};
+
+/// What the installer asks of the backend.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "method", rename_all = "snake_case")]
+pub enum Request {
+    /// List the disks that can be installed onto.
+    Disks,
+    /// Erase `disk` and install onto it.
+    Install {
+        /// The disk's device node, from [`Disk::path`].
+        disk: String,
+    },
+    /// Restart into the installed system.
+    Reboot,
+    /// Power off.
+    PowerOff,
+}
+
+/// A disk the backend offers.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Disk {
+    /// The device node, such as `/dev/nvme0n1`.
+    pub path: String,
+    /// The kernel's name for it, such as `nvme0n1`.
+    pub name: String,
+    /// The model, when the disk reports one.
+    #[serde(default)]
+    pub model: String,
+    /// Bytes.
+    pub size: u64,
+    /// Whether it is removable, such as a USB stick or an SD card.
+    #[serde(default)]
+    pub removable: bool,
+}
+
+impl Disk {
+    /// The size in decimal units, as drives are sold.
+    pub fn size_text(&self) -> String {
+        human_size(self.size)
+    }
+
+    /// How a list names it: the model, or the kernel name when there is
+    /// none.
+    pub fn title(&self) -> &str {
+        if self.model.trim().is_empty() {
+            &self.name
+        } else {
+            self.model.trim()
+        }
+    }
+}
+
+/// What the backend tells the installer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum Event {
+    /// The backend is ready. `name` is the system being installed, and
+    /// `source` where it comes from, shown before anything is erased.
+    Hello {
+        /// The system's name.
+        name: String,
+        /// Where the system is downloaded from, if anywhere.
+        #[serde(default)]
+        source: Option<String>,
+    },
+    /// The answer to [`Request::Disks`].
+    Disks {
+        /// The disks, the installer's own medium left out.
+        disks: Vec<Disk>,
+    },
+    /// The steps an install takes, sent before the first [`Event::Step`] so
+    /// the whole list shows from the start.
+    Steps {
+        /// What each step does, as sentence fragments.
+        labels: Vec<String>,
+    },
+    /// An install moved on to step `index` of `count`.
+    Step {
+        /// Zero-based.
+        index: usize,
+        /// How many steps there are.
+        count: usize,
+        /// What it is doing, as a sentence fragment.
+        label: String,
+        /// How far this step is, from 0 to 1, when the backend can tell.
+        #[serde(default)]
+        fraction: Option<f32>,
+    },
+    /// A line of output from the tools doing the work.
+    Line {
+        /// The line.
+        text: String,
+    },
+    /// The install finished.
+    Installed,
+    /// The request failed.
+    Failed {
+        /// Why, in a sentence.
+        message: String,
+    },
+}
+
+/// Parses one line from the backend; `None` for a line that is not an
+/// event (a backend may print other things while starting).
+pub fn parse_event(line: &str) -> Option<Event> {
+    serde_json::from_str(line.trim()).ok()
+}
+
+/// One request as a line to write to the backend.
+pub fn request_line(request: &Request) -> String {
+    let mut line = serde_json::to_string(request).expect("requests always serialize");
+    line.push('\n');
+    line
+}
+
+/// Bytes in decimal units: `21.5 GB`.
+pub fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}

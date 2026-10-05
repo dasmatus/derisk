@@ -617,6 +617,13 @@ fn spawn_session(
             pam.putenv(pair)?;
         }
     }
+    // The keyboard layout first-boot setup or localectl saved: a Wayland
+    // compositor has no X server to read localed's file, so the login
+    // screen and the session get it as xkbcommon's defaults.
+    let keyboard = derisk::locale::saved_keyboard(Path::new(derisk::locale::X11_KEYBOARD_CONF));
+    for pair in derisk::locale::xkb_environment(&keyboard) {
+        pam.putenv(&pair)?;
+    }
     let argv: Vec<CString> = shell_argv(cmd)?;
     // SAFETY: the daemon is single-threaded, so the child may allocate.
     match unsafe { libc::fork() } {

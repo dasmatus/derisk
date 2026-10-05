@@ -325,6 +325,41 @@ Install `data/portal/derisk.portal` to `share/xdg-desktop-portal/portals`,
 `share/dbus-1/services` and the unit to `share/systemd/user`, with `Exec=` and
 `ExecStart=` made absolute; `nix build` does.
 
+### Installer and first-boot setup
+
+`derisk installer` and `derisk setup` run on the bare seat like the login
+screen, as root, and draw one card of pages over the wallpaper with mcsapi's
+components (`mcsapi-components`), so restyling those restyles both. On a
+phone the card fills the screen and the on-screen keyboard comes up under a
+focused field; elsewhere the keyboard button in the corner brings it up.
+
+```console
+$ derisk setup [--force] [--dry-run] [--size WxH]
+$ derisk installer [--size WxH] -- <backend command...>
+```
+
+`derisk setup` is the first boot: language (`localectl list-locales`),
+keyboard layout (xkeyboard-config's `base.lst`, live while picking, with a
+field to try it), time zone (`timedatectl`), network, and the first account.
+It saves them with `localectl set-locale`, `localectl set-x11-keymap`,
+`timedatectl set-timezone` and `homectl create … --member-of=wheel`, the
+password passed in `NEWPASSWORD` rather than on the command line, and exits;
+when a regular user already exists it exits at once, so a system can start
+it before the display manager on every boot. The display manager reads the
+saved layout back from localed's file and sets `XKB_DEFAULT_*` for the login
+screen and the session. `--dry-run --force` walks the pages without saving.
+
+`derisk installer` draws the pages and joins networks; the disk work is a
+backend's, started from the command after `--`, which speaks JSON lines
+(`src/install.rs`): it says hello with the system's name and source, lists
+disks, installs one with its steps and output, and reboots. LosOS's backend
+is `losos-installer serve`. The installer names the disk and asks once more,
+with the only red button, before anything is erased.
+
+Both share the Network page: wired ports as networkd sees them and Wi-Fi
+over wpa_supplicant's control socket (`src/network.rs`, as NixOS runs it with
+`userControlled`). The setup saves a network it joins (`SAVE_CONFIG`).
+
 ### Headless commands
 
 ```console

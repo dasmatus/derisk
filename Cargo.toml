@@ -15,6 +15,7 @@ mcsapi = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-components = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-hardened-malloc = { git = "https://github.com/dasmatus/mcsapi" }
@@ -41,6 +42,8 @@ repository.workspace = true
 derisk-icons.workspace = true
 derisk-settings.workspace = true
 mcsapi.workspace = true
+# Buttons, fields and alerts for the installer and first-boot setup.
+mcsapi-components.workspace = true
 # Wallpapers in the formats the Settings app offers.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 mcsapi-theme.workspace = true

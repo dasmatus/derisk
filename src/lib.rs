@@ -30,6 +30,10 @@
 //! - [`ui`]: egui rendering of all shell surfaces.
 //! - [`privacy`]: forgetting recent files and emptying old trash.
 //! - [`wallpaper`]: the desktop background, from a color to a looping video.
+//! - [`wizard`], [`setup`], [`install`], [`locale`] and [`network`]: the
+//!   installer (`derisk installer`) and first-boot setup (`derisk setup`),
+//!   their pages, the backend protocol an installer speaks, languages,
+//!   keyboard layouts and time zones, and Wi-Fi.
 //!
 //! ```
 //! use derisk::{action::Action, geom::rect, shell::Shell, snap::SnapZone};
@@ -57,15 +61,19 @@ pub mod effects;
 pub mod geom;
 pub mod greetd;
 pub mod icons;
+pub mod install;
 pub mod ipc;
 pub mod keyboard;
 pub mod keys;
+pub mod locale;
 pub mod lock;
 pub mod menu;
 pub mod mobile;
+pub mod network;
 pub mod overview;
 pub mod palette;
 pub mod privacy;
+pub mod setup;
 pub mod shell;
 pub mod snap;
 pub mod systemd;
@@ -74,5 +82,7 @@ pub mod time;
 pub mod tray;
 pub mod ui;
 pub mod wallpaper;
+pub mod wifi;
+pub mod wizard;
 
 pub use mcsapi;
