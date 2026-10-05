@@ -47,7 +47,10 @@ impl Profile {
         let short = width.min(height);
         let form_factor = if short < 600 {
             FormFactor::Phone
-        } else if short < 900 || (touch && width < 1600) {
+        } else if touch && (short < 900 || width < 1600) {
+            // Only a touchscreen earns the larger targets. A 1280×800 or
+            // 1366×768 laptop driven by a pointer used to land here too and
+            // lost a title bar's worth of every window to finger-sized chrome.
             FormFactor::Tablet
         } else {
             FormFactor::Desktop

@@ -70,7 +70,11 @@ impl Default for SnapConfig {
 
 impl SnapZone {
     /// The zone's frame inside `area`, separated from neighbours by `gap`.
+    ///
+    /// A maximized window has no neighbours to be separated from, so it
+    /// takes the whole area rather than leaving a strip of wallpaper round it.
     pub fn geometry(self, area: Geometry, gap: i32) -> Geometry {
+        let whole = area;
         let area = inset(area, gap / 2);
         let (x, y, w, h) = (area.loc.x, area.loc.y, area.size.w, area.size.h);
         let (lw, th) = (w / 2, h / 2);
@@ -81,7 +85,7 @@ impl SnapZone {
             Self::TopRight => rect(x + lw, y, w - lw, th),
             Self::BottomLeft => rect(x, y + th, lw, h - th),
             Self::BottomRight => rect(x + lw, y + th, w - lw, h - th),
-            Self::Maximize => area,
+            Self::Maximize => return whole,
         };
         inset(raw, gap - gap / 2)
     }
