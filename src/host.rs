@@ -173,7 +173,7 @@ pub struct Session {
     /// Accessibility nodes programs registered for their windows, with
     /// the agent connection that owns them.
     registered: HashMap<WindowId, (u64, Subtree)>,
-    /// Event lines to each agent connection that registered a tree.
+    /// Event lines to each agent connection that registered a tree or menus.
     listeners: HashMap<u64, mpsc::Sender<String>>,
     /// Environment launched apps get from the published theme.
     theme_env: Vec<(String, String)>,
@@ -438,6 +438,17 @@ impl Session {
             };
             let _ = reply.send(line.to_string());
         };
+        // Here, unlike in a headless agent, the connection that registers a
+        // window's menus owns them and hears of picks.
+        if let Ok(ipc::Request::RegisterMenu { window, menus }) =
+            serde_json::from_str::<ipc::Request>(line)
+        {
+            let result = ipc::register_menu(&mut self.shell, conn, window, menus);
+            if result.is_ok() {
+                self.listeners.insert(conn, events.clone());
+            }
+            return respond(result);
+        }
         let request = match ipc::live_request(line) {
             None => {
                 let (response, effects) = ipc::handle_line(&mut self.shell, line);
@@ -513,9 +524,11 @@ impl Session {
         }
     }
 
-    /// An agent connection closed: its registered trees go with it.
+    /// An agent connection closed: its registered trees and menus go with
+    /// it, so a closed program's tab list does not linger in the palette.
     fn agent_disconnected(&mut self, conn: u64) {
         self.registered.retain(|_, (owner, _)| *owner != conn);
+        self.shell.menus.disown(conn);
         self.listeners.remove(&conn);
     }
 
@@ -736,7 +749,25 @@ impl Session {
                         log(Priority::Warning, &format!("xdg-open {path}: {e}"));
                     }
                 }
-                Effect::MenuActivated { .. } | Effect::TrayActivated { .. } => log(
+                Effect::MenuActivated { window, item } => {
+                    // A pick from menus a connection registered goes back to
+                    // it; unowned menus have nobody to tell yet.
+                    match self
+                        .shell
+                        .menus
+                        .recipient(*window, item)
+                        .and_then(|conn| self.listeners.get(&conn))
+                    {
+                        Some(events) => {
+                            let _ = events.send(ipc::menu_event(*window, item).to_string());
+                        }
+                        None => log(
+                            Priority::Info,
+                            &serde_json::to_string(&effect).unwrap_or_default(),
+                        ),
+                    }
+                }
+                Effect::TrayActivated { .. } => log(
                     Priority::Info,
                     &serde_json::to_string(&effect).unwrap_or_default(),
                 ),
@@ -1577,7 +1608,8 @@ fn agent_socket(path: Option<PathBuf>, remote: Remote<Session>) -> Result<Option
     Ok(Some(path))
 }
 
-/// Numbers agent connections, so registered trees know their owner.
+/// Numbers agent connections, so registered trees and menus know their
+/// owner.
 static CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
 fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
@@ -1586,7 +1618,8 @@ fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
     };
     let conn = CONNECTIONS.fetch_add(1, Ordering::Relaxed);
     let writer = Arc::new(Mutex::new(writer));
-    // Events for trees this connection registered arrive between responses.
+    // Events for trees and menus this connection registered arrive between
+    // responses.
     let (events, event_lines) = mpsc::channel::<String>();
     {
         let writer = writer.clone();

@@ -10,6 +10,14 @@
 //! {"method":"register_menu","window":1,"menus":[...]}
 //! ```
 //!
+//! On a live session's socket, `register_menu` makes the connection the
+//! owner of that window's menus: a pick from them in the top bar or the
+//! command palette, or an agent's `activate_menu`, arrives on it as one line,
+//! `{"event":"menu","window":1,"item":"open"}` ([`menu_event`]). Only the
+//! owner may register that window's menus again, which replaces them, and
+//! closing the connection removes them. Elsewhere `register_menu` has no
+//! owner, and picks are only reported as `menu_activated` effects.
+//!
 //! A live session (`derisk session`) also lets agents see and drive the
 //! screen itself ([`LiveRequest`]):
 //!
@@ -21,6 +29,9 @@
 //! {"method":"input","events":[{"type":"click","x":40,"y":12}]}
 //! {"method":"register_tree","window":3,"nodes":[...]}
 //! ```
+//!
+//! Actions on registered nodes come back to the connection that registered
+//! them as `{"event":"action","window":3,"node":1,"action":"click"}`.
 //!
 //! Destructive session operations an agent asks for, directly or by
 //! clicking and typing, wait for the person to confirm them on screen.
@@ -63,7 +74,8 @@ pub enum Request {
         /// Request text.
         text: String,
     },
-    /// Register global menus for a window.
+    /// Register global menus for a window. On a live session's socket the
+    /// connection then owns them and is told of picks; see [`register_menu`].
     RegisterMenu {
         /// Window.
         window: u64,
@@ -643,6 +655,37 @@ fn handle(shell: &mut Shell, request: Request) -> (Result<Value, String>, Vec<Ef
         }
     };
     (result, effects)
+}
+
+/// Registers `window`'s menus for agent connection `conn` of a live
+/// session, which [`crate::menu::GlobalMenu::recipient`] then names for
+/// picks from them. Refuses a window the shell does not manage, and one
+/// whose menus another connection owns, as `register_tree` does.
+pub fn register_menu(
+    shell: &mut Shell,
+    conn: u64,
+    window: u64,
+    menus: Vec<Menu>,
+) -> Result<Value, String> {
+    // Menus for a window that is not there would sit unseen until a later
+    // window happened to get its ID.
+    if mcsapi::WindowId::new(window)
+        .and_then(|w| shell.window_label(w))
+        .is_none()
+    {
+        return Err(format!("unknown window: {window}"));
+    }
+    shell
+        .menus
+        .register_owned(window, conn, menus)
+        .map(|()| Value::Null)
+        .map_err(|_| format!("another connection registered window {window}'s menus"))
+}
+
+/// The event line telling a menu's owner that the person picked `item`
+/// from `window`'s menus.
+pub fn menu_event(window: u64, item: &str) -> Value {
+    json!({"event": "menu", "window": window, "item": item})
 }
 
 fn to_value(value: &impl Serialize) -> Value {

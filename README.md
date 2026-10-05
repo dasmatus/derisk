@@ -87,6 +87,18 @@ $ derisk agent
 
 Responses are `{"ok":true,"result":...}` or `{"ok":false,"error":"..."}`.
 
+Window IDs for `register_menu` come from `state`'s `windows`, each with
+its `id`, `app_id` and `title`. On the live desktop's socket, the
+connection that registers a window's menus owns them: when the person
+picks one of its items in the top bar or the palette (or an agent
+dispatches `activate_menu` for it), it gets
+`{"event":"menu","window":1,"item":"open"}` as a line of its own between
+responses. The owner can register again to replace the menus (a browser
+keeping a list of its tabs current, say); another connection cannot, and
+a window that does not exist is refused. When the owner disconnects its
+menus go away. Menus registered through a headless `derisk agent` have no
+owner: picks from them show only as `menu_activated` effects.
+
 Guard rails: apps can only be launched by plain command or desktop-file
 name (no paths or arguments); reboot, power off, hibernate and log out need
 `"confirmed": true`, which the assistant never sets on its own (the UI asks
