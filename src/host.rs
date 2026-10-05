@@ -1344,6 +1344,18 @@ impl Apps for CoreApps {
     }
 }
 
+/// Whether to open Settings on its Default apps page at login: the OS's
+/// policy has turned a choice screen on and nothing is chosen on it yet.
+/// It comes back every login until there is a choice, as a choice screen
+/// should; it is a window like any other, and closing it skips it for now.
+fn choice_needed() -> bool {
+    let settings = derisk_settings::default_path()
+        .and_then(|path| derisk_settings::Settings::load(&path).ok())
+        .map(|(settings, _)| settings)
+        .unwrap_or_default();
+    derisk_settings::choice::Policy::load().unanswered(&settings.defaults)
+}
+
 /// Runs the session until the window is closed.
 pub fn run(options: Options) -> Result {
     let pending_actions = PendingActions::default();
@@ -1355,7 +1367,7 @@ pub fn run(options: Options) -> Result {
     }
     let apps = CoreApps {
         session: derisk_apps::Session::new()?,
-        pending_actions,
+        pending_actions: pending_actions.clone(),
         phone,
     };
     let (w, h) = options.size;
@@ -1375,6 +1387,12 @@ pub fn run(options: Options) -> Result {
     let lock_watch = lock_path.map(|path| LockWatch::start(path, remote));
     for app in options.launch {
         compositor = compositor.launch(app);
+    }
+    if choice_needed() {
+        if let Ok(mut pending) = pending_actions.lock() {
+            pending.push((derisk_apps::SETTINGS.to_owned(), "default-apps".to_owned()));
+        }
+        compositor = compositor.launch(derisk_apps::SETTINGS);
     }
     for client in options.runtime {
         compositor = compositor.runtime(client);

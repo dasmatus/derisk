@@ -1839,6 +1839,9 @@ impl ShellUi {
             state.chat = true;
         }
 
+        let web = (!state.chat)
+            .then(|| palette::web(&state.query, shell.effects.search))
+            .flatten();
         let (entries, hits, ask) = if state.chat {
             (Vec::new(), Vec::new(), None)
         } else {
@@ -1862,6 +1865,9 @@ impl ShellUi {
             } else {
                 rows.push(ask);
             }
+        }
+        if let Some(web) = &web {
+            rows.push(web);
         }
         if state.query != state.shown_query {
             state.shown_query = state.query.clone();

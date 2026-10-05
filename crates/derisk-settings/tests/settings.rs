@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use derisk_settings::choice::{Policy, SearchEngine};
 use derisk_settings::{
     Accent, ColorScheme, Layout, LowPower, Page, Profile, Settings, SettingsApp, Vrr,
 };
@@ -34,6 +35,9 @@ fn text_round_trips_every_field() {
     settings.appearance.panels.overview = 35;
     settings.appearance.panels.snap_assist = 20;
     settings.power.low_power = LowPower::On;
+    settings.privacy.usage_ping = false;
+    settings.defaults.browser = "org.mozilla.firefox.desktop".into();
+    settings.defaults.search = Some(SearchEngine::Ecosia);
     let (parsed, warnings) = Settings::parse(&settings.to_text());
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(parsed, settings);
@@ -304,4 +308,29 @@ fn a_named_theme_is_loaded_and_a_missing_one_falls_back() {
     }
     assert!(ThemeId::parse("auto").unwrap().is_automatic());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_default_browser_is_a_desktop_file_id_and_nothing_else() {
+    let (settings, warnings) = Settings::parse(
+        "defaults.browser = ../../bin/sh.desktop\n\
+         defaults.browser = firefox\n\
+         defaults.search = altavista\n",
+    );
+    assert_eq!(warnings.len(), 3);
+    assert_eq!(settings.defaults, Default::default());
+    assert!(Settings::default().privacy.usage_ping);
+}
+
+#[test]
+fn default_apps_is_listed_only_when_the_policy_says() {
+    let app = SettingsApp::open(None);
+    assert!(app.listed(Page::Privacy));
+    let hidden = app.with_policy(Policy::default());
+    assert!(!hidden.listed(Page::DefaultApps));
+    let shown = hidden.with_policy(Policy {
+        browser: false,
+        search: true,
+    });
+    assert!(shown.listed(Page::DefaultApps));
 }

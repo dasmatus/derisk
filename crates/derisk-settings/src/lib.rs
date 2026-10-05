@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod choice;
 pub mod flatpak;
 mod model;
 mod pages;
@@ -28,9 +29,9 @@ use std::path::PathBuf;
 
 use mcsapi_ui::{App, Theme, egui};
 pub use model::{
-    Accent, Appearance, BarPosition, ColorScheme, DesktopPrefs, Fit, Input, Layout, LowPower,
-    Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings, ThemeId, TopBar, Vrr,
-    Wallpaper, WallpaperKind, Warning, WindowStyle, default_path,
+    Accent, Appearance, BarPosition, ColorScheme, Defaults, DesktopPrefs, Fit, Input, Layout,
+    LowPower, Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings, ThemeId, TopBar,
+    Vrr, Wallpaper, WallpaperKind, Warning, WindowStyle, default_path,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
 pub use shortcuts::{Chord, KeyName, Shortcut, Shortcuts};
@@ -58,13 +59,16 @@ pub enum Page {
     Notifications,
     /// Dimming, locking, suspend, and low power mode.
     Power,
+    /// The browser and search engine choice screens; listed only while the
+    /// policy turns one on ([`choice`]).
+    DefaultApps,
     /// Version and file location.
     About,
 }
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Appearance,
         Self::Wallpaper,
         Self::TopBar,
@@ -74,6 +78,7 @@ impl Page {
         Self::Privacy,
         Self::Notifications,
         Self::Power,
+        Self::DefaultApps,
         Self::About,
     ];
 
@@ -89,6 +94,7 @@ impl Page {
             Self::Input => "Keyboard & pointer",
             Self::Notifications => "Notifications",
             Self::Power => "Power",
+            Self::DefaultApps => "Default apps",
             Self::About => "About",
         }
     }
@@ -109,6 +115,10 @@ pub struct SettingsApp {
     privacy: privacy::PrivacyUi,
     /// Theme IDs offered on the Appearance page, read once when opened.
     themes: Vec<String>,
+    /// Which choice screens are on, read once when opened.
+    policy: choice::Policy,
+    /// The choice screens' lists, built when first shown.
+    choice: Option<choice::ChoiceUi>,
 }
 
 impl Default for SettingsApp {
@@ -165,7 +175,21 @@ impl SettingsApp {
             page: Page::default(),
             status,
             themes: mcsapi_theme::Library::xdg("derisk").ids(),
+            policy: choice::Policy::load(),
+            choice: None,
         }
+    }
+
+    /// Shows the choice screens as `policy` says, instead of the policy file.
+    pub fn with_policy(mut self, policy: choice::Policy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Whether `page` is in the sidebar: every page but Default apps, which
+    /// shows only once the policy turns a choice screen on.
+    pub fn listed(&self, page: Page) -> bool {
+        page != Page::DefaultApps || self.policy.any()
     }
 
     /// The file being edited.
@@ -192,8 +216,17 @@ impl SettingsApp {
         self.status = Some(match self.settings.save(path) {
             Ok(()) => {
                 let before = std::mem::replace(&mut self.saved, self.settings.clone());
-                self.privacy
-                    .apply_masters(&before.privacy, &self.settings.privacy)
+                let browser = &self.settings.defaults.browser;
+                let mimeapps = (before.defaults.browser != *browser && !browser.is_empty())
+                    .then(choice::mimeapps_path)
+                    .flatten()
+                    .and_then(|path| choice::apply_browser(&path, browser).err())
+                    .map(|e| format!("Saved, but could not set the browser: {e}"));
+                mimeapps
+                    .or_else(|| {
+                        self.privacy
+                            .apply_masters(&before.privacy, &self.settings.privacy)
+                    })
                     .unwrap_or_else(|| "Saved".into())
             }
             Err(error) => format!("Could not save: {error}"),
@@ -219,6 +252,19 @@ impl SettingsApp {
         ui.spacing_mut().text_edit_width = control;
         if self.page == Page::Privacy {
             return privacy::page(ui, &mut s.privacy, &mut self.privacy, theme);
+        }
+        if self.page == Page::DefaultApps {
+            let state = self.choice.get_or_insert_with(choice::ChoiceUi::default);
+            if self.policy.browser {
+                ui.heading(egui::RichText::new("Browser").color(theme.foreground));
+                choice::browser_page(ui, &mut s.defaults, state, theme);
+                ui.add_space(16.0);
+            }
+            if self.policy.search {
+                ui.heading(egui::RichText::new("Search engine").color(theme.foreground));
+                choice::search_page(ui, &mut s.defaults, state, theme);
+            }
+            return;
         }
         egui::Grid::new("settings-page")
             .num_columns(2)
@@ -309,7 +355,7 @@ impl SettingsApp {
                     theme,
                 ),
                 Page::TopBar => pages::top_bar(ui, &mut s.top_bar, theme),
-                Page::Privacy => {}
+                Page::Privacy | Page::DefaultApps => {}
                 Page::Shortcuts => pages::shortcuts(ui, &mut s.shortcuts, &mut self.drafts, theme),
                 Page::Desktop => {
                     let d = &mut s.desktop;
@@ -516,7 +562,8 @@ const NARROW: f32 = 560.0;
 
 impl SettingsApp {
     fn page_buttons(&mut self, ui: &mut egui::Ui) {
-        for page in Page::ALL {
+        let pages: Vec<Page> = Page::ALL.into_iter().filter(|&p| self.listed(p)).collect();
+        for page in pages {
             if ui
                 .selectable_label(self.page == page, page.label())
                 .clicked()

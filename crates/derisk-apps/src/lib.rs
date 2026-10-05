@@ -204,6 +204,7 @@ fn settings_action(action: &str) -> Option<Box<dyn App>> {
         "privacy" => Page::Privacy,
         "notifications" => Page::Notifications,
         "power" => Page::Power,
+        "default-apps" => Page::DefaultApps,
         "about" => Page::About,
         _ => return None,
     };

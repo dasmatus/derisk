@@ -454,6 +454,20 @@ pub struct Privacy {
     pub remember_recent: bool,
     /// Days after which trashed files are deleted for good; 0 keeps them.
     pub empty_trash_days: u16,
+    /// Let the OS count this user as active, once a day. derisk only keeps
+    /// the switch; the OS's ping reads `privacy.usage_ping` from this file
+    /// (see [`crate::choice`]).
+    pub usage_ping: bool,
+}
+
+/// The apps and services chosen on the choice screens ([`crate::choice`]).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Defaults {
+    /// Desktop file ID of the default browser, empty until chosen.
+    pub browser: String,
+    /// The palette's web search engine, `None` until chosen; the palette
+    /// offers no web search until then.
+    pub search: Option<crate::choice::SearchEngine>,
 }
 
 /// Whether the display has variable refresh rate (VRR, Adaptive-Sync), which
@@ -560,6 +574,8 @@ pub struct Settings {
     pub shortcuts: Shortcuts,
     /// Device access, history and trash.
     pub privacy: Privacy,
+    /// The default browser and search engine.
+    pub defaults: Defaults,
     /// Window management.
     pub desktop: DesktopPrefs,
     /// Keyboard and pointer.
@@ -607,7 +623,9 @@ impl Default for Settings {
                 microphone: true,
                 remember_recent: true,
                 empty_trash_days: 30,
+                usage_ping: true,
             },
+            defaults: Defaults::default(),
             desktop: DesktopPrefs {
                 layout: Layout::Tall,
                 gaps: 8,
@@ -812,6 +830,22 @@ impl Settings {
             "privacy.microphone" => put(&mut pv.microphone, parse_bool(value)),
             "privacy.remember_recent" => put(&mut pv.remember_recent, parse_bool(value)),
             "privacy.empty_trash_days" => put(&mut pv.empty_trash_days, parse_in(value, 0, 365)),
+            "privacy.usage_ping" => put(&mut pv.usage_ping, parse_bool(value)),
+            // A desktop file ID, which is a file name: never a path.
+            "defaults.browser" => put(
+                &mut self.defaults.browser,
+                Some(value.to_owned()).filter(|v| {
+                    v.is_empty() || (v.ends_with(".desktop") && !v.contains(['/', ';', '\\']))
+                }),
+            ),
+            "defaults.search" => put(
+                &mut self.defaults.search,
+                if value.is_empty() {
+                    Some(None)
+                } else {
+                    crate::choice::SearchEngine::parse(value).map(Some)
+                },
+            ),
             _ => false,
         }
     }
@@ -876,6 +910,9 @@ impl Settings {
              privacy.microphone = {}\n\
              privacy.remember_recent = {}\n\
              privacy.empty_trash_days = {}\n\
+             privacy.usage_ping = {}\n\
+             defaults.browser = {}\n\
+             defaults.search = {}\n\
              {}",
             a.theme.as_str(),
             a.scheme.as_str(),
@@ -925,6 +962,9 @@ impl Settings {
             self.privacy.microphone,
             self.privacy.remember_recent,
             self.privacy.empty_trash_days,
+            self.privacy.usage_ping,
+            self.defaults.browser,
+            self.defaults.search.map_or("", |e| e.as_str()),
             self.shortcuts.to_text(),
         )
     }

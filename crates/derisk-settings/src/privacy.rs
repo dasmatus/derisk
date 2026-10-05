@@ -135,6 +135,17 @@ pub(crate) fn page(ui: &mut egui::Ui, p: &mut Privacy, state: &mut PrivacyUi, th
                     }),
             );
             ui.end_row();
+            ui.label("Usage count");
+            ui.vertical(|ui| {
+                ui.checkbox(&mut p.usage_ping, "Count me as an active user");
+                hint(
+                    ui,
+                    theme,
+                    "Once a day the system sends an anonymous id that changes every month, \
+                     and nothing else about you, so the project knows how many people use it.",
+                );
+            });
+            ui.end_row();
         });
     ui.add_space(16.0);
     ui.separator();
