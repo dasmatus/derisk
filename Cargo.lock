@@ -4016,7 +4016,7 @@ dependencies = [
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
+source = "git+https://github.com/dasmatus/mcsapi#8d0a34aa0b30f56ef54a78f45453f3f6f4a672ed"
 dependencies = [
  "egui",
  "gpui",
@@ -4028,7 +4028,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
+source = "git+https://github.com/dasmatus/mcsapi#8d0a34aa0b30f56ef54a78f45453f3f6f4a672ed"
 dependencies = [
  "egui",
  "mcsapi-ui",
@@ -4037,7 +4037,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components-gpui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
+source = "git+https://github.com/dasmatus/mcsapi#8d0a34aa0b30f56ef54a78f45453f3f6f4a672ed"
 dependencies = [
  "gpui",
  "libc",
@@ -4049,7 +4049,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
+source = "git+https://github.com/dasmatus/mcsapi#8d0a34aa0b30f56ef54a78f45453f3f6f4a672ed"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4065,21 +4065,22 @@ dependencies = [
 [[package]]
 name = "mcsapi-hardened-malloc"
 version = "0.1.0"
+source = "git+https://github.com/dasmatus/mcsapi#8d0a34aa0b30f56ef54a78f45453f3f6f4a672ed"
 
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
+source = "git+https://github.com/dasmatus/mcsapi#8d0a34aa0b30f56ef54a78f45453f3f6f4a672ed"
 
 [[package]]
 name = "mcsapi-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
+source = "git+https://github.com/dasmatus/mcsapi#8d0a34aa0b30f56ef54a78f45453f3f6f4a672ed"
 
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#81f60a13749b7f416c2d083838cfc8ec5aaf2078"
+source = "git+https://github.com/dasmatus/mcsapi#8d0a34aa0b30f56ef54a78f45453f3f6f4a672ed"
 dependencies = [
  "egui",
  "mcsapi",
