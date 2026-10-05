@@ -375,3 +375,40 @@ fn close_title_matches_beat_the_assistant() {
         );
     }
 }
+
+#[test]
+fn web_search_needs_a_chosen_engine_and_opens_only_its_results() {
+    use derisk_settings::choice::SearchEngine;
+
+    assert_eq!(palette::web("rust", None), None);
+    let engine = Some(SearchEngine::DuckDuckGo);
+    assert_eq!(palette::web("  ", engine), None);
+    assert_eq!(
+        palette::web(">layout", engine),
+        None,
+        "scoped queries stay local"
+    );
+    let entry = palette::web("rust book", engine).unwrap();
+    assert_eq!(entry.category, Category::Web);
+    let Action::SearchWeb { query } = &entry.actions[0] else {
+        panic!("{entry:?}");
+    };
+    assert_eq!(query, "rust book");
+
+    let mut shell = shell();
+    let search = Action::SearchWeb {
+        query: "--help /etc/passwd".into(),
+    };
+    assert!(matches!(
+        shell.apply(search.clone()),
+        Err(Error::NoSearchEngine)
+    ));
+    shell.effects.search = engine;
+    let effects = shell.apply(search).unwrap();
+    assert_eq!(
+        effects,
+        vec![derisk::action::Effect::Open {
+            path: "https://duckduckgo.com/?q=--help+%2Fetc%2Fpasswd".into()
+        }]
+    );
+}

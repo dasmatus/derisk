@@ -141,6 +141,14 @@ pub enum Action {
         /// Absolute path.
         path: String,
     },
+    /// Search the web for `query` with the search engine chosen in
+    /// Settings, in the default browser. The engine decides the URL and the
+    /// query only fills in its query string, so this opens nothing but a
+    /// results page.
+    SearchWeb {
+        /// What to search for.
+        query: String,
+    },
     /// Choose a global-menu item.
     ActivateMenu {
         /// Window owning the menu.
@@ -245,6 +253,7 @@ impl Action {
             } => "Hide the on-screen keyboard".into(),
             Self::Keyboard { visible: None } => "Toggle the on-screen keyboard".into(),
             Self::Open { path } => format!("Open {path}"),
+            Self::SearchWeb { query } => format!("Search the web for {query}"),
             Self::ActivateMenu { item, .. } => format!("Choose menu item {item}"),
             Self::Session { op, .. } => format!("{op:?}"),
             Self::ActivateTray { id, .. } => format!("Activate tray item {id}"),
@@ -294,9 +303,11 @@ pub enum Effect {
         /// Window.
         window: u64,
     },
-    /// Open a file or folder with its default application (`xdg-open`).
+    /// Open a file or folder with its default application (`xdg-open`), or
+    /// a web search's results page in the default browser.
     Open {
-        /// Absolute path, checked by the shell.
+        /// Absolute path, checked by the shell, or the https URL the chosen
+        /// search engine builds.
         path: String,
     },
     /// Forward a global-menu activation to the app (e.g. dbusmenu `Event`).

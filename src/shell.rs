@@ -76,6 +76,8 @@ pub enum Error {
     NotUnderstood(String),
     /// Not a valid desktop action ID.
     UnknownAction(String),
+    /// No web search engine has been chosen in Settings.
+    NoSearchEngine,
 }
 
 impl std::fmt::Display for Error {
@@ -101,6 +103,7 @@ impl std::fmt::Display for Error {
             Self::NotOpenable(path) => write!(f, "cannot open {path:?}"),
             Self::NotUnderstood(text) => write!(f, "I don't know how to \"{text}\""),
             Self::UnknownAction(id) => write!(f, "not a desktop action ID: {id:?}"),
+            Self::NoSearchEngine => f.write_str("no search engine chosen in Settings"),
         }
     }
 }
@@ -1035,6 +1038,13 @@ impl Shell {
                     return Err(Error::NotOpenable(path));
                 }
                 return Ok(vec![Effect::Open { path }]);
+            }
+            Action::SearchWeb { query } => {
+                let engine = self.effects.search.ok_or(Error::NoSearchEngine)?;
+                // An https URL, so xdg-open cannot read it as an option.
+                return Ok(vec![Effect::Open {
+                    path: engine.url(&query),
+                }]);
             }
             Action::ActivateMenu { window, item } => {
                 let w = self.target(window)?;

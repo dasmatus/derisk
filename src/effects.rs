@@ -54,6 +54,8 @@ pub struct Effects {
     pub top_bar: TopBar,
     /// Window frame corners and shadows.
     pub windows: WindowStyle,
+    /// The palette's web search engine, once one is chosen.
+    pub search: Option<derisk_settings::choice::SearchEngine>,
 }
 
 impl Default for Effects {
@@ -109,6 +111,7 @@ impl Effects {
             vrr: settings.desktop.vrr,
             top_bar: settings.top_bar,
             windows: settings.windows,
+            search: settings.defaults.search,
         }
     }
 

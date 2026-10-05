@@ -70,6 +70,8 @@ pub enum Category {
     File,
     /// Ask the assistant.
     Ask,
+    /// Search the web with the chosen engine.
+    Web,
 }
 
 impl Category {
@@ -87,6 +89,7 @@ impl Category {
             Self::System => "System",
             Self::File => "Files",
             Self::Ask => "Assistant",
+            Self::Web => "Web",
         }
     }
 
@@ -441,6 +444,25 @@ pub fn ask(query: &str) -> Entry {
         )
         .detail(e.to_string()),
     }
+}
+
+/// The web search entry for a query, when a search engine has been chosen
+/// (Settings, Default apps). The palette shows it after everything else, so
+/// it is there for what nothing on the computer matches.
+pub fn web(query: &str, engine: Option<derisk_settings::choice::SearchEngine>) -> Option<Entry> {
+    let (scope, text) = scope(query);
+    let engine = engine.filter(|_| scope == Scope::All && !text.is_empty())?;
+    Some(
+        Entry::new(
+            Category::Web,
+            "system-search",
+            format!("Search the web for “{text}”"),
+            vec![Action::SearchWeb {
+                query: text.to_owned(),
+            }],
+        )
+        .detail(engine.name()),
+    )
 }
 
 /// Everything the palette can offer right now.
