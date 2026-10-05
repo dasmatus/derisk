@@ -141,6 +141,20 @@ fn close_button_click_emits_close_effect() {
 }
 
 #[test]
+fn a_lone_or_maximized_window_fills_the_work_area() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    // Gaps separate tiles; one tile has nothing to be separated from.
+    assert_eq!(frame_of(&shell, a), shell.work_area());
+    let (b, _) = shell.map_window("b", "B");
+    assert_ne!(frame_of(&shell, b), shell.work_area());
+    shell
+        .apply(Action::ToggleMaximize { window: None })
+        .unwrap();
+    assert_eq!(frame_of(&shell, b), shell.work_area());
+}
+
+#[test]
 fn maximize_toggles_and_minimize_hides() {
     let mut shell = desktop();
     let (a, _) = shell.map_window("a", "A");

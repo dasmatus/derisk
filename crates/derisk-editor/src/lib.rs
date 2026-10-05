@@ -327,10 +327,12 @@ impl App for EditorApp {
         });
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
+                // The text area fills the window, so a click anywhere below
+                // the last line still puts the cursor in the document.
                 let output = egui::TextEdit::multiline(&mut self.document.text)
                     .code_editor()
                     .desired_width(f32::INFINITY)
-                    .desired_rows(30)
+                    .min_size(ui.available_size())
                     .frame(egui::Frame::NONE)
                     .show(ui);
                 if let Some(range) = output.cursor_range {

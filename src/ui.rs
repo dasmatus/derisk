@@ -552,9 +552,17 @@ impl ShellUi {
             return;
         }
         let theme = &self.theme;
+        // A window that fills the work area meets the screen edges and the
+        // top bar: an outline, rounded corners or a shadow there would only
+        // frame the screen and show slivers of wallpaper in the corners.
+        let fills = p.frame == shell.work_area();
         // Client surfaces are drawn square by the compositor, so only the
         // title bar's top corners round.
-        let r = shell.effects.windows.corner_radius.min(20);
+        let r = if fills {
+            0
+        } else {
+            shell.effects.windows.corner_radius.min(20)
+        };
         let radius = CornerRadius {
             nw: r,
             ne: r,
@@ -562,7 +570,7 @@ impl ShellUi {
             se: 0,
         };
         // A soft shadow separates overlapping windows.
-        if shell.look().shadows {
+        if shell.look().shadows && !fills {
             painter.add(
                 egui::epaint::Shadow {
                     offset: [0, 6],
@@ -582,19 +590,21 @@ impl ShellUi {
                 theme.background
             },
         );
-        painter.rect_stroke(
-            to_rect(p.frame),
-            radius,
-            Stroke::new(
-                1.0,
-                if p.focused {
-                    theme.accent
-                } else {
-                    theme.border
-                },
-            ),
-            StrokeKind::Inside,
-        );
+        if !fills {
+            painter.rect_stroke(
+                to_rect(p.frame),
+                radius,
+                Stroke::new(
+                    1.0,
+                    if p.focused {
+                        theme.accent
+                    } else {
+                        theme.border
+                    },
+                ),
+                StrokeKind::Inside,
+            );
+        }
         for (button, area) in bar.buttons(p.frame) {
             let r = to_rect(area);
             let name = match button {

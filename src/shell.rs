@@ -1248,14 +1248,13 @@ impl Shell {
         let topmost_tiled = self.stack.iter().rev().find(|w| tiled.contains(w)).copied();
         let layout = ws.layout();
         let mut out: Vec<WindowPlacement> = match layout.arrange(tile_area, tiled.iter().copied()) {
-            Ok(placements) if layout != Layout::Monocle => placements
+            Ok(placements) if layout != Layout::Monocle && tiled.len() > 1 => placements
                 .map(|p| place(p.window, inset(p.geometry, gap - gap / 2)))
                 .collect(),
-            // Monocle, or too little space to tile: show the topmost tiled window.
-            _ => topmost_tiled
-                .map(|w| place(w, inset(tile_area, gap - gap / 2)))
-                .into_iter()
-                .collect(),
+            // Monocle, a lone tiled window, or too little space to tile: the
+            // topmost tiled window fills the work area. Gaps separate tiles
+            // from each other, and one tile has nothing to be separated from.
+            _ => topmost_tiled.map(|w| place(w, area)).into_iter().collect(),
         };
 
         for &w in &self.stack {

@@ -1030,8 +1030,8 @@ impl compositor::Shell for Session {
     fn paint_background(&mut self, painter: &egui::Painter, screen: egui::Rect) {
         let look = self.shell.look();
         let seen = Visibility {
-            // A maximized window keeps the gap around it; a strip that thin
-            // isn't worth decoding video for.
+            // Tiled windows leave gaps between them; strips that thin aren't
+            // worth decoding video for.
             covered: !self.shell.overview_visible()
                 && wallpaper::covered(
                     inset(self.shell.work_area(), self.shell.profile().gap),
