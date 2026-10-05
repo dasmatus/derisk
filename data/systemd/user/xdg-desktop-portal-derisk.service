@@ -1,0 +1,20 @@
+[Unit]
+Description=Portal service (derisk implementation)
+Documentation=https://github.com/dasmatus/derisk
+# Started by D-Bus activation when xdg-desktop-portal first asks for the
+# derisk backend. It reads the session's theme and agent socket, so it is
+# only useful while a derisk session runs.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.impl.portal.desktop.derisk
+ExecStart=xdg-desktop-portal-derisk
+Restart=on-failure
+Slice=session.slice
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
