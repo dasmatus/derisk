@@ -31,10 +31,10 @@ use crate::{
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
     effects::{BlurArea, Look},
-    geom::{inset, rect},
+    geom::inset,
     greetd::{Login, Phase},
     icons,
-    keyboard::{self, Key as OskKey, Keyboard, Output as OskOutput, Shift},
+    keyboard::{Key as OskKey, Keyboard, Output as OskOutput, Shift},
     lock::LockScreen,
     menu::{Menu, MenuEntry},
     mobile::{self, NavState},
@@ -170,7 +170,9 @@ pub struct ShellUi {
     swipe_from: Option<Pos2>,
     /// The on-screen keyboard (phones only).
     pub keyboard: Keyboard,
-    keyboard_open: bool,
+    /// Whether the keyboard showed last frame, to start it fresh each time
+    /// it comes up.
+    keyboard_shown: bool,
     /// Keyboard output for the chrome's own text fields, fed in next frame.
     chrome_input: Vec<egui::Event>,
     /// Keyboard output for the focused window, for the host to deliver.
@@ -336,7 +338,7 @@ impl ShellUi {
             touch_style: false,
             swipe_from: None,
             keyboard: Keyboard::new(),
-            keyboard_open: false,
+            keyboard_shown: false,
             chrome_input: Vec::new(),
             window_input: Vec::new(),
             backspace_repeat: None,
@@ -470,21 +472,6 @@ impl ShellUi {
                 FontId::proportional(name * 0.75),
                 self.theme.border,
             );
-        }
-    }
-
-    /// Whether the on-screen keyboard shows: on phones, while the palette
-    /// is open or after the navigation bar's keyboard button.
-    pub fn keyboard_visible(&self, shell: &Shell) -> bool {
-        shell.is_phone() && self.keyboard_open
-    }
-
-    /// The keyboard's height, for [`Shell::keyboard`]; 0 while hidden.
-    pub fn keyboard_height(&self, shell: &Shell) -> i32 {
-        if self.keyboard_visible(shell) {
-            keyboard::HEIGHT
-        } else {
-            0
         }
     }
 
@@ -672,10 +659,10 @@ impl ShellUi {
             let events = std::mem::take(&mut self.chrome_input);
             ui.ctx().input_mut(|i| i.events.extend(events));
         }
-        // The palette's search field is the one to type in: bring the
-        // keyboard up with it, and down again after.
-        if phone && shell.palette_visible() != self.palette.open {
-            self.keyboard_open = shell.palette_visible();
+        if shell.keyboard_visible() != self.keyboard_shown
+            || shell.palette_visible() != self.palette.open
+        {
+            self.keyboard_shown = shell.keyboard_visible();
             self.keyboard.reset();
         }
         self.drag_preview(ui, shell);
@@ -690,7 +677,6 @@ impl ShellUi {
         if phone {
             self.status_bar(ui, shell, frame, &mut actions);
             self.nav_bar(ui, shell, frame, &mut actions);
-            self.on_screen_keyboard(ui, shell);
         } else {
             self.top_bar(ui, shell, frame, &mut actions);
         }
@@ -701,6 +687,7 @@ impl ShellUi {
         if let Some(op) = shell.pending_confirmation() {
             self.confirmation(ui, shell, op, &mut actions);
         }
+        self.on_screen_keyboard(ui, shell);
         if !frame.done {
             let painter = ui.ctx().layer_painter(egui::LayerId::new(
                 Order::Foreground,
@@ -984,6 +971,7 @@ impl ShellUi {
                         );
                     }
                     self.indicators(ui, shell, actions);
+                    self.keyboard_button(ui, shell, actions);
                     self.tray_icons(ui, shell, height, actions);
                 });
             },
@@ -1119,7 +1107,7 @@ impl ShellUi {
                 mobile::NavButton::Back => false,
                 mobile::NavButton::Home => state.overview,
                 mobile::NavButton::Apps => state.palette,
-                mobile::NavButton::Keyboard => self.keyboard_open,
+                mobile::NavButton::Keyboard => shell.keyboard_visible(),
             };
             if response.is_pointer_button_down_on() {
                 ui.painter()
@@ -1137,31 +1125,42 @@ impl ShellUi {
                 },
             );
             if response.clicked() {
-                if button == mobile::NavButton::Keyboard {
-                    self.keyboard_open = !self.keyboard_open;
-                    self.keyboard.reset();
-                }
                 actions.extend(mobile::tap(button, state));
             }
         }
     }
 
-    /// The on-screen keyboard above the navigation bar: a strip of word
-    /// suggestions and four rows of keys (see [`crate::keyboard`]). Output
+    /// The on-screen keyboard, floating over the bottom of the screen (see
+    /// [`Shell::keyboard_area`]): a strip of word suggestions and four rows of keys (see [`crate::keyboard`]). Output
     /// goes to the chrome while the palette or overview is up, and to the
     /// focused window otherwise.
     fn on_screen_keyboard(&mut self, ui: &mut Ui, shell: &Shell) {
-        if !self.keyboard_visible(shell) {
+        let Some(area) = shell.keyboard_area() else {
             self.backspace_repeat = None;
             return;
-        }
-        let nav = shell.nav_bar().area(shell.output());
-        let area = rect(
-            nav.loc.x,
-            nav.loc.y - keyboard::HEIGHT,
-            nav.size.w,
-            keyboard::HEIGHT,
+        };
+        let r = to_rect(area);
+        // A layer of its own in the tooltip order puts the keyboard above
+        // everything else the chrome draws, the palette and dialogs
+        // included, for drawing and for taps alike. The chrome itself is
+        // drawn above every window, so nothing an app shows covers it.
+        // A plain Ui rather than an Area: a new Area spends its first frame
+        // measuring itself unseen, which would swallow the first tap.
+        let id = Id::new("derisk-osk");
+        let mut keys = Ui::new(
+            ui.ctx().clone(),
+            id,
+            egui::UiBuilder::new()
+                .layer_id(egui::LayerId::new(Order::Tooltip, id))
+                .max_rect(r),
         );
+        // Taps between keys stop here instead of reaching what is drawn
+        // under the keyboard.
+        keys.interact(r, id.with("backdrop"), Sense::click());
+        self.keyboard_keys(&mut keys, shell, area);
+    }
+
+    fn keyboard_keys(&mut self, ui: &mut Ui, shell: &Shell, area: Geometry) {
         let theme = self.theme;
         let r = to_rect(area);
         // Opaque, so nothing reads through the keys.
@@ -1285,6 +1284,30 @@ impl ShellUi {
 
     /// Failed units and agent activity, as buttons that open the palette on
     /// them. Shared by the desktop top bar and the phone status bar.
+    /// The top bar's on-screen keyboard toggle, on touchscreens (the
+    /// keyboard is in the palette everywhere else) and while it shows, so it
+    /// can always be put away the way it came up. Phones have theirs on the
+    /// navigation bar.
+    fn keyboard_button(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        if !shell.profile().touch && !shell.keyboard_visible() {
+            return;
+        }
+        let button = ui
+            .add(
+                egui::Button::new(RichText::new("⌨").color(if shell.keyboard_visible() {
+                    self.theme.accent
+                } else {
+                    self.theme.foreground
+                }))
+                .frame(false),
+            )
+            .on_hover_text("On-screen keyboard");
+        name(ui, &button, Role::Button, "On-screen keyboard");
+        if button.clicked() {
+            actions.push(Action::Keyboard { visible: None });
+        }
+    }
+
     fn indicators(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
         let failed = (!shell.failed_units.is_empty()).then(|| {
             let n = shell.failed_units.len();
@@ -1785,7 +1808,12 @@ impl ShellUi {
     /// assistant as fallback, and the agent conversation (chat view).
     fn palette(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
         let theme = self.theme;
-        let keyboard = self.keyboard_height(shell) as f32;
+        // A phone's palette runs down to the keyboard; elsewhere the keyboard
+        // floats over the bottom of the screen, clear of the palette.
+        let keyboard = shell
+            .keyboard_area()
+            .filter(|_| shell.is_phone())
+            .map_or(0.0, |k| k.size.h as f32);
         let state = &mut self.palette;
         let mut cursor_to_end = false;
         if !state.open {

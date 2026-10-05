@@ -19,6 +19,7 @@ use crate::{
     decorations::{Button, ClickTracker, Hit},
     effects::{Effects, Look},
     geom::{Point, Rect, centered, contains, inset, rect},
+    keyboard,
     menu::{self, GlobalMenu},
     mobile::NavBar,
     overview::Battery,
@@ -37,6 +38,14 @@ pub const MAX_WORKSPACES: u64 = 9;
 
 /// Pointer travel, in logical pixels, before a title bar press becomes a drag.
 pub const DRAG_THRESHOLD: i32 = 6;
+
+/// Widest the on-screen keyboard gets on a desktop, in logical pixels: keys
+/// stretched across a 1920 px screen are too far apart to type on.
+pub const KEYBOARD_MAX_WIDTH: i32 = 960;
+
+/// Shortest a window gets when it shrinks to clear the on-screen keyboard.
+/// One that would end up shorter moves up instead, keeping its size.
+const KEYBOARD_MIN_CLIENT: i32 = 160;
 
 /// A shell operation failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -265,10 +274,9 @@ pub struct Shell {
     pub failed_units: Vec<String>,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
-    /// Height of the on-screen keyboard above the navigation bar, updated by
-    /// the host from the chrome; 0 while it is hidden. Windows shrink to
-    /// stay above it, so the field being typed in stays visible.
-    pub keyboard: i32,
+    /// Whether the on-screen keyboard is showing (see
+    /// [`Shell::keyboard_area`]).
+    keyboard: bool,
     /// Whether the latest input was injected by an agent or came from an
     /// AT-SPI action, rather than from the keyboard or pointer.
     synthetic_input: bool,
@@ -368,7 +376,7 @@ impl Shell {
             battery: None,
             failed_units: Vec::new(),
             effects: Effects::default(),
-            keyboard: 0,
+            keyboard: false,
             synthetic_input: false,
             agent_depth: 0,
             confirmation: None,
@@ -462,14 +470,13 @@ impl Shell {
 
     /// The output minus the top bar. An auto-hidden bar slides over windows
     /// instead of taking room from them. Phones also lose the navigation bar
-    /// and the on-screen keyboard, and keep their status bar shown.
+    /// and keep their status bar shown. The on-screen keyboard takes no room
+    /// here: it floats over windows (see [`Shell::keyboard_area`]).
     pub fn work_area(&self) -> Geometry {
         let o = self.output;
         if self.is_phone() {
             let bar = self.profile.top_bar.min(o.size.h - 1);
-            let nav = (self.profile.nav_bar + self.keyboard)
-                .min(o.size.h - bar - 1)
-                .max(0);
+            let nav = self.profile.nav_bar.min(o.size.h - bar - 1).max(0);
             return rect(o.loc.x, o.loc.y + bar, o.size.w, o.size.h - bar - nav);
         }
         if self.effects.top_bar.autohide {
@@ -565,6 +572,48 @@ impl Shell {
     /// Whether the command palette is showing.
     pub fn palette_visible(&self) -> bool {
         self.palette
+    }
+
+    /// Whether the on-screen keyboard is showing.
+    pub fn keyboard_visible(&self) -> bool {
+        self.keyboard
+    }
+
+    /// Where the on-screen keyboard is drawn while it shows: along the bottom
+    /// edge, above a phone's navigation bar or a top bar moved to the bottom.
+    ///
+    /// It is an overlay, not part of the layout: it covers whatever windows
+    /// are under it, and only the focused window moves out from under it
+    /// (see [`Shell::placements`]), the way a phone resizes the app being
+    /// typed in. Other windows keep their places, so showing the keyboard
+    /// never reshuffles the desktop. On a wide screen it stays phone-sized
+    /// rather than stretching keys across the whole output.
+    pub fn keyboard_area(&self) -> Option<Geometry> {
+        if !self.keyboard {
+            return None;
+        }
+        let o = self.output;
+        let below = if self.is_phone() {
+            self.profile.nav_bar
+        } else if self.effects.top_bar.position == BarPosition::Bottom
+            && !self.effects.top_bar.autohide
+        {
+            self.bar_area().size.h
+        } else {
+            0
+        };
+        let height = keyboard::HEIGHT.min(o.size.h - below).max(0);
+        let width = if self.profile.form_factor == FormFactor::Desktop {
+            o.size.w.min(KEYBOARD_MAX_WIDTH)
+        } else {
+            o.size.w
+        };
+        Some(rect(
+            o.loc.x + (o.size.w - width) / 2,
+            o.loc.y + o.size.h - below - height,
+            width,
+            height,
+        ))
     }
 
     /// The pending Snap Assist offer, if any.
@@ -972,6 +1021,14 @@ impl Shell {
             Action::Palette { visible } => {
                 self.palette = visible.unwrap_or(!self.palette);
                 self.drag = None;
+                // The palette's search field is the one to type in on a
+                // phone: bring the keyboard up with it, and down again after.
+                if self.is_phone() {
+                    self.keyboard = self.palette;
+                }
+            }
+            Action::Keyboard { visible } => {
+                self.keyboard = visible.unwrap_or(!self.keyboard);
             }
             Action::Open { path } => {
                 if !openable(Path::new(&path)) {
@@ -1140,6 +1197,20 @@ impl Shell {
     /// Tiled windows come first (only the topmost in monocle), then snapped and
     /// floating windows in stacking order. Minimized windows are omitted.
     pub fn placements(&self) -> Vec<WindowPlacement> {
+        let mut out = self.arranged();
+        if let Some(keyboard) = self.keyboard_area() {
+            let title = self.profile.title_bar;
+            for p in out.iter_mut().filter(|p| p.focused) {
+                p.frame = clear_of_keyboard(p.frame, keyboard, self.work_area());
+                p.client = title.client(p.frame);
+            }
+        }
+        out
+    }
+
+    /// [`Shell::placements`] as the layout has them, before the focused
+    /// window makes room for the on-screen keyboard.
+    fn arranged(&self) -> Vec<WindowPlacement> {
         let ws = self.desktop.active();
         let members: BTreeSet<WindowId> = ws.windows().collect();
         let focused = self.focused();
@@ -1356,4 +1427,27 @@ impl Shell {
     pub fn is_phone(&self) -> bool {
         self.profile.form_factor == FormFactor::Phone
     }
+}
+
+/// `frame` moved out from under the on-screen keyboard at `keyboard`, staying
+/// inside `area`: its bottom edge rises to the keyboard's top when enough of
+/// it is left, and otherwise the whole window slides up. A frame the
+/// keyboard does not cover is returned as it is.
+pub fn clear_of_keyboard(frame: Geometry, keyboard: Geometry, area: Geometry) -> Geometry {
+    let top = keyboard.loc.y;
+    let overlaps_x = frame.loc.x < keyboard.loc.x + keyboard.size.w
+        && keyboard.loc.x < frame.loc.x + frame.size.w;
+    if !overlaps_x || frame.loc.y + frame.size.h <= top {
+        return frame;
+    }
+    if top - frame.loc.y >= KEYBOARD_MIN_CLIENT {
+        return rect(frame.loc.x, frame.loc.y, frame.size.w, top - frame.loc.y);
+    }
+    let y = (top - frame.size.h).max(area.loc.y);
+    rect(
+        frame.loc.x,
+        y,
+        frame.size.w,
+        (top - y).clamp(1, frame.size.h),
+    )
 }

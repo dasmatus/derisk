@@ -142,9 +142,7 @@ pub fn tap(button: NavButton, state: NavState) -> Vec<Action> {
         ],
         NavButton::Home => vec![Action::Overview { visible: None }],
         NavButton::Apps => vec![Action::Palette { visible: None }],
-        // The keyboard is the chrome's own state, not a shell action; the
-        // chrome toggles it.
-        NavButton::Keyboard => Vec::new(),
+        NavButton::Keyboard => vec![Action::Keyboard { visible: None }],
     }
 }
 
