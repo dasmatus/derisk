@@ -210,6 +210,36 @@ fn app_menus_become_palette_commands() {
 }
 
 #[test]
+fn registering_again_replaces_the_palette_commands() {
+    let mut shell = shell();
+    let (w, _) = shell.map_window("uranium", "Uranium");
+    let tabs = |titles: &[&str]| {
+        vec![Menu {
+            title: "Tabs".into(),
+            entries: titles
+                .iter()
+                .map(|t| MenuEntry::item(format!("switch {t}"), format!("Switch to {t}")))
+                .collect(),
+        }]
+    };
+    let commands = |shell: &Shell| -> Vec<String> {
+        palette::entries(shell, &[], &[])
+            .into_iter()
+            .filter(|e| e.category == Category::AppCommand)
+            .map(|e| e.title)
+            .collect()
+    };
+    derisk::ipc::register_menu(&mut shell, 1, w.get(), tabs(&["News", "Mail"])).unwrap();
+    assert_eq!(commands(&shell), ["Switch to News", "Switch to Mail"]);
+    // The palette builds its list from the registry every frame, so an
+    // open palette shows the new tabs on the next one.
+    derisk::ipc::register_menu(&mut shell, 1, w.get(), tabs(&["Mail"])).unwrap();
+    assert_eq!(commands(&shell), ["Switch to Mail"]);
+    shell.menus.disown(1);
+    assert!(commands(&shell).is_empty());
+}
+
+#[test]
 fn scopes_narrow_the_search() {
     assert_eq!(palette::scope("> tile"), (Scope::Commands, "tile"));
     assert_eq!(palette::scope("@fire"), (Scope::Windows, "fire"));

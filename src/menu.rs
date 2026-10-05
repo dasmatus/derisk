@@ -124,21 +124,80 @@ pub fn shell_action(item: &str, window: u64) -> Option<Action> {
     })
 }
 
-/// Menus registered per window.
+/// Menus registered per window, and which agent connection, if any, owns
+/// each window's menus.
 #[derive(Clone, Debug, Default)]
 pub struct GlobalMenu {
     menus: BTreeMap<u64, Vec<Menu>>,
+    /// Picks from these windows' menus go back to the connection that
+    /// registered them; the rest are only logged.
+    owners: BTreeMap<u64, u64>,
 }
 
 impl GlobalMenu {
-    /// Registers (or replaces) a window's menus.
+    /// Registers (or replaces) a window's menus with no owner to tell of
+    /// picks, as a headless `derisk agent` or the demo does.
     pub fn register(&mut self, window: u64, menus: Vec<Menu>) {
         self.menus.insert(window, menus);
+        self.owners.remove(&window);
     }
 
-    /// Forgets a window's menus.
+    /// Registers (or replaces) a window's menus on behalf of agent
+    /// connection `owner`, which is then told of picks from them. A window
+    /// whose menus another connection owns is refused, with that owner, so
+    /// one program cannot take over the menus another keeps current.
+    pub fn register_owned(&mut self, window: u64, owner: u64, menus: Vec<Menu>) -> Result<(), u64> {
+        if let Some(&other) = self.owners.get(&window)
+            && other != owner
+        {
+            return Err(other);
+        }
+        self.menus.insert(window, menus);
+        self.owners.insert(window, owner);
+        Ok(())
+    }
+
+    /// Forgets a window's menus and their owner.
     pub fn unregister(&mut self, window: u64) {
         self.menus.remove(&window);
+        self.owners.remove(&window);
+    }
+
+    /// Forgets the menus agent connection `owner` registered, once it has
+    /// closed: they described its windows as it last saw them (a browser's
+    /// open tabs, say) and nobody is left to act on a pick. Returns the
+    /// windows whose menus went.
+    pub fn disown(&mut self, owner: u64) -> Vec<u64> {
+        let windows: Vec<u64> = self
+            .owners
+            .iter()
+            .filter(|(_, o)| **o == owner)
+            .map(|(w, _)| *w)
+            .collect();
+        for window in &windows {
+            self.unregister(*window);
+        }
+        windows
+    }
+
+    /// The connection that owns a window's menus, if one does.
+    pub fn owner(&self, window: u64) -> Option<u64> {
+        self.owners.get(&window).copied()
+    }
+
+    /// The connection to tell that `item` was picked from `window`'s menus:
+    /// its owner, when `item` is an enabled item it registered there. Shell
+    /// items (`derisk.`) stay the shell's, and an agent's `activate_menu`
+    /// with an ID the owner never listed is not passed on as a pick.
+    pub fn recipient(&self, window: u64, item: &str) -> Option<u64> {
+        if item.starts_with(SHELL_PREFIX) {
+            return None;
+        }
+        let owner = self.owner(window)?;
+        self.app_menus(window)
+            .iter()
+            .any(|m| has_item(&m.entries, item))
+            .then_some(owner)
     }
 
     /// A window's own menus, if it registered any.
@@ -154,4 +213,15 @@ impl GlobalMenu {
         }
         menus
     }
+}
+
+/// Whether `entries`, submenus included, hold an enabled item `id`.
+fn has_item(entries: &[MenuEntry], id: &str) -> bool {
+    entries.iter().any(|entry| match entry {
+        MenuEntry::Item {
+            id: item, enabled, ..
+        } => *enabled && item == id,
+        MenuEntry::Submenu { entries, .. } => has_item(entries, id),
+        MenuEntry::Separator => false,
+    })
 }

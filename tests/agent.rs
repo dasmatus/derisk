@@ -8,6 +8,8 @@ use derisk::{
     assistant,
     geom::rect,
     ipc,
+    mcsapi::WindowId,
+    menu::{Menu, MenuEntry},
     shell::Shell,
     snap::SnapZone,
     systemd::SessionOp,
@@ -101,6 +103,106 @@ fn ipc_menus_feed_the_global_menu() {
     let bar = shell.menus.bar(Some(w.get()));
     assert_eq!(bar[0].title, "File");
     assert_eq!(bar.last().unwrap().title, "Window");
+}
+
+fn tabs(titles: &[&str]) -> Vec<Menu> {
+    vec![Menu {
+        title: "Tabs".into(),
+        entries: titles
+            .iter()
+            .enumerate()
+            .map(|(i, t)| MenuEntry::item(format!("switch-{i}"), format!("Switch to {t}")))
+            .chain([MenuEntry::Separator, MenuEntry::item("new-tab", "New Tab")])
+            .collect(),
+    }]
+}
+
+#[test]
+fn live_menus_belong_to_the_connection_that_registered_them() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let (w, _) = shell.map_window("uranium", "Uranium");
+    let (other, _) = shell.map_window("foot", "~");
+    let (w, other) = (w.get(), other.get());
+
+    assert_eq!(
+        ipc::register_menu(&mut shell, 7, 999, tabs(&["a"])),
+        Err("unknown window: 999".into())
+    );
+    assert_eq!(shell.menus.app_menus(999), &[]);
+
+    assert_eq!(
+        ipc::register_menu(&mut shell, 7, w, tabs(&["a"])),
+        Ok(Value::Null)
+    );
+    assert_eq!(shell.menus.owner(w), Some(7));
+    assert_eq!(
+        ipc::register_menu(&mut shell, 8, w, tabs(&["b"])),
+        Err(format!("another connection registered window {w}'s menus"))
+    );
+    assert_eq!(shell.menus.app_menus(w), tabs(&["a"]).as_slice());
+
+    // The owner replaces its menus as tabs come and go.
+    ipc::register_menu(&mut shell, 7, w, tabs(&["a", "b"])).unwrap();
+    assert_eq!(shell.menus.app_menus(w), tabs(&["a", "b"]).as_slice());
+    ipc::register_menu(&mut shell, 7, other, tabs(&["c"])).unwrap();
+
+    // Picks go to the owner only for items it listed, never shell items.
+    assert_eq!(shell.menus.recipient(w, "switch-1"), Some(7));
+    assert_eq!(shell.menus.recipient(w, "new-tab"), Some(7));
+    assert_eq!(shell.menus.recipient(w, "switch-9"), None);
+    assert_eq!(shell.menus.recipient(w, "derisk.close"), None);
+
+    // Its connection closing takes all its menus away.
+    let mut gone = shell.menus.disown(7);
+    gone.sort_unstable();
+    assert_eq!(gone, vec![w, other]);
+    assert_eq!(shell.menus.app_menus(w), &[]);
+    assert_eq!(shell.menus.owner(w), None);
+    ipc::register_menu(&mut shell, 8, w, tabs(&["b"])).unwrap();
+    assert_eq!(shell.menus.owner(w), Some(8));
+}
+
+#[test]
+fn unowned_menus_have_nobody_to_tell() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let (w, _) = shell.map_window("uranium", "Uranium");
+    let w = w.get();
+    ipc::register_menu(&mut shell, 7, w, tabs(&["a"])).unwrap();
+    // The request without a live connection, as `derisk agent` handles it,
+    // registers menus nobody owns.
+    let req = json!({"method": "register_menu", "window": w, "menus": tabs(&["b"])});
+    ipc::handle_line(&mut shell, &req.to_string());
+    assert_eq!(shell.menus.owner(w), None);
+    assert_eq!(shell.menus.recipient(w, "switch-0"), None);
+
+    ipc::register_menu(&mut shell, 7, w, tabs(&["a"])).unwrap();
+    shell.unmap_window(WindowId::new(w).unwrap()).unwrap();
+    assert_eq!(shell.menus.owner(w), None);
+}
+
+#[test]
+fn menu_picks_become_one_event_line() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let (w, _) = shell.map_window("uranium", "Uranium");
+    let w = w.get();
+    ipc::register_menu(&mut shell, 7, w, tabs(&["a"])).unwrap();
+    let effects = shell
+        .run([Action::ActivateMenu {
+            window: Some(w),
+            item: "switch-0".into(),
+        }])
+        .into_result()
+        .unwrap();
+    let [Effect::MenuActivated { window, item }] = effects.as_slice() else {
+        panic!("{effects:?}");
+    };
+    assert_eq!(shell.menus.recipient(*window, item), Some(7));
+    let line = ipc::menu_event(*window, item).to_string();
+    assert!(!line.contains('\n'));
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap(),
+        json!({"event": "menu", "window": w, "item": "switch-0"})
+    );
 }
 
 #[test]
