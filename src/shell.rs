@@ -6,6 +6,7 @@ use std::{
     path::Path,
 };
 
+use derisk_settings::BarPosition;
 use mcsapi::{Desktop, Geometry, Layout, WindowId, WorkspaceId};
 use serde::Serialize;
 
@@ -423,19 +424,41 @@ impl Shell {
         self.output
     }
 
-    /// The output minus the top bar and, on phones, the navigation bar and
-    /// the on-screen keyboard.
+    /// Where the top bar is drawn: along the top or bottom edge, as set in
+    /// [`Effects::top_bar`]. An auto-hidden bar is drawn here while revealed.
+    /// A phone's status bar is always along the top, since the navigation
+    /// bar holds the bottom edge.
+    pub fn bar_area(&self) -> Geometry {
+        let o = self.output;
+        let bar = self.profile.top_bar.min(o.size.h - 1);
+        match self.effects.top_bar.position {
+            _ if self.is_phone() => rect(o.loc.x, o.loc.y, o.size.w, bar),
+            BarPosition::Top => rect(o.loc.x, o.loc.y, o.size.w, bar),
+            BarPosition::Bottom => rect(o.loc.x, o.loc.y + o.size.h - bar, o.size.w, bar),
+        }
+    }
+
+    /// The output minus the top bar. An auto-hidden bar slides over windows
+    /// instead of taking room from them. Phones also lose the navigation bar
+    /// and the on-screen keyboard, and keep their status bar shown.
     pub fn work_area(&self) -> Geometry {
-        let bar = self.profile.top_bar.min(self.output.size.h - 1);
-        let nav = (self.profile.nav_bar + self.keyboard)
-            .min(self.output.size.h - bar - 1)
-            .max(0);
-        rect(
-            self.output.loc.x,
-            self.output.loc.y + bar,
-            self.output.size.w,
-            self.output.size.h - bar - nav,
-        )
+        let o = self.output;
+        if self.is_phone() {
+            let bar = self.profile.top_bar.min(o.size.h - 1);
+            let nav = (self.profile.nav_bar + self.keyboard)
+                .min(o.size.h - bar - 1)
+                .max(0);
+            return rect(o.loc.x, o.loc.y + bar, o.size.w, o.size.h - bar - nav);
+        }
+        if self.effects.top_bar.autohide {
+            return o;
+        }
+        let bar = self.bar_area().size.h;
+        let y = match self.effects.top_bar.position {
+            BarPosition::Top => o.loc.y + bar,
+            BarPosition::Bottom => o.loc.y,
+        };
+        rect(o.loc.x, y, o.size.w, o.size.h - bar)
     }
 
     /// The touch navigation bar (zero height except on phones).

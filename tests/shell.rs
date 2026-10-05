@@ -416,3 +416,19 @@ fn workspaces_are_capped() {
         Err(Error::UnknownWorkspace(MAX_WORKSPACES + 1))
     );
 }
+
+#[test]
+fn the_bar_can_move_to_the_bottom_or_hide() {
+    use derisk_settings::BarPosition;
+    let mut shell = desktop();
+    let bar = shell.profile().top_bar;
+    assert_eq!(shell.work_area(), rect(0, bar, 1920, 1080 - bar));
+    shell.effects.top_bar.position = BarPosition::Bottom;
+    assert_eq!(shell.work_area(), rect(0, 0, 1920, 1080 - bar));
+    assert_eq!(shell.bar_area(), rect(0, 1080 - bar, 1920, bar));
+    let (a, _) = shell.map_window("editor", "notes");
+    let f = frame_of(&shell, a);
+    assert!(f.loc.y + f.size.h <= 1080 - bar, "{f:?}");
+    shell.effects.top_bar.autohide = true;
+    assert_eq!(shell.work_area(), rect(0, 0, 1920, 1080));
+}

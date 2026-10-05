@@ -27,19 +27,22 @@ use derisk::{
     conversation::Source,
     decorations::Button,
     desktop::{self, DesktopEntry},
-    effects::SettingsWatch,
-    geom::rect,
+    effects::{Effects, SettingsWatch},
+    geom::{inset, rect},
     ipc::{self, LiveRequest},
     keyboard::{Output as Typed, Predictor},
     keys::{self, Key, Mods, SuperTap},
     overview::Battery,
     palette::{self, Entry},
+    privacy,
     shell::{Mode, PointerOutcome, Shell},
     snap::{Direction, SnapZone},
     systemd::{self, Priority},
     time::Clock,
-    ui::{ShellUi, paint_wallpaper, set_touch_style},
+    ui::{ShellUi, set_touch_style},
+    wallpaper::{self, Visibility, WallpaperPainter},
 };
+use derisk_settings::{Privacy, Shortcuts};
 use mcsapi::WindowId;
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
@@ -143,6 +146,10 @@ pub struct Session {
     /// last wrote them.
     words: Option<PathBuf>,
     words_saved: Instant,
+    shortcuts: Shortcuts,
+    wallpaper: WallpaperPainter,
+    privacy: Privacy,
+    last_sweep: Option<Instant>,
     /// Request numbers for [`Command::Describe`] and [`Command::Capture`].
     requests: u64,
     /// Agents waiting for the accessibility tree.
@@ -266,6 +273,10 @@ impl Session {
             phone,
             words,
             words_saved: Instant::now(),
+            shortcuts: Shortcuts::default(),
+            wallpaper: WallpaperPainter::default(),
+            privacy: derisk_settings::Settings::default().privacy,
+            last_sweep: None,
             requests: 0,
             trees: HashMap::new(),
             shots: HashMap::new(),
@@ -620,6 +631,33 @@ impl Session {
         }
     }
 
+    /// Applies Settings → Privacy to files on disk: right after it changes
+    /// and then every few minutes, so a recent-files list an app writes
+    /// again goes away soon after.
+    fn sweep(&mut self) {
+        if self
+            .last_sweep
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
+        {
+            return;
+        }
+        self.last_sweep = Some(Instant::now());
+        let Some(data) = privacy::data_home() else {
+            return;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        match privacy::sweep(&self.privacy, &data, now) {
+            Ok(swept) if swept.trashed > 0 => log(
+                Priority::Info,
+                &format!("emptied {} old item(s) from the trash", swept.trashed),
+            ),
+            Ok(_) => {}
+            Err(e) => log(Priority::Warning, &format!("privacy sweep: {e}")),
+        }
+    }
+
     fn startup_done(&self) -> bool {
         let elapsed = self.start.elapsed().as_millis() as u32;
         self.ui.startup_frame(elapsed).done
@@ -711,10 +749,20 @@ impl compositor::Shell for Session {
         self.last_tick = Some(Instant::now());
         self.shell.clock = Clock::now_utc();
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
-        if let Some(effects) = self.settings.poll() {
-            self.shell.effects = effects;
+        if let Some(settings) = self.settings.poll() {
+            self.shell.effects = Effects::from_settings(&settings);
+            self.shortcuts = settings.shortcuts;
+            self.wallpaper.configure(&settings.wallpaper);
+            if settings.privacy != self.privacy {
+                self.privacy = settings.privacy;
+                self.last_sweep = None;
+            }
             self.apply_theme();
         }
+        if !self.privacy.remember_recent {
+            self.ui.palette.history = Default::default();
+        }
+        self.sweep();
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
         }
@@ -737,7 +785,10 @@ impl compositor::Shell for Session {
         self.shell.overview_visible()
             || self.shell.palette_visible()
             || self.shell.pending_confirmation().is_some()
-            || y < self.shell.profile().top_bar
+            || self
+                .ui
+                .bar_rect()
+                .is_some_and(|r| r.contains(egui::pos2(x as f32, y as f32)))
             // Below the work area on a phone: the keyboard and navigation bar.
             || (self.shell.is_phone() && {
                 let area = self.shell.work_area();
@@ -797,7 +848,9 @@ impl compositor::Shell for Session {
             ctrl: key.mods.ctrl,
             alt: key.mods.alt,
         };
-        if let Some(action) = layout_key(key.sym).and_then(|k| keys::binding(mods, k)) {
+        if let Some(action) =
+            layout_key(key.sym).and_then(|k| keys::binding_with(&self.shortcuts, mods, k))
+        {
             if key.pressed {
                 self.dispatch(vec![action]);
             }
@@ -840,7 +893,19 @@ impl compositor::Shell for Session {
     }
 
     fn paint_background(&mut self, painter: &egui::Painter, screen: egui::Rect) {
-        paint_wallpaper(painter, screen, &self.ui.theme);
+        let look = self.shell.look();
+        let seen = Visibility {
+            // A maximized window keeps the gap around it; a strip that thin
+            // isn't worth decoding video for.
+            covered: !self.shell.overview_visible()
+                && wallpaper::covered(
+                    inset(self.shell.work_area(), self.shell.profile().gap),
+                    self.shell.placements().iter().map(|p| p.frame),
+                ),
+            low_power: look.low_power,
+            reduce_motion: !look.animate,
+        };
+        self.wallpaper.paint(painter, screen, &self.ui.theme, seen);
     }
 
     fn paint_decoration(&mut self, painter: &egui::Painter, placement: &Placement) {
