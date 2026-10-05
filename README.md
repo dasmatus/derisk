@@ -191,8 +191,10 @@ same theme.
   password field checked by PAM (the `derisk` service, `data/pam.d/derisk`).
   With `--execute` the session also locks when logind asks it to (`loginctl
   lock-session`, `lock-sessions`, `busctl wait` on the session's `Lock`
-  signal) and sets logind's `LockedHint`. While locked the agent protocol
-  answers nothing.
+  signal) and sets logind's `LockedHint`. While locked every agent request,
+  `tree`, `screenshot` and `input` included, gets `"the session is locked"`,
+  and the AT-SPI tree is empty and ignores actions, since window titles
+  would show through the lock.
 - **Display manager.** `derisk display-manager` replaces gdm: run as root
   from a system service, it starts `derisk greeter` (the lock screen as a
   login screen) on a VT as an unprivileged user, checks the password it is
