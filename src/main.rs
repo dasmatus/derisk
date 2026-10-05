@@ -6,6 +6,8 @@
 //! (launching apps as units, session operations) can be executed for real.
 
 #[cfg(feature = "host")]
+mod computer;
+#[cfg(feature = "host")]
 mod host;
 #[cfg(feature = "host")]
 mod pam;
@@ -27,7 +29,7 @@ use std::{
 use derisk::{
     action::{Action, Effect},
     assistant,
-    effects::SettingsWatch,
+    effects::{Effects, SettingsWatch},
     geom::rect,
     ipc,
     menu::{Menu, MenuEntry},
@@ -199,8 +201,8 @@ fn send(line: &str) -> Result {
 fn refresh(shell: &mut Shell) {
     shell.clock = Clock::now_utc();
     shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
-    if let Some(effects) = SettingsWatch::new(derisk_settings::default_path()).poll() {
-        shell.effects = effects;
+    if let Some(settings) = SettingsWatch::new(derisk_settings::default_path()).poll() {
+        shell.effects = Effects::from_settings(&settings);
     }
 }
 

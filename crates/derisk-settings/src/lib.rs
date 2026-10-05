@@ -17,26 +17,43 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod flatpak;
 mod model;
+mod pages;
+mod privacy;
+mod shortcuts;
+mod thumbs;
 
 use std::path::PathBuf;
 
 use mcsapi_ui::{App, Theme, egui};
 pub use model::{
-    Accent, Appearance, ColorScheme, DesktopPrefs, Input, Layout, LowPower, Notifications,
-    PanelOpacity, Power, Profile, Settings, ThemeId, Vrr, Warning, default_path,
+    Accent, Appearance, BarPosition, ColorScheme, DesktopPrefs, Fit, Input, Layout, LowPower,
+    Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings, ThemeId, TopBar, Vrr,
+    Wallpaper, WallpaperKind, Warning, WindowStyle, default_path,
 };
+pub use pages::{IMAGE_EXTENSIONS, candidates};
+pub use shortcuts::{Chord, KeyName, Shortcut, Shortcuts};
+pub use thumbs::thumbnail;
 
 /// A page of the Settings app.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Page {
-    /// Colors, text size, motion, blur, and panel opacity.
+    /// Colors, text size, motion, blur, panel opacity, and window frames.
     #[default]
     Appearance,
+    /// The desktop background: color, gradient, picture, slideshow, video.
+    Wallpaper,
+    /// The top bar's position and contents.
+    TopBar,
     /// Layout, gaps, workspaces, profile, and variable refresh rate.
     Desktop,
     /// Keyboard and pointer.
     Input,
+    /// Rebindable keyboard shortcuts.
+    Shortcuts,
+    /// Device access, history, trash, and Flatpak app permissions.
+    Privacy,
     /// Banners and sounds.
     Notifications,
     /// Dimming, locking, suspend, and low power mode.
@@ -47,10 +64,14 @@ pub enum Page {
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
         Self::Appearance,
+        Self::Wallpaper,
+        Self::TopBar,
         Self::Desktop,
         Self::Input,
+        Self::Shortcuts,
+        Self::Privacy,
         Self::Notifications,
         Self::Power,
         Self::About,
@@ -60,6 +81,10 @@ impl Page {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
+            Self::Wallpaper => "Wallpaper",
+            Self::TopBar => "Top bar",
+            Self::Shortcuts => "Shortcuts",
+            Self::Privacy => "Privacy",
             Self::Desktop => "Desktop",
             Self::Input => "Keyboard & pointer",
             Self::Notifications => "Notifications",
@@ -79,6 +104,9 @@ pub struct SettingsApp {
     /// The visible page.
     pub page: Page,
     status: Option<String>,
+    drafts: pages::Drafts,
+    thumbs: thumbs::Thumbnails,
+    privacy: privacy::PrivacyUi,
     /// Theme IDs offered on the Appearance page, read once when opened.
     themes: Vec<String>,
 }
@@ -91,6 +119,18 @@ impl Default for SettingsApp {
 }
 
 impl SettingsApp {
+    /// Reads Flatpak apps from `dirs` instead of the standard places.
+    pub fn with_flatpak_dirs(mut self, dirs: flatpak::Dirs) -> Self {
+        self.privacy = privacy::PrivacyUi::with_dirs(dirs);
+        self
+    }
+
+    /// Opens the Privacy page on one Flatpak app's permissions.
+    pub fn show_flatpak_app(&mut self, id: &str) {
+        self.page = Page::Privacy;
+        self.privacy.select(id);
+    }
+
     /// Opens the settings file at `path`, or edits in memory when `None`.
     ///
     /// A missing file starts from defaults; an unreadable or partly invalid
@@ -117,8 +157,11 @@ impl SettingsApp {
         };
         Self {
             path,
+            settings: saved.clone(),
+            drafts: pages::Drafts::new(&saved),
+            thumbs: thumbs::Thumbnails::default(),
+            privacy: privacy::PrivacyUi::default(),
             saved,
-            settings: saved,
             page: Page::default(),
             status,
             themes: mcsapi_theme::Library::xdg("derisk").ids(),
@@ -148,8 +191,10 @@ impl SettingsApp {
         };
         self.status = Some(match self.settings.save(path) {
             Ok(()) => {
-                self.saved = self.settings;
-                "Saved".into()
+                let before = std::mem::replace(&mut self.saved, self.settings.clone());
+                self.privacy
+                    .apply_masters(&before.privacy, &self.settings.privacy)
+                    .unwrap_or_else(|| "Saved".into())
             }
             Err(error) => format!("Could not save: {error}"),
         });
@@ -157,7 +202,8 @@ impl SettingsApp {
 
     /// Discards unsaved changes.
     pub fn revert(&mut self) {
-        self.settings = self.saved;
+        self.settings = self.saved.clone();
+        self.drafts = pages::Drafts::new(&self.saved);
         self.status = None;
     }
 
@@ -165,6 +211,9 @@ impl SettingsApp {
         let s = &mut self.settings;
         ui.heading(egui::RichText::new(self.page.label()).color(theme.foreground));
         ui.add_space(8.0);
+        if self.page == Page::Privacy {
+            return privacy::page(ui, &mut s.privacy, &mut self.privacy, theme);
+        }
         egui::Grid::new("settings-page")
             .num_columns(2)
             .spacing([24.0, 10.0])
@@ -238,7 +287,24 @@ impl SettingsApp {
                         ui.add(egui::Slider::new(value, 20..=100).suffix(" %"));
                         ui.end_row();
                     }
+                    let w = &mut s.windows;
+                    ui.label("Window corners");
+                    ui.add(egui::Slider::new(&mut w.corner_radius, 0..=20).suffix(" px"));
+                    ui.end_row();
+                    ui.label("Window shadows");
+                    ui.checkbox(&mut w.shadows, "Soft shadow under windows");
+                    ui.end_row();
                 }
+                Page::Wallpaper => pages::wallpaper(
+                    ui,
+                    &mut s.wallpaper,
+                    &mut self.drafts,
+                    &mut self.thumbs,
+                    theme,
+                ),
+                Page::TopBar => pages::top_bar(ui, &mut s.top_bar, theme),
+                Page::Privacy => {}
+                Page::Shortcuts => pages::shortcuts(ui, &mut s.shortcuts, &mut self.drafts, theme),
                 Page::Desktop => {
                     let d = &mut s.desktop;
                     ui.label("Default layout");
@@ -394,19 +460,21 @@ impl App for SettingsApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
-        egui::Panel::left("settings-pages")
-            .resizable(false)
-            .exact_size(180.0)
-            .show(ui, |ui| {
-                for page in Page::ALL {
-                    if ui
-                        .selectable_label(self.page == page, page.label())
-                        .clicked()
-                    {
-                        self.page = page;
-                    }
-                }
+        let narrow = ui.available_width() < NARROW;
+        if narrow {
+            // A 180-pixel sidebar would leave a phone half a page, so the
+            // pages become a row of tabs across the top that scrolls sideways.
+            egui::Panel::top("settings-pages").show(ui, |ui| {
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    ui.horizontal(|ui| self.page_buttons(ui));
+                });
             });
+        } else {
+            egui::Panel::left("settings-pages")
+                .resizable(false)
+                .exact_size(180.0)
+                .show(ui, |ui| self.page_buttons(ui));
+        }
         egui::Panel::bottom("settings-actions").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let dirty = self.is_dirty();
@@ -424,7 +492,30 @@ impl App for SettingsApp {
             });
         });
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| self.page_ui(ui, theme));
+            // A row of controls wider than a phone scrolls rather than being
+            // cut off where nothing can reach it.
+            let scroll = if narrow {
+                egui::ScrollArea::both()
+            } else {
+                egui::ScrollArea::vertical()
+            };
+            scroll.show(ui, |ui| self.page_ui(ui, theme));
         });
+    }
+}
+
+/// Below this width the page list moves from a sidebar to tabs on top.
+const NARROW: f32 = 560.0;
+
+impl SettingsApp {
+    fn page_buttons(&mut self, ui: &mut egui::Ui) {
+        for page in Page::ALL {
+            if ui
+                .selectable_label(self.page == page, page.label())
+                .clicked()
+            {
+                self.page = page;
+            }
+        }
     }
 }

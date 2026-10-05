@@ -16,6 +16,12 @@
 //! | Super+Q | Close |
 //! | Super+F / Super+T | Float / tile |
 //! | Super+M / Super+Shift+M | Monocle / tall layout |
+//!
+//! The single-chord shortcuts (palette, overview, focus, promote, close,
+//! float, tile, layouts) can be rebound in the Settings app; see
+//! [`binding_with`]. The rest are fixed.
+
+use derisk_settings::{Chord, KeyName, Shortcut, Shortcuts};
 
 use crate::{
     action::{Action, LayoutKind},
@@ -54,8 +60,15 @@ pub enum Key {
     Space,
 }
 
-/// The action bound to a chord, if any.
+/// The action bound to a chord with the default shortcuts, if any.
 pub fn binding(mods: Mods, key: Key) -> Option<Action> {
+    binding_with(&Shortcuts::default(), mods, key)
+}
+
+/// The action bound to a chord, with the rebindable shortcuts taken from
+/// `shortcuts` (the Settings app's Shortcuts page). A rebound shortcut
+/// leaves its old chord free.
+pub fn binding_with(shortcuts: &Shortcuts, mods: Mods, key: Key) -> Option<Action> {
     if mods.alt && !mods.logo && !mods.ctrl && key == Key::Tab {
         return Some(if mods.shift {
             Action::FocusPrevious
@@ -63,36 +76,63 @@ pub fn binding(mods: Mods, key: Key) -> Option<Action> {
             Action::FocusNext
         });
     }
-    if !mods.logo || mods.ctrl || mods.alt {
-        return None;
+    if mods.logo && !mods.ctrl && !mods.alt {
+        match (mods.shift, key) {
+            (false, Key::Arrow(direction)) => {
+                return Some(Action::Nudge {
+                    window: None,
+                    direction,
+                });
+            }
+            (false, Key::Digit(d @ 1..=9)) => {
+                return Some(Action::SwitchWorkspace {
+                    workspace: u64::from(d),
+                });
+            }
+            (true, Key::Digit(d @ 1..=9)) => {
+                return Some(Action::MoveToWorkspace {
+                    window: None,
+                    workspace: u64::from(d),
+                });
+            }
+            (false, Key::Tab) => return Some(Action::FocusNext),
+            (true, Key::Tab) => return Some(Action::FocusPrevious),
+            _ => {}
+        }
     }
-    Some(match (mods.shift, key) {
-        (false, Key::Arrow(direction)) => Action::Nudge {
-            window: None,
-            direction,
+    let chord = Chord {
+        logo: mods.logo,
+        shift: mods.shift,
+        ctrl: mods.ctrl,
+        alt: mods.alt,
+        key: match key {
+            Key::Arrow(Direction::Left) => KeyName::Left,
+            Key::Arrow(Direction::Right) => KeyName::Right,
+            Key::Arrow(Direction::Up) => KeyName::Up,
+            Key::Arrow(Direction::Down) => KeyName::Down,
+            Key::Digit(d) => KeyName::Digit(d),
+            Key::Letter(c) => KeyName::Letter(c),
+            Key::Enter => KeyName::Enter,
+            Key::Tab => KeyName::Tab,
+            Key::Escape => KeyName::Escape,
+            Key::Space => KeyName::Space,
         },
-        (false, Key::Digit(d @ 1..=9)) => Action::SwitchWorkspace {
-            workspace: u64::from(d),
-        },
-        (true, Key::Digit(d @ 1..=9)) => Action::MoveToWorkspace {
-            window: None,
-            workspace: u64::from(d),
-        },
-        (false, Key::Letter('j')) | (false, Key::Tab) => Action::FocusNext,
-        (false, Key::Letter('k')) | (true, Key::Tab) => Action::FocusPrevious,
-        (false, Key::Enter) => Action::Promote,
-        (false, Key::Letter('q')) => Action::Close { window: None },
-        (false, Key::Letter('f')) => Action::Float { window: None },
-        (false, Key::Letter('t')) => Action::Tile { window: None },
-        (false, Key::Letter('m')) => Action::SetLayout {
+    };
+    Some(match shortcuts.lookup(chord)? {
+        Shortcut::Palette => Action::Palette { visible: None },
+        Shortcut::Overview => Action::Overview { visible: None },
+        Shortcut::FocusNext => Action::FocusNext,
+        Shortcut::FocusPrevious => Action::FocusPrevious,
+        Shortcut::Promote => Action::Promote,
+        Shortcut::Close => Action::Close { window: None },
+        Shortcut::Float => Action::Float { window: None },
+        Shortcut::Tile => Action::Tile { window: None },
+        Shortcut::Monocle => Action::SetLayout {
             layout: LayoutKind::Monocle,
         },
-        (true, Key::Letter('m')) => Action::SetLayout {
+        Shortcut::Tall => Action::SetLayout {
             layout: LayoutKind::Tall,
         },
-        (false, Key::Letter('a')) => Action::Overview { visible: None },
-        (false, Key::Space) => Action::Palette { visible: None },
-        _ => return None,
     })
 }
 

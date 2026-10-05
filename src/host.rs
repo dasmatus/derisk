@@ -14,6 +14,7 @@
 //! this session to lock (`loginctl lock-session`, `lock-sessions`).
 
 use std::{
+    collections::HashMap,
     io::{BufReader, Write as _},
     os::unix::{
         fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
@@ -23,7 +24,7 @@ use std::{
     process::{Child, Command as ProcessCommand, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     time::{Duration, Instant},
@@ -32,28 +33,39 @@ use std::{
 use derisk::{
     action::{Action, Effect},
     conversation::Source,
+    decorations::Button,
     desktop::{self, DesktopEntry},
-    effects::SettingsWatch,
-    geom::rect,
-    ipc,
+    effects::{Effects, SettingsWatch},
+    geom::{inset, rect},
+    ipc::{self, LiveRequest},
+    keyboard::{Output as Typed, Predictor},
     keys::{self, Key, Mods, SuperTap},
     lock::LockScreen,
     overview::Battery,
     palette::{self, Entry},
+    privacy,
     shell::{Mode, PointerOutcome, Shell},
     snap::{Direction, SnapZone},
     systemd::{self, Priority, SessionOp},
     time::Clock,
-    ui::{ShellUi, paint_wallpaper, show_lock},
+    ui::{ShellUi, set_touch_style, show_lock},
+    wallpaper::{self, Visibility, WallpaperPainter},
 };
+use derisk_settings::{Privacy, Shortcuts};
 use mcsapi::WindowId;
 
 use crate::pam;
 use mcsapi_compositor::{
-    self as compositor, AppId, Apps, Blur, ClientRequest, Command, Compositor, Edges, InstanceId,
-    KeyInput, KeyRoute, Keysym, OutputTiming, Placement, Press, Remote, Reserved, Role,
-    RuntimeClient, Theme, egui,
+    self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
+    Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press,
+    Remote, Reserved, Role, RuntimeClient, Theme,
+    a11y::{Origin, Snapshot, Subtree},
+    accesskit::{self, NodeId},
+    egui,
 };
+use serde_json::{Value, json};
+
+use crate::computer;
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -147,6 +159,28 @@ pub struct Session {
     session_id: Option<String>,
     /// Its logind object path, for the lock signal and the locked hint.
     session_path: Option<String>,
+    /// Whether the output is phone-sized, shared with [`CoreApps`] so the
+    /// apps get touch-sized widgets too.
+    phone: Arc<AtomicBool>,
+    /// Where the on-screen keyboard keeps the words it learned, and when it
+    /// last wrote them.
+    words: Option<PathBuf>,
+    words_saved: Instant,
+    shortcuts: Shortcuts,
+    wallpaper: WallpaperPainter,
+    privacy: Privacy,
+    last_sweep: Option<Instant>,
+    /// Request numbers for [`Command::Describe`] and [`Command::Capture`].
+    requests: u64,
+    /// Agents waiting for the accessibility tree.
+    trees: HashMap<u64, (mpsc::Sender<String>, TreeQuery)>,
+    /// Agents waiting for a screenshot, and whether they want it inline.
+    shots: HashMap<u64, (mpsc::Sender<String>, bool)>,
+    /// Accessibility nodes programs registered for their windows, with
+    /// the agent connection that owns them.
+    registered: HashMap<WindowId, (u64, Subtree)>,
+    /// Event lines to each agent connection that registered a tree.
+    listeners: HashMap<u64, mpsc::Sender<String>>,
     /// Environment launched apps get from the published theme.
     theme_env: Vec<(String, String)>,
     /// `derisk-gpui`, when installed: see [`gpui_apps`].
@@ -155,6 +189,22 @@ pub struct Session {
     output: (i32, i32),
     reserved: Reserved,
 }
+
+/// What an agent asked of the accessibility tree.
+enum TreeQuery {
+    Tree {
+        window: Option<u64>,
+    },
+    Find {
+        role: Option<String>,
+        name: Option<String>,
+        window: Option<u64>,
+    },
+}
+
+/// Node IDs of the title-bar buttons the shell paints, in the space above
+/// [`computer::REGISTERED_ID_LIMIT`] so they never meet registered nodes.
+const TITLE_BAR_NODES: u64 = u64::MAX - 8;
 
 /// Core-app actions waiting for the compositor to launch their app, shared
 /// between [`Session`] (which queues them) and [`CoreApps`] (which takes
@@ -203,12 +253,25 @@ fn app_index(core: &[DesktopEntry], installed: &[DesktopEntry]) -> derisk::apps:
 }
 
 impl Session {
-    fn new(options: &Options, pending_actions: PendingActions) -> Self {
+    fn new(options: &Options, pending_actions: PendingActions, phone: Arc<AtomicBool>) -> Self {
         let (w, h) = options.size;
         let mut shell = Shell::new(rect(0, 0, w, h), false);
+        phone.store(shell.is_phone(), Ordering::Relaxed);
         let mut ui = ShellUi::new(&shell, options.reduced_motion);
         let core_apps = core_desktop_entries();
         let installed = installed_apps();
+        // The keyboard predicts app names too, below words the person used.
+        let words = Predictor::default_path();
+        if let Some(path) = &words {
+            ui.keyboard.predictor.load(path);
+        }
+        ui.keyboard.predictor.add_vocabulary(
+            core_apps
+                .iter()
+                .chain(&installed)
+                .flat_map(|e| e.name.split_whitespace()),
+            200,
+        );
         ui.palette.extra = palette_entries(&core_apps, &installed);
         let session_id = systemd::session_id();
         let session_path = session_id
@@ -240,6 +303,18 @@ impl Session {
             unlock: None,
             session_id,
             session_path,
+            phone,
+            words,
+            words_saved: Instant::now(),
+            shortcuts: Shortcuts::default(),
+            wallpaper: WallpaperPainter::default(),
+            privacy: derisk_settings::Settings::default().privacy,
+            last_sweep: None,
+            requests: 0,
+            trees: HashMap::new(),
+            shots: HashMap::new(),
+            registered: HashMap::new(),
+            listeners: HashMap::new(),
             theme_env: Vec::new(),
             gpui: gpui_apps(),
             output: (w, h),
@@ -340,6 +415,140 @@ impl Session {
             derisk::theme::environment(&dir, &theme, std::env::var_os("XDG_CONFIG_DIRS"));
     }
 
+    /// Handles one agent request line from connection `conn`; the response
+    /// goes to `reply`, now or once the compositor has answered.
+    fn agent_line(
+        &mut self,
+        conn: u64,
+        line: &str,
+        reply: mpsc::Sender<String>,
+        events: &mpsc::Sender<String>,
+    ) {
+        let respond = |result: std::result::Result<Value, String>| {
+            let line = match result {
+                Ok(result) => json!({"ok": true, "result": result}),
+                Err(error) => json!({"ok": false, "error": error}),
+            };
+            let _ = reply.send(line.to_string());
+        };
+        let request = match ipc::live_request(line) {
+            None => {
+                let (response, effects) = ipc::handle_line(&mut self.shell, line);
+                self.perform(effects);
+                let _ = reply.send(response);
+                return;
+            }
+            Some(Err(e)) => return respond(Err(e)),
+            Some(Ok(request)) => request,
+        };
+        match request {
+            LiveRequest::Tree { window } => {
+                self.requests += 1;
+                self.trees
+                    .insert(self.requests, (reply, TreeQuery::Tree { window }));
+                self.commands.push(Command::Describe(self.requests));
+            }
+            LiveRequest::Find { role, name, window } => {
+                self.requests += 1;
+                self.trees.insert(
+                    self.requests,
+                    (reply, TreeQuery::Find { role, name, window }),
+                );
+                self.commands.push(Command::Describe(self.requests));
+            }
+            LiveRequest::Act {
+                element,
+                action,
+                value,
+            } => {
+                self.commands.push(Command::Act {
+                    element,
+                    action: computer::element_action(action),
+                    value,
+                });
+                respond(Ok(json!({"queued": true})));
+            }
+            LiveRequest::Screenshot { inline } => {
+                self.requests += 1;
+                self.shots.insert(self.requests, (reply, inline));
+                self.commands.push(Command::Capture(self.requests));
+            }
+            LiveRequest::Input { events } => match computer::inputs(&events) {
+                Ok(inputs) => {
+                    let n = inputs.len();
+                    self.commands.extend(inputs.into_iter().map(Command::Input));
+                    respond(Ok(json!({"queued": n})));
+                }
+                Err(e) => respond(Err(e)),
+            },
+            LiveRequest::RegisterTree { window, nodes } => {
+                let Some(id) =
+                    WindowId::new(window).filter(|w| self.shell.window_label(*w).is_some())
+                else {
+                    return respond(Err(format!("unknown window: {window}")));
+                };
+                if let Some((owner, _)) = self.registered.get(&id)
+                    && *owner != conn
+                {
+                    return respond(Err(format!(
+                        "another connection registered window {window}'s tree"
+                    )));
+                }
+                match computer::subtree(id, &nodes) {
+                    Ok(subtree) => {
+                        self.registered.insert(id, (conn, subtree));
+                        self.listeners.insert(conn, events.clone());
+                        respond(Ok(json!({"nodes": nodes.len()})));
+                    }
+                    Err(e) => respond(Err(e)),
+                }
+            }
+        }
+    }
+
+    /// An agent connection closed: its registered trees go with it.
+    fn agent_disconnected(&mut self, conn: u64) {
+        self.registered.retain(|_, (owner, _)| *owner != conn);
+        self.listeners.remove(&conn);
+    }
+
+    /// The title-bar buttons of each visible window, which the shell
+    /// paints itself, so screen readers and agents can press them.
+    fn title_bar_nodes(&self) -> Vec<Subtree> {
+        let bar = self.shell.profile().title_bar;
+        self.shell
+            .placements()
+            .into_iter()
+            .map(|p| {
+                let nodes: Vec<(NodeId, accesskit::Node)> = bar
+                    .buttons(p.frame)
+                    .map(|(button, area)| {
+                        let mut node = accesskit::Node::new(accesskit::Role::Button);
+                        node.set_label(match button {
+                            Button::Close => "Close",
+                            Button::Minimize => "Minimize",
+                            Button::Maximize => "Maximize",
+                        });
+                        node.set_bounds(accesskit::Rect {
+                            x0: f64::from(area.loc.x),
+                            y0: f64::from(area.loc.y),
+                            x1: f64::from(area.loc.x + area.size.w),
+                            y1: f64::from(area.loc.y + area.size.h),
+                        });
+                        node.add_action(accesskit::Action::Click);
+                        (NodeId(TITLE_BAR_NODES + button_index(button)), node)
+                    })
+                    .collect();
+                Subtree {
+                    window: p.window,
+                    roots: nodes.iter().map(|(id, _)| *id).collect(),
+                    nodes,
+                    origin: Origin::Shell,
+                }
+            })
+            .collect()
+    }
+
     /// Applies actions from any source and carries out their effects.
     fn dispatch(&mut self, actions: Vec<Action>) {
         if actions.is_empty() {
@@ -427,6 +636,7 @@ impl Session {
             rect(area.loc.x, area.loc.y, area.size.w, area.size.h),
             false,
         );
+        self.phone.store(self.shell.is_phone(), Ordering::Relaxed);
     }
 
     /// Runs an app's desktop action: core apps open in-process through
@@ -522,6 +732,33 @@ impl Session {
                     &serde_json::to_string(&effect).unwrap_or_default(),
                 ),
             }
+        }
+    }
+
+    /// Applies Settings → Privacy to files on disk: right after it changes
+    /// and then every few minutes, so a recent-files list an app writes
+    /// again goes away soon after.
+    fn sweep(&mut self) {
+        if self
+            .last_sweep
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
+        {
+            return;
+        }
+        self.last_sweep = Some(Instant::now());
+        let Some(data) = privacy::data_home() else {
+            return;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        match privacy::sweep(&self.privacy, &data, now) {
+            Ok(swept) if swept.trashed > 0 => log(
+                Priority::Info,
+                &format!("emptied {} old item(s) from the trash", swept.trashed),
+            ),
+            Ok(_) => {}
+            Err(e) => log(Priority::Warning, &format!("privacy sweep: {e}")),
         }
     }
 
@@ -626,12 +863,32 @@ impl compositor::Shell for Session {
         self.last_tick = Some(Instant::now());
         self.shell.clock = Clock::now_utc();
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
-        if let Some(effects) = self.settings.poll() {
-            self.shell.effects = effects;
+        if let Some(settings) = self.settings.poll() {
+            self.shell.effects = Effects::from_settings(&settings);
+            self.shortcuts = settings.shortcuts;
+            self.wallpaper.configure(&settings.wallpaper);
+            if settings.privacy != self.privacy {
+                self.privacy = settings.privacy;
+                self.last_sweep = None;
+            }
             self.apply_theme();
         }
+        if !self.privacy.remember_recent {
+            self.ui.palette.history = Default::default();
+        }
+        self.sweep();
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
+        }
+        // Learned words reach the disk at most twice a minute.
+        if self.ui.keyboard.predictor.is_dirty()
+            && self.words_saved.elapsed() >= Duration::from_secs(30)
+            && let Some(path) = &self.words
+        {
+            self.words_saved = Instant::now();
+            if let Err(e) = self.ui.keyboard.predictor.save(path) {
+                log(Priority::Warning, &format!("{}: {e}", path.display()));
+            }
         }
     }
 
@@ -642,7 +899,16 @@ impl compositor::Shell for Session {
         self.lock.is_locked()
             || self.shell.overview_visible()
             || self.shell.palette_visible()
-            || y < self.shell.profile().top_bar
+            || self.shell.pending_confirmation().is_some()
+            || self
+                .ui
+                .bar_rect()
+                .is_some_and(|r| r.contains(egui::pos2(x as f32, y as f32)))
+            // Below the work area on a phone: the keyboard and navigation bar.
+            || (self.shell.is_phone() && {
+                let area = self.shell.work_area();
+                y >= area.loc.y + area.size.h
+            })
             || self.shell.snap_assist().is_some_and(|a| inside(a.frame))
             || !self.startup_done()
     }
@@ -687,13 +953,31 @@ impl compositor::Shell for Session {
         if is_super {
             return KeyRoute::Consume;
         }
+        // The confirmation dialog takes every key until it is answered.
+        if self.shell.pending_confirmation().is_some() {
+            if key.pressed && key.sym == Keysym::Escape {
+                self.dispatch(vec![Action::Confirm { accept: false }]);
+                return KeyRoute::Consume;
+            }
+            return KeyRoute::Chrome;
+        }
+        // Super+B moves keyboard focus into the top bar; Tab and Shift+Tab
+        // walk it, Escape hands the keyboard back to the window.
+        if key.mods.logo && !key.mods.ctrl && !key.mods.alt && key.sym == Keysym::b {
+            if key.pressed {
+                self.ui.focus_top_bar();
+            }
+            return KeyRoute::Consume;
+        }
         let mods = Mods {
             logo: key.mods.logo,
             shift: key.mods.shift,
             ctrl: key.mods.ctrl,
             alt: key.mods.alt,
         };
-        if let Some(action) = layout_key(key.sym).and_then(|k| keys::binding(mods, k)) {
+        if let Some(action) =
+            layout_key(key.sym).and_then(|k| keys::binding_with(&self.shortcuts, mods, k))
+        {
             if key.pressed {
                 self.dispatch(vec![action]);
             }
@@ -739,7 +1023,19 @@ impl compositor::Shell for Session {
     }
 
     fn paint_background(&mut self, painter: &egui::Painter, screen: egui::Rect) {
-        paint_wallpaper(painter, screen, &self.ui.theme);
+        let look = self.shell.look();
+        let seen = Visibility {
+            // A maximized window keeps the gap around it; a strip that thin
+            // isn't worth decoding video for.
+            covered: !self.shell.overview_visible()
+                && wallpaper::covered(
+                    inset(self.shell.work_area(), self.shell.profile().gap),
+                    self.shell.placements().iter().map(|p| p.frame),
+                ),
+            low_power: look.low_power,
+            reduce_motion: !look.animate,
+        };
+        self.wallpaper.paint(painter, screen, &self.ui.theme, seen);
     }
 
     fn paint_decoration(&mut self, painter: &egui::Painter, placement: &Placement) {
@@ -768,6 +1064,22 @@ impl compositor::Shell for Session {
         }
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
+        // Windows make room for the on-screen keyboard, and what it typed
+        // for them goes to the focused one. It goes through the same
+        // synthetic-input path agents use, so the keyboard can't confirm
+        // what only a direct tap may (the power-off dialog).
+        self.shell.keyboard = self.ui.keyboard_height(&self.shell);
+        for typed in self.ui.take_window_input() {
+            let key = |sym| Input::Key {
+                sym,
+                mods: Modifiers::default(),
+            };
+            self.commands.push(Command::Input(match typed {
+                Typed::Text(text) => Input::Text(text),
+                Typed::Backspace => key(Keysym::BackSpace),
+                Typed::Enter => key(Keysym::Return),
+            }));
+        }
         // Requests typed in the palette; their progress shows in its
         // conversation.
         for ask in self.ui.take_asks() {
@@ -839,12 +1151,104 @@ impl compositor::Shell for Session {
     fn take_commands(&mut self) -> Vec<Command> {
         std::mem::take(&mut self.commands)
     }
+
+    fn access_subtrees(&mut self) -> Vec<Subtree> {
+        let mut subtrees = self.title_bar_nodes();
+        subtrees.extend(self.registered.values().map(|(_, s)| s.clone()));
+        subtrees
+    }
+
+    fn access_action(
+        &mut self,
+        window: WindowId,
+        node: NodeId,
+        action: accesskit::Action,
+        value: Option<&str>,
+    ) {
+        if node.0 >= TITLE_BAR_NODES {
+            if action != accesskit::Action::Click {
+                return;
+            }
+            let w = Some(window.get());
+            let action = match node.0 - TITLE_BAR_NODES {
+                0 => Action::Close { window: w },
+                1 => Action::Minimize { window: w },
+                2 => Action::ToggleMaximize { window: w },
+                _ => return,
+            };
+            self.dispatch(vec![action]);
+            return;
+        }
+        // A node a program registered: tell that program.
+        if let Some((conn, _)) = self.registered.get(&window)
+            && let Some(events) = self.listeners.get(conn)
+        {
+            let event = computer::action_event(window, node, action, value);
+            let _ = events.send(event.to_string());
+        }
+    }
+
+    fn described(&mut self, request: u64, tree: Snapshot) {
+        let Some((reply, query)) = self.trees.remove(&request) else {
+            return;
+        };
+        let result = match query {
+            TreeQuery::Tree { window } => computer::tree_json(&tree, window),
+            TreeQuery::Find { role, name, window } => {
+                computer::find_json(&tree, role.as_deref(), name.as_deref(), window)
+            }
+        };
+        let _ = reply.send(json!({"ok": true, "result": result}).to_string());
+    }
+
+    fn captured(&mut self, request: u64, frame: std::result::Result<Capture, String>) {
+        let Some((reply, inline)) = self.shots.remove(&request) else {
+            return;
+        };
+        // Encoding takes a while; keep it off the compositor thread.
+        std::thread::spawn(move || {
+            let result = frame.and_then(|capture| {
+                let png = computer::png(&capture)?;
+                let dir = computer::screenshot_dir()
+                    .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_owned())?;
+                let path = computer::save_screenshot(&dir, request, &png)
+                    .map_err(|e| format!("cannot save the screenshot: {e}"))?;
+                let mut result = json!({
+                    "path": path,
+                    "width": capture.width,
+                    "height": capture.height,
+                });
+                if inline {
+                    result["png_base64"] = json!(computer::base64(&png));
+                }
+                Ok(result)
+            });
+            let line = match result {
+                Ok(result) => json!({"ok": true, "result": result}),
+                Err(error) => json!({"ok": false, "error": error}),
+            };
+            let _ = reply.send(line.to_string());
+        });
+    }
+
+    fn input_source(&mut self, synthetic: bool) {
+        self.shell.set_synthetic_input(synthetic);
+    }
+}
+
+fn button_index(button: Button) -> u64 {
+    match button {
+        Button::Close => 0,
+        Button::Minimize => 1,
+        Button::Maximize => 2,
+    }
 }
 
 /// The derisk core apps, as in-process windows.
 struct CoreApps {
     session: derisk_apps::Session,
     pending_actions: PendingActions,
+    phone: Arc<AtomicBool>,
 }
 
 impl Apps for CoreApps {
@@ -890,13 +1294,15 @@ impl Apps for CoreApps {
 
     fn prepare(&mut self, ctx: &egui::Context, theme: &Theme) {
         ctx.set_visuals(derisk_apps::visuals(theme));
+        set_touch_style(ctx, self.phone.load(Ordering::Relaxed));
     }
 }
 
 /// Runs the session until the window is closed.
 pub fn run(options: Options) -> Result {
     let pending_actions = PendingActions::default();
-    let session = Session::new(&options, pending_actions.clone());
+    let phone = Arc::new(AtomicBool::new(false));
+    let session = Session::new(&options, pending_actions.clone(), phone.clone());
     let lock_path = session.session_path.clone();
     if options.execute {
         let _ = systemd::run(&systemd::stop_headless_agent_argv());
@@ -904,6 +1310,7 @@ pub fn run(options: Options) -> Result {
     let apps = CoreApps {
         session: derisk_apps::Session::new()?,
         pending_actions,
+        phone,
     };
     let (w, h) = options.size;
     let mut compositor = Compositor::new(session)
@@ -1106,16 +1513,35 @@ fn agent_socket(path: Option<PathBuf>, remote: Remote<Session>) -> Result<Option
     Ok(Some(path))
 }
 
+/// Numbers agent connections, so registered trees know their owner.
+static CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+
 fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
-    let Ok(mut writer) = stream.try_clone() else {
+    let Ok(writer) = stream.try_clone() else {
         return;
     };
+    let conn = CONNECTIONS.fetch_add(1, Ordering::Relaxed);
+    let writer = Arc::new(Mutex::new(writer));
+    // Events for trees this connection registered arrive between responses.
+    let (events, event_lines) = mpsc::channel::<String>();
+    {
+        let writer = writer.clone();
+        std::thread::spawn(move || {
+            for line in event_lines {
+                let Ok(mut w) = writer.lock() else { return };
+                if writeln!(w, "{line}").is_err() {
+                    return;
+                }
+            }
+        });
+    }
     let mut reader = BufReader::new(stream);
     while let Ok(Some(line)) = ipc::read_request(&mut reader) {
         if line.trim().is_empty() {
             continue;
         }
         let (reply, response) = mpsc::channel();
+        let events = events.clone();
         let queued = remote.run(move |session: &mut Session| {
             // A locked desktop answers nothing: no window titles, no
             // launches, no actions.
@@ -1125,20 +1551,20 @@ fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
                 );
                 return;
             }
-            let (response, effects) = ipc::handle_line(&mut session.shell, &line);
-            session.perform(effects);
-            let _ = reply.send(response);
+            session.agent_line(conn, &line, reply, &events);
         });
         if !queued {
             return;
         }
         let Ok(response) = response.recv() else {
-            return;
+            break;
         };
-        if writeln!(writer, "{response}").is_err() {
-            return;
+        let Ok(mut w) = writer.lock() else { break };
+        if writeln!(w, "{response}").is_err() {
+            break;
         }
     }
+    remote.run(move |session: &mut Session| session.agent_disconnected(conn));
 }
 
 /// Layout-independent key for shortcuts, from the unmodified keysym.

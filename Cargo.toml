@@ -9,17 +9,14 @@ license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
 [workspace.dependencies]
-# Until dasmatus/mcsapi#25 (the mcsapi-theme theming engine) merges, every
-# mcsapi crate comes from its branch so the apps and the compositor share one
-# mcsapi-ui. That branch has main merged in, so it carries #24 too (a lock
-# cancels the held press). Then drop the `branch` keys and run
-# `cargo update -p mcsapi`.
-mcsapi = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
-mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
-mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
-mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
-mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
-mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi", branch = "claude/project-thread-u4arge" }
+# Every mcsapi crate comes from the same mcsapi revision so the apps and the
+# compositor share one mcsapi-ui; `cargo update -p mcsapi` moves them together.
+mcsapi = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-ui = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-runtime = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-theme = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi" }
+mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
@@ -41,9 +38,10 @@ repository.workspace = true
 [dependencies]
 derisk-settings.workspace = true
 mcsapi.workspace = true
+# Wallpapers in the formats the Settings app offers; app icons from the icon
+# theme are PNG (SVG goes through resvg).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 mcsapi-theme.workspace = true
-# App icons from the icon theme: PNG and SVG, the two formats themes ship.
-image = { version = "0.25", default-features = false, features = ["png"] }
 resvg = { version = "0.48.1", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
@@ -57,6 +55,8 @@ mcsapi-runtime = { workspace = true, optional = true }
 libc = { version = "0.2", optional = true }
 # Only its list of ported apps; the GPUI build is its own binary.
 derisk-gpui = { workspace = true, optional = true }
+# Screenshots for agents (`{"method":"screenshot"}`).
+png = { version = "0.18.1", optional = true }
 
 [features]
 host = [
@@ -65,5 +65,6 @@ host = [
     "dep:libc",
     "dep:mcsapi-compositor",
     "dep:mcsapi-runtime",
+    "dep:png",
 ]
 

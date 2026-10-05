@@ -270,7 +270,8 @@ impl EditorApp {
             });
         }
         if self.show_find {
-            ui.horizontal(|ui| {
+            // Wraps where the window is too narrow, as on a phone.
+            ui.horizontal_wrapped(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.find).hint_text("Find"));
                 ui.add(egui::TextEdit::singleline(&mut self.replace).hint_text("Replace with"));
                 if ui.button("Replace all").clicked() {
