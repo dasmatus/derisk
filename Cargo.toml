@@ -1,5 +1,17 @@
 [workspace]
+resolver = "3"
 members = ["crates/*"]
+# A bare `cargo build`, `cargo test` or `cargo run` at the root means derisk
+# itself and the shell crates its binary is made of, as it did when derisk
+# was the root package. The apps, the portal and the GPUI runtime are built
+# by name (`-p`) or with `--workspace`.
+default-members = [
+    "crates/derisk",
+    "crates/derisk-desktop",
+    "crates/derisk-geom",
+    "crates/derisk-install",
+    "crates/derisk-login",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +31,10 @@ mcsapi-components = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-components-gpui = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-hardened-malloc = { git = "https://github.com/dasmatus/mcsapi" }
+derisk-desktop = { path = "crates/derisk-desktop", version = "0.1.0" }
+derisk-geom = { path = "crates/derisk-geom", version = "0.1.0" }
+derisk-install = { path = "crates/derisk-install", version = "0.1.0" }
+derisk-login = { path = "crates/derisk-login", version = "0.1.0" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
@@ -28,62 +44,8 @@ derisk-apps = { path = "crates/derisk-apps", version = "0.1.0" }
 derisk-icons = { path = "crates/derisk-icons", version = "0.1.0" }
 derisk-gpui = { path = "crates/derisk-gpui", version = "0.1.0" }
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
-
-[package]
-name = "derisk"
-description = "An adaptive, agent-first Wayland desktop shell built on mcsapi"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-
-[dependencies]
-derisk-icons.workspace = true
-derisk-settings.workspace = true
-mcsapi.workspace = true
-# Buttons, fields and alerts for the installer and first-boot setup.
-mcsapi-components.workspace = true
-# Wallpapers in the formats the Settings app offers.
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
-mcsapi-theme.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-
-# `derisk session` runs on mcsapi-compositor with the derisk core apps. Off by
-# default so the shell library and headless commands build without graphics.
-derisk-apps = { workspace = true, optional = true }
-mcsapi-compositor = { workspace = true, optional = true }
-mcsapi-runtime = { workspace = true, optional = true }
-# Only its list of ported apps; the GPUI build is its own binary.
-derisk-gpui = { workspace = true, optional = true }
-# The lock screen's PAM conversation allocates with libc, which PAM frees.
-libc = { version = "0.2", optional = true }
-# Screenshots for agents (`{"method":"screenshot"}`).
-png = { version = "0.18.1", optional = true }
-# GrapheneOS's hardened_malloc as the allocator (`hardened-malloc`). Links the
-# system's libhardened_malloc.so, so it is off by default: a build host
-# without that library can still build derisk.
-mcsapi-hardened-malloc = { workspace = true, optional = true }
-
-[features]
-host = [
-    "dep:derisk-apps",
-    "dep:derisk-gpui",
-    "dep:libc",
-    "dep:mcsapi-compositor",
-    # The display manager starts the login screen and the session on the
-    # bare seat, with no compositor underneath to nest in.
-    "mcsapi-compositor/kms",
-    "dep:mcsapi-runtime",
-    "dep:png",
-]
-# Make hardened_malloc derisk's allocator, for the Rust heap and every C
-# library in the process. Turn it on only where the system has
-# libhardened_malloc.so and a 48-bit address space (see the crate's docs);
-# LosOS does on PCs, where it also preloads it into every process.
-hardened-malloc = ["dep:mcsapi-hardened-malloc"]
-
 
 # One codegen unit and fat LTO across every crate, mcsapi included: release
 # builds are the ones that ship, so they trade build time for inlining across

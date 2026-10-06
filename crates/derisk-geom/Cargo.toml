@@ -1,0 +1,12 @@
+[package]
+name = "derisk-geom"
+description = "Geometry, window snapping and server-side decorations for the derisk shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mcsapi.workspace = true
+serde.workspace = true

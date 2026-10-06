@@ -7,7 +7,7 @@
 //! title bars, the top bar, the overview and Snap Assist show those instead.
 //!
 //! ```
-//! use derisk::{apps::Apps, desktop::DesktopEntry};
+//! use derisk_desktop::{apps::Apps, desktop::DesktopEntry};
 //!
 //! let firefox = DesktopEntry::parse("org.mozilla.firefox.desktop", "\
 //! [Desktop Entry]

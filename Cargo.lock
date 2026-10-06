@@ -1541,8 +1541,12 @@ name = "derisk"
 version = "0.1.0"
 dependencies = [
  "derisk-apps",
+ "derisk-desktop",
+ "derisk-geom",
  "derisk-gpui",
  "derisk-icons",
+ "derisk-install",
+ "derisk-login",
  "derisk-settings",
  "image",
  "libc",
@@ -1580,6 +1584,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "derisk-desktop"
+version = "0.1.0"
+
+[[package]]
 name = "derisk-editor"
 version = "0.1.0"
 dependencies = [
@@ -1593,6 +1601,14 @@ dependencies = [
  "derisk-icons",
  "libc",
  "mcsapi-ui",
+]
+
+[[package]]
+name = "derisk-geom"
+version = "0.1.0"
+dependencies = [
+ "mcsapi",
+ "serde",
 ]
 
 [[package]]
@@ -1614,6 +1630,22 @@ dependencies = [
  "image",
  "mcsapi-ui",
  "resvg 0.48.1",
+]
+
+[[package]]
+name = "derisk-install"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "derisk-login"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

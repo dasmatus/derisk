@@ -39,8 +39,6 @@
               ./Cargo.lock
               ./data
               ./crates/derisk-apps/data
-              (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./src)
-              (lib.fileset.fileFilter (f: f.hasExt "rs") ./tests)
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./crates)
             ];
           };

@@ -67,7 +67,7 @@ with `{"action":"palette"}` and open files with `{"action":"open","path":...}`
 
 ## Agent-first
 
-Everything the shell can do is an `Action` (see `src/action.rs`). The UI,
+Everything the shell can do is an `Action` (see `crates/derisk/src/action.rs`). The UI,
 keyboard, assistant and external agents all go through the same actions, so
 anything a person can do an agent can do too, under the same rules.
 
@@ -233,7 +233,7 @@ same theme.
 Install the units:
 
 ```console
-$ cargo install --path .
+$ cargo install --path crates/derisk
 $ cp data/systemd/user/* ~/.config/systemd/user/
 $ systemctl --user daemon-reload
 $ systemctl --user start derisk-agent.socket   # headless only; a session serves the socket itself
@@ -363,13 +363,13 @@ screen and the session. `--dry-run --force` walks the pages without saving.
 
 `derisk installer` draws the pages and joins networks; the disk work is a
 backend's, started from the command after `--`, which speaks JSON lines
-(`src/install.rs`): it says hello with the system's name and source, lists
+(`crates/derisk-install/src/install.rs`): it says hello with the system's name and source, lists
 disks, installs one with its steps and output, and reboots. LosOS's backend
 is `losos-installer serve`. The installer names the disk and asks once more,
 with the only red button, before anything is erased.
 
 Both share the Network page: wired ports as networkd sees them and Wi-Fi
-over wpa_supplicant's control socket (`src/network.rs`, as NixOS runs it with
+over wpa_supplicant's control socket (`crates/derisk-install/src/network.rs`, as NixOS runs it with
 `userControlled`). The setup saves a network it joins (`SAVE_CONFIG`).
 
 ### Headless commands
@@ -416,8 +416,28 @@ $ PATH=$PWD/target/release:$PATH scripts/showcase.py derisk-showcase.mp4
 
 ## Core apps
 
-The repository is a Cargo workspace: the shell is the root package and the
-core apps live under `crates/`. Each app is an `mcsapi_ui::App` with its logic
+The repository is a Cargo workspace with every crate under `crates/` and
+nothing but the workspace at the root:
+
+| Crate | What it holds |
+| --- | --- |
+| `derisk` | The shell (`shell`, `ui`, `palette`, `ipc`, ...) and the `derisk` binary with all its subcommands. |
+| `derisk-geom` | Geometry, snapping and server-side decorations. |
+| `derisk-desktop` | `.desktop` entries and app names and icons by app ID. |
+| `derisk-install` | The installer's backend protocol, locales and time zones, and the network. |
+| `derisk-login` | The greetd login protocol and the lock screen's state. |
+| `derisk-portal` | `xdg-desktop-portal-derisk`. |
+| `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
+
+The four shell crates have nothing of the shell's above them, so they build
+and test without egui or the compositor; `derisk` re-exports each of their
+modules at the path it had before (`derisk::geom`, `derisk::install`, ...).
+The rest of the shell stays one crate because its modules use one another
+in a cycle (the shell's model, its egui drawing and the phone UI). A bare
+`cargo build` or `cargo test` at the root covers `derisk` and those four
+crates; `--workspace` adds the apps, the portal and GPUI.
+
+The core apps live under `crates/` too. Each app is an `mcsapi_ui::App` with its logic
 in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
 
 | App | Crate | What it does |

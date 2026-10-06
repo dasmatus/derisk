@@ -192,7 +192,8 @@ fn agent_reports_readiness_over_notify_socket() {
 
 #[test]
 fn shipped_units_wire_socket_activation() {
-    let root = env!("CARGO_MANIFEST_DIR");
+    // data/ sits at the repository root, two levels above this crate.
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let socket =
         std::fs::read_to_string(format!("{root}/data/systemd/user/derisk-agent.socket")).unwrap();
     let service =
