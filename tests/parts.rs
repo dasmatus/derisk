@@ -4,7 +4,7 @@ use derisk::{
     geom::rect,
     overview::{Battery, grid},
     snap::{Direction, Nudge, SnapConfig, SnapZone, zone_at},
-    time::Clock,
+    time::{Clock, utc_offset},
     tray::{Pixmap, monochrome},
 };
 
@@ -126,6 +126,76 @@ fn clock_and_calendar() {
     assert_eq!(c.time_label(), "09:00");
     assert_eq!(c.days_in_month(), 31);
     assert_eq!(c.first_weekday(), 3);
+}
+
+/// A version 2 TZif file with the given 64-bit transitions, each switching
+/// to the type at the same index of `offsets`, and the POSIX rule `footer`.
+fn tzif(transitions: &[(i64, u8)], offsets: &[i32], footer: &str) -> Vec<u8> {
+    fn header(timecnt: usize, typecnt: usize) -> Vec<u8> {
+        let mut h = b"TZif2".to_vec();
+        h.resize(20, 0);
+        // isutcnt, isstdcnt, leapcnt, timecnt, typecnt, charcnt (one NUL).
+        for n in [0, 0, 0, timecnt, typecnt, 1] {
+            h.extend((n as u32).to_be_bytes());
+        }
+        h
+    }
+    let types: Vec<u8> = offsets
+        .iter()
+        .flat_map(|o| o.to_be_bytes().into_iter().chain([0, 0]))
+        .collect();
+    // The version 1 block carries no transitions, as zic -b slim writes it.
+    let mut file = header(0, offsets.len());
+    file.extend(&types);
+    file.push(0);
+    file.extend(header(transitions.len(), offsets.len()));
+    file.extend(transitions.iter().flat_map(|(t, _)| t.to_be_bytes()));
+    file.extend(transitions.iter().map(|(_, i)| *i));
+    file.extend(&types);
+    file.push(0);
+    file.extend(format!("\n{footer}\n").bytes());
+    file
+}
+
+#[test]
+fn clock_follows_the_time_zone_file() {
+    // 2026-10-05 19:50 UTC, when the demo's top bar showed 19:56 in
+    // Bratislava instead of the local 21:5x.
+    let october = 1_791_229_800;
+    let january = 1_799_000_000; // 2027-01-03
+    let cet = tzif(&[], &[3600], "CET-1CEST,M3.5.0,M10.5.0/3");
+    assert_eq!(utc_offset(&cet, october), Some(7200));
+    assert_eq!(utc_offset(&cet, january), Some(3600));
+    assert_eq!(Clock::from_unix(october, 7200).time_label(), "21:50");
+    // The 2026 changes: 29 March 01:00 UTC and 25 October 01:00 UTC.
+    assert_eq!(utc_offset(&cet, 1_774_745_999), Some(3600));
+    assert_eq!(utc_offset(&cet, 1_774_746_000), Some(7200));
+    assert_eq!(utc_offset(&cet, 1_792_890_000 - 1), Some(7200));
+    assert_eq!(utc_offset(&cet, 1_792_890_000), Some(3600));
+    // Southern hemisphere: Sydney's daylight time spans the new year.
+    let sydney = tzif(&[], &[36000], "AEST-10AEDT,M10.1.0,M4.1.0/3");
+    assert_eq!(utc_offset(&sydney, january), Some(39600));
+    assert_eq!(utc_offset(&sydney, 1_784_000_000), Some(36000)); // July 2026
+    // A fixed zone, a quoted name, and UTC itself.
+    assert_eq!(
+        utc_offset(&tzif(&[], &[19800], "IST-5:30"), october),
+        Some(19800)
+    );
+    assert_eq!(
+        utc_offset(&tzif(&[], &[-10800], "<-03>3"), october),
+        Some(-10800)
+    );
+    assert_eq!(utc_offset(&tzif(&[], &[0], "UTC0"), october), Some(0));
+    // Inside the table, transitions win over the footer.
+    let table = tzif(&[(0, 0), (2_000_000_000, 1)], &[3600, 7200], "XYZ-3");
+    assert_eq!(utc_offset(&table, october), Some(3600));
+    assert_eq!(utc_offset(&table, 2_000_000_000), Some(10800));
+    assert_eq!(utc_offset(b"not a zone file", october), None);
+    // The real file, where this machine has one.
+    if let Ok(real) = std::fs::read("/usr/share/zoneinfo/Europe/Bratislava") {
+        assert_eq!(utc_offset(&real, october), Some(7200));
+        assert_eq!(utc_offset(&real, january), Some(3600));
+    }
 }
 
 #[test]

@@ -259,9 +259,10 @@ pub fn plan(choices: &Choices) -> Vec<Task> {
             account.user_name.clone(),
             format!("--real-name={}", account.real_name.trim()),
             "--member-of=wheel".into(),
-            // The language travels with the home area, for apps that read
-            // the user record rather than the session's environment.
-            format!("--language={}", choices.locale),
+            // No --language: systemd 261's homectl turns it into a record
+            // with `"perMachine": null`, which it then refuses as "not an
+            // array". The session takes its language from localed's
+            // /etc/locale.conf, which the Language task sets.
             format!("--timezone={}", choices.time_zone),
         ]
         .into_iter()
