@@ -118,6 +118,7 @@ struct Installer {
     step: Step,
     name: String,
     source: Option<String>,
+    release: Option<String>,
     backend_lost: bool,
     wifi: Wifi,
     network: NetworkPage,
@@ -135,9 +136,14 @@ impl Installer {
                 continue;
             };
             match event {
-                Event::Hello { name, source } => {
+                Event::Hello {
+                    name,
+                    source,
+                    release,
+                } => {
                     self.name = name;
                     self.source = source;
+                    self.release = release;
                 }
                 Event::Disks { disks } => {
                     if self.disk.is_some_and(|d| d >= disks.len()) {
@@ -206,7 +212,15 @@ impl Installer {
             .font(tokens.body_font()),
         );
         ui.add_space(8.0);
-        if let Some(source) = &self.source {
+        if let Some(release) = &self.release {
+            wizard::notice(
+                ui,
+                &format!(
+                    "The release on the disk at {release} is checked against its signature and installed, so no network is needed."
+                ),
+                false,
+            );
+        } else if let Some(source) = &self.source {
             wizard::notice(
                 ui,
                 &format!(
@@ -339,7 +353,9 @@ impl Flow for Installer {
         self.poll();
         let status = self.wifi.status();
         // A cable that comes up skips the Network page on the way forward,
-        // as it did in the text installer.
+        // as it did in the text installer, and so does a release disk, which
+        // is everything an install needs.
+        let offline_ok = status.online || self.release.is_some();
         let step = self.step;
         let index = Step::PAGES.iter().position(|s| *s == step);
         let (title, subtitle, next, back) = match step {
@@ -386,6 +402,8 @@ impl Flow for Installer {
                         "Nothing was installed. Go back to try again, or pick another disk."
                     } else if done {
                         "The computer is ready to restart into the new system."
+                    } else if self.release.is_some() {
+                        "This takes a while: the system is copied from the release disk."
                     } else {
                         "This takes a while: the system is downloaded as it installs."
                     },
@@ -410,7 +428,7 @@ impl Flow for Installer {
             Step::Installing => self.installing_page(ui),
         });
         match (nav, step) {
-            (Nav::Next, Step::Welcome) => self.go(if status.online {
+            (Nav::Next, Step::Welcome) => self.go(if offline_ok {
                 Step::Disk
             } else {
                 Step::Network
@@ -429,7 +447,7 @@ impl Flow for Installer {
                 self.backend.send(&Request::Reboot);
             }
             (Nav::Back, Step::Network) => self.go(Step::Welcome),
-            (Nav::Back, Step::Disk) => self.go(if status.online {
+            (Nav::Back, Step::Disk) => self.go(if offline_ok {
                 Step::Welcome
             } else {
                 Step::Network
@@ -450,6 +468,7 @@ pub fn run(backend: Vec<String>, size: (i32, i32)) -> Result {
         step: Step::Welcome,
         name: "the system".into(),
         source: None,
+        release: None,
         backend_lost: false,
         // Nothing to save Wi-Fi into: the live system forgets it, and the
         // installed one asks again on its first boot.

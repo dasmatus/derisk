@@ -13,7 +13,7 @@
 //! [`Event::Failed`]. What the backend prints to stderr goes to the journal.
 //!
 //! ```text
-//! → {"event":"hello","name":"LosOS Desktop","source":"https://…"}
+//! → {"event":"hello","name":"LosOS Desktop","source":"https://…","release":null}
 //! ← {"method":"disks"}
 //! → {"event":"disks","disks":[{"path":"/dev/vda","name":"vda","model":"","size":21474836480,"removable":false}]}
 //! ← {"method":"install","disk":"/dev/vda"}
@@ -93,6 +93,11 @@ pub enum Event {
         /// Where the system is downloaded from, if anywhere.
         #[serde(default)]
         source: Option<String>,
+        /// A release on a local disk that the backend installs from instead
+        /// of `source`, so no network is needed. The backend may send Hello
+        /// again when such a disk is plugged in or removed.
+        #[serde(default)]
+        release: Option<String>,
     },
     /// The answer to [`Request::Disks`].
     Disks {
