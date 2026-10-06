@@ -8,7 +8,7 @@
 //! [Desktop Actions]: https://specifications.freedesktop.org/desktop-entry-spec/latest/extra-actions.html
 //!
 //! ```
-//! use derisk::desktop::DesktopEntry;
+//! use derisk_desktop::desktop::DesktopEntry;
 //!
 //! let entry = DesktopEntry::parse("firefox.desktop", "\
 //! [Desktop Entry]

@@ -36,6 +36,11 @@
 //!   their pages, the backend protocol an installer speaks, languages,
 //!   keyboard layouts and time zones, and Wi-Fi.
 //!
+//! The shell's lowest layers are crates of their own, re-exported here at the
+//! paths they always had: `derisk-geom` ([`geom`], [`snap`], [`decorations`]),
+//! `derisk-desktop` ([`desktop`], [`apps`]), `derisk-install` ([`install`],
+//! [`locale`], [`network`]) and `derisk-login` ([`greetd`], [`lock`]).
+//!
 //! ```
 //! use derisk::{action::Action, geom::rect, shell::Shell, snap::SnapZone};
 //!
@@ -53,31 +58,21 @@
 pub mod action;
 pub mod adaptive;
 pub mod animation;
-pub mod apps;
 pub mod assistant;
 pub mod conversation;
-pub mod decorations;
-pub mod desktop;
 pub mod effects;
-pub mod geom;
-pub mod greetd;
 pub mod icons;
-pub mod install;
 pub mod ipc;
 pub mod keyboard;
 pub mod keys;
-pub mod locale;
-pub mod lock;
 pub mod mcp;
 pub mod menu;
 pub mod mobile;
-pub mod network;
 pub mod overview;
 pub mod palette;
 pub mod privacy;
 pub mod setup;
 pub mod shell;
-pub mod snap;
 pub mod systemd;
 pub mod theme;
 pub mod time;
@@ -88,4 +83,16 @@ pub mod widgets;
 pub mod wifi;
 pub mod wizard;
 
+// The layers with nothing above them in the shell live in their own crates;
+// they stay at the paths they had when they were modules here.
+pub use derisk_desktop::apps;
+pub use derisk_desktop::desktop;
+pub use derisk_geom::decorations;
+pub use derisk_geom::geom;
+pub use derisk_geom::snap;
+pub use derisk_install::install;
+pub use derisk_install::locale;
+pub use derisk_install::network;
+pub use derisk_login::greetd;
+pub use derisk_login::lock;
 pub use mcsapi;
