@@ -26,6 +26,11 @@ fn languages_are_utf8_locales_by_native_name() {
             "xx_YY.UTF-8"
         ]
     );
+    // glibc's `locale -a` spelling, as NixOS lists them, written the way
+    // localectl and homectl are given a locale; a modifier is kept.
+    let glibc = locale::languages("C.utf8\nen_US.utf8\nsk_SK.utf8\nsr_RS.utf8@latin\nPOSIX\n");
+    let codes: Vec<&str> = glibc.iter().map(|l| l.locale.as_str()).collect();
+    assert_eq!(codes, ["en_US.UTF-8", "sk_SK.UTF-8", "sr_RS.UTF-8@latin"]);
     assert_eq!(
         locale::language_name("de_DE.UTF-8@euro"),
         Some("Deutsch (Deutschland)")

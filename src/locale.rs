@@ -79,19 +79,31 @@ pub fn language_name(locale: &str) -> Option<&'static str> {
     NAMES.iter().find(|(l, _)| *l == base).map(|(_, n)| *n)
 }
 
-/// The UTF-8 locales in `localectl list-locales` output, as languages,
-/// sorted by name. `C.UTF-8` is left out: it is no one's language.
+/// The UTF-8 locales in `locale -a` or `localectl list-locales` output, as
+/// languages, sorted by name. `C.UTF-8` is left out: it is no one's
+/// language. glibc's `xx_YY.utf8` spelling is written `xx_YY.UTF-8`, as
+/// localectl and homectl are given it.
 pub fn languages(list_locales: &str) -> Vec<Language> {
     let mut out: Vec<Language> = list_locales
         .lines()
         .map(str::trim)
         .filter(|l| {
             let upper = l.to_ascii_uppercase();
-            (upper.ends_with(".UTF-8") || upper.ends_with(".UTF8")) && !upper.starts_with("C.")
+            let charset = upper.split('@').next().unwrap_or_default();
+            (charset.ends_with(".UTF-8") || charset.ends_with(".UTF8")) && !upper.starts_with("C.")
         })
-        .map(|locale| Language {
-            locale: locale.to_owned(),
-            name: language_name(locale).unwrap_or(locale).to_owned(),
+        .map(|locale| {
+            let locale = match locale.split_once('.') {
+                Some((base, rest)) => match rest.split_once('@') {
+                    Some((_, modifier)) => format!("{base}.UTF-8@{modifier}"),
+                    None => format!("{base}.UTF-8"),
+                },
+                None => locale.to_owned(),
+            };
+            Language {
+                name: language_name(&locale).unwrap_or(&locale).to_owned(),
+                locale,
+            }
         })
         .collect();
     out.sort_by(|a, b| {
@@ -123,9 +135,17 @@ fn sort_key(name: &str) -> String {
         .collect()
 }
 
-/// The installed languages, from `localectl list-locales`.
+/// The installed languages, from `locale -a` or `localectl list-locales`.
 pub fn installed_languages() -> Vec<Language> {
-    languages(&output(&["localectl", "list-locales", "--no-pager"]))
+    // glibc's own list first: it reads the archive `LOCALE_ARCHIVE` names,
+    // which is where NixOS keeps it. localectl only looks under
+    // /usr/lib/locale, so it is the fallback for systems that use that.
+    let from_glibc = languages(&output(&["locale", "-a"]));
+    if from_glibc.is_empty() {
+        languages(&output(&["localectl", "list-locales", "--no-pager"]))
+    } else {
+        from_glibc
+    }
 }
 
 /// A keyboard layout.
