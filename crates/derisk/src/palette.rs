@@ -72,6 +72,8 @@ pub enum Category {
     Ask,
     /// Search the web with the chosen engine.
     Web,
+    /// Hand the request to the agent set up in Sonne.
+    Agent,
 }
 
 impl Category {
@@ -90,6 +92,7 @@ impl Category {
             Self::File => "Files",
             Self::Ask => "Assistant",
             Self::Web => "Web",
+            Self::Agent => "Agent",
         }
     }
 
@@ -444,6 +447,28 @@ pub fn ask(query: &str) -> Entry {
         )
         .detail(e.to_string()),
     }
+}
+
+/// The entry handing a request the assistant did not understand to the
+/// agent set up in Sonne, which can do far more than the built-in rules with
+/// the model key or agent CLI the person installed there. It only opens the
+/// request in Sonne's agent panel, for the person to send.
+pub fn agent(query: &str) -> Option<Entry> {
+    let (scope, text) = scope(query);
+    if scope != Scope::All || text.is_empty() || assistant::interpret(text).is_ok() {
+        return None;
+    }
+    Some(
+        Entry::new(
+            Category::Agent,
+            "tool-magic",
+            format!("Ask Sonne's agent: {text}"),
+            vec![Action::AskAgent {
+                text: text.to_owned(),
+            }],
+        )
+        .detail("Opens in Sonne, with the model or agent CLI set up there"),
+    )
 }
 
 /// The web search entry for a query, when a search engine has been chosen

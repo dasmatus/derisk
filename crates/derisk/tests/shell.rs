@@ -448,3 +448,17 @@ fn the_bar_can_move_to_the_bottom_or_hide() {
     shell.effects.top_bar.autohide = true;
     assert_eq!(shell.work_area(), rect(0, 0, 1920, 1080));
 }
+
+#[test]
+fn requests_for_sonnes_agent_open_its_panel() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let outcome = shell.run([Action::AskAgent {
+        text: "tidy my downloads & sort by date".into(),
+    }]);
+    assert_eq!(
+        outcome.effects,
+        [Effect::Open {
+            path: "zed://agent?prompt=tidy+my+downloads+%26+sort+by+date".into()
+        }]
+    );
+}

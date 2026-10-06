@@ -300,6 +300,17 @@ fn unmatched_text_goes_to_the_assistant() {
     let unknown = palette::ask("frobnicate the flux");
     assert!(unknown.actions.is_empty());
     assert!(unknown.detail.contains("frobnicate"));
+
+    // ...and Sonne's agent is offered it instead, while requests the
+    // assistant does follow stay its own.
+    let agent = palette::agent("frobnicate the flux");
+    assert_eq!(
+        agent.map(|entry| entry.actions),
+        Some(vec![Action::AskAgent {
+            text: "frobnicate the flux".into()
+        }])
+    );
+    assert!(palette::agent(query).is_none());
 }
 
 #[test]

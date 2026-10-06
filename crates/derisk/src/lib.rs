@@ -20,7 +20,8 @@
 //! - [`tray`]: monochrome system tray icons.
 //! - [`animation`]: the startup animation.
 //! - [`effects`]: translucent, blurred panels and low power mode.
-//! - [`assistant`] and [`ipc`]: natural-language and agent control.
+//! - [`assistant`] and [`ipc`]: natural-language and agent control, and
+//!   [`mcp`]: the agent tools as an MCP server.
 //! - [`conversation`]: requests and their progress, shown in the palette.
 //! - [`keys`]: keyboard shortcuts.
 //! - [`lock`] and [`greetd`]: the lock screen, and the login conversation
@@ -64,6 +65,7 @@ pub mod icons;
 pub mod ipc;
 pub mod keyboard;
 pub mod keys;
+pub mod mcp;
 pub mod menu;
 pub mod mobile;
 pub mod overview;

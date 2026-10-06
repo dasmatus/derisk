@@ -319,6 +319,21 @@ const LAUNCHER_EXTENSIONS: &[&str] = &[
     "apk",
 ];
 
+/// The link that opens Sonne's agent panel with `text` as the prompt to send.
+pub fn agent_url(text: &str) -> String {
+    let mut url = String::from("zed://agent?prompt=");
+    for byte in text.trim().bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                url.push(byte as char);
+            }
+            b' ' => url.push('+'),
+            _ => url.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    url
+}
+
 /// Whether `path` is safe to hand to `xdg-open`: absolute, existing, and
 /// neither executable nor a launcher, so opening it cannot run a program.
 ///
@@ -1053,6 +1068,13 @@ impl Shell {
                 // An https URL, so xdg-open cannot read it as an option.
                 return Ok(vec![Effect::Open {
                     path: engine.url(&query),
+                }]);
+            }
+            Action::AskAgent { text } => {
+                // Sonne registers the zed: scheme; xdg-open cannot read a
+                // URL that starts with it as an option.
+                return Ok(vec![Effect::Open {
+                    path: agent_url(&text),
                 }]);
             }
             Action::ActivateMenu { window, item } => {

@@ -149,6 +149,15 @@ pub enum Action {
         /// What to search for.
         query: String,
     },
+    /// Hand a request the built-in assistant can't follow to the agent set
+    /// up in Sonne, with whichever model key or agent CLI the person chose
+    /// there. It opens in Sonne's agent panel for the person to send, so
+    /// nothing runs on an agent's say-so, and that agent drives the desktop
+    /// through `derisk mcp`.
+    AskAgent {
+        /// The request, as typed.
+        text: String,
+    },
     /// Choose a global-menu item.
     ActivateMenu {
         /// Window owning the menu.
@@ -261,6 +270,7 @@ impl Action {
             Self::Keyboard { visible: None } => "Toggle the on-screen keyboard".into(),
             Self::Open { path } => format!("Open {path}"),
             Self::SearchWeb { query } => format!("Search the web for {query}"),
+            Self::AskAgent { text } => format!("Ask Sonne's agent: {text}"),
             Self::ActivateMenu { item, .. } => format!("Choose menu item {item}"),
             Self::Session { op, .. } => format!("{op:?}"),
             Self::ActivateTray { id, .. } => format!("Activate tray item {id}"),
