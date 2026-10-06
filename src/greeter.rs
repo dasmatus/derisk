@@ -149,7 +149,7 @@ impl compositor::Shell for Greeter {
             return;
         }
         self.last_tick = Some(Instant::now());
-        self.clock = Clock::now_utc();
+        self.clock = Clock::now_local();
     }
 
     fn chrome_wants_pointer(&self, _at: (i32, i32)) -> bool {
@@ -318,7 +318,7 @@ pub fn run(options: Options) -> Result {
         ),
         users,
         output: (1280, 800),
-        clock: Clock::now_utc(),
+        clock: Clock::now_local(),
         last_tick: None,
         theme: Theme::default(),
         to_greetd,

@@ -921,7 +921,7 @@ impl compositor::Shell for Session {
             return;
         }
         self.last_tick = Some(Instant::now());
-        self.shell.clock = Clock::now_utc();
+        self.shell.clock = Clock::now_local();
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
         if let Some(settings) = self.settings.poll() {
             self.shell.effects = Effects::from_settings(&settings);

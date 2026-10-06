@@ -356,7 +356,7 @@ fn send(line: &str) -> Result {
 }
 
 fn refresh(shell: &mut Shell) {
-    shell.clock = Clock::now_utc();
+    shell.clock = Clock::now_local();
     shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
     if let Some(settings) = SettingsWatch::new(derisk_settings::default_path()).poll() {
         shell.effects = Effects::from_settings(&settings);
