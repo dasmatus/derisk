@@ -200,7 +200,7 @@ same theme.
   command palette, assistant or agents, acting on this session
   (`XDG_SESSION_ID`): Log out ends the logind session, not just the target.
 - **Lock screen.** Locking hides every window and sends every key to a
-  password field checked by PAM (the `derisk` service, `data/pam.d/derisk`).
+  password field checked by PAM (the `derisk` service, `crates/derisk/data/pam.d/derisk`).
   With `--execute` the session also locks when logind asks it to (`loginctl
   lock-session`, `lock-sessions`, `busctl wait` on the session's `Lock`
   signal) and sets logind's `LockedHint`. While locked every agent request,
@@ -210,7 +210,7 @@ same theme.
 - **Display manager.** `derisk display-manager` replaces gdm: run as root
   from a system service, it starts `derisk greeter` (the lock screen as a
   login screen) on a VT as an unprivileged user, checks the password it is
-  given with PAM (`data/pam.d/derisk-login`), and then opens the user's PAM
+  given with PAM (`crates/derisk/data/pam.d/derisk-login`), and then opens the user's PAM
   session, so pam_systemd registers it with logind and pam_systemd_home
   unlocks a homed home area, and runs the session command as the user. When
   the session ends the greeter comes back. The root half draws nothing; the
@@ -226,7 +226,7 @@ same theme.
   ```
 
   It needs a `derisk-greeter` system user and the two PAM services in
-  `data/pam.d`.
+  `crates/derisk/data/pam.d`.
 - **Failed units widget.** Failed user units show in the top bar and overview
   with restart and reset actions.
 
@@ -234,11 +234,11 @@ Install the units:
 
 ```console
 $ cargo install --path crates/derisk
-$ cp data/systemd/user/* ~/.config/systemd/user/
+$ cp crates/derisk/data/systemd/user/* crates/derisk-portal/data/systemd/user/* ~/.config/systemd/user/
 $ systemctl --user daemon-reload
 $ systemctl --user start derisk-agent.socket   # headless only; a session serves the socket itself
-$ sudo install -m644 data/pam.d/derisk /etc/pam.d/derisk   # for the lock screen
-$ sudo install -m644 data/pam.d/derisk-login data/pam.d/derisk-greeter /etc/pam.d/   # for the display manager
+$ sudo install -m644 crates/derisk/data/pam.d/derisk /etc/pam.d/derisk   # for the lock screen
+$ sudo install -m644 crates/derisk/data/pam.d/derisk-login crates/derisk/data/pam.d/derisk-greeter /etc/pam.d/   # for the display manager
 ```
 
 ## Usage
@@ -315,7 +315,7 @@ notifications, screenshots) are set to Ask, Allow or Deny through
 `xdg-desktop-portal-derisk` (`crates/derisk-portal`, on
 [ashpd](https://github.com/bilelmoussaoui/ashpd)'s backend traits) is the
 xdg-desktop-portal backend for a derisk session. It serves what only the
-session knows, and `data/portal/derisk-portals.conf` leaves everything else
+session knows, and `crates/derisk-portal/data/portal/derisk-portals.conf` leaves everything else
 (file chooser, access dialog, printing, ...) to the GTK backend:
 
 | Portal | What it does |
@@ -332,7 +332,7 @@ confirm, and it asks through the GTK backend's access dialog
 picker yet, and the lock screen draws its own gradient, so a wallpaper for
 the lock screen alone is refused.
 
-Install `data/portal/derisk.portal` to `share/xdg-desktop-portal/portals`,
+Install `crates/derisk-portal/data/portal/derisk.portal` to `share/xdg-desktop-portal/portals`,
 `derisk-portals.conf` to `share/xdg-desktop-portal`, the D-Bus service to
 `share/dbus-1/services` and the unit to `share/systemd/user`, with `Exec=` and
 `ExecStart=` made absolute; `nix build` does.
@@ -428,6 +428,11 @@ nothing but the workspace at the root:
 | `derisk-login` | The greetd login protocol and the lock screen's state. |
 | `derisk-portal` | `xdg-desktop-portal-derisk`. |
 | `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
+
+Each crate keeps everything it needs in its own directory (its README,
+LICENSE and any `data/`), and reaches its siblings only through the
+workspace's `[workspace.dependencies]`, so any crate can move to a
+repository of its own.
 
 The four shell crates have nothing of the shell's above them, so they build
 and test without egui or the compositor; `derisk` re-exports each of their
