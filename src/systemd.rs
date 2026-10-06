@@ -196,7 +196,8 @@ pub fn effect_argv(
         Effect::LaunchAction { .. }
         | Effect::Close { .. }
         | Effect::MenuActivated { .. }
-        | Effect::TrayActivated { .. } => None,
+        | Effect::TrayActivated { .. }
+        | Effect::WidgetActivated { .. } => None,
     }
 }
 

@@ -436,3 +436,62 @@ fn socket_dirs_others_could_swap_are_refused() {
     fs::set_permissions(root.join("shared"), fs::Permissions::from_mode(0o700)).unwrap();
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn custom_widgets_register_press_and_go_with_their_owner() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let line = json!({"method": "register_widget", "widget": {
+        "id": "weather", "title": "Weather", "icon": "weather-clear",
+        "rows": [
+            {"type": "text", "text": "18 °C, clear"},
+            {"type": "progress", "value": 0.4, "label": "Rain 40%"},
+            {"type": "button", "label": "Refresh", "item": "refresh"}
+        ]
+    }});
+    let (resp, _) = ipc::handle_line(&mut shell, &line.to_string());
+    assert!(resp.contains("\"ok\":true"), "{resp}");
+    assert_eq!(shell.widgets.list().len(), 1);
+    assert_eq!(shell.widgets.list()[0].rows.len(), 3);
+
+    // A press on a button the widget has becomes an effect for its owner;
+    // one it never listed is refused.
+    let effects = shell
+        .apply(Action::ActivateWidget {
+            id: "weather".into(),
+            item: "refresh".into(),
+        })
+        .unwrap();
+    assert!(
+        matches!(&effects[..], [Effect::WidgetActivated { id, item }] if id == "weather" && item == "refresh")
+    );
+    assert!(
+        shell
+            .apply(Action::ActivateWidget {
+                id: "weather".into(),
+                item: "delete".into(),
+            })
+            .is_err()
+    );
+
+    // Owned widgets: another connection can neither replace nor remove one,
+    // and it goes when its owner's connection closes.
+    let mut widgets = derisk::widgets::CustomWidgets::default();
+    let widget: derisk::widgets::CustomWidget =
+        serde_json::from_value(line["widget"].clone()).unwrap();
+    widgets.register(widget.clone(), Some(1)).unwrap();
+    assert!(widgets.register(widget.clone(), Some(2)).is_err());
+    assert!(widgets.remove("weather", Some(2)).is_err());
+    assert_eq!(widgets.recipient("weather", "refresh"), Some(1));
+    assert_eq!(widgets.recipient("weather", "other"), None);
+    widgets.disown(1);
+    assert!(widgets.list().is_empty());
+
+    // Oversized widgets are refused instead of crowding the overview.
+    let mut long = widget;
+    long.title = "x".repeat(500);
+    assert!(widgets.register(long, None).is_err());
+
+    let (resp, _) = ipc::handle_line(&mut shell, r#"{"method":"remove_widget","id":"weather"}"#);
+    assert!(resp.contains("\"ok\":true"), "{resp}");
+    assert!(shell.widgets.list().is_empty());
+}

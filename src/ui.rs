@@ -43,6 +43,7 @@ use crate::{
     shell::{DropTarget, Shell, WindowPlacement},
     systemd::SessionOp,
     time::Clock,
+    widgets::{CustomWidget, WidgetRow},
 };
 
 /// Converts a logical geometry to an egui rectangle.
@@ -923,16 +924,22 @@ impl ShellUi {
                     menu_button(ui, &menu, focused.map(|w| w.get()), actions);
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let time = if prefs.clock_24h {
-                        shell.clock.time_label()
-                    } else {
-                        shell.clock.time_label_12h()
-                    };
-                    ui.label(if prefs.date {
-                        format!("{}  {time}", shell.clock.date_label())
-                    } else {
-                        time
-                    });
+                    // The overview's clock widget shows the time and date
+                    // larger, so the bar's copy steps aside while it is open.
+                    let big_clock =
+                        shell.overview_visible() && Widget::DEFAULT.contains(&Widget::Clock);
+                    if !big_clock {
+                        let time = if prefs.clock_24h {
+                            shell.clock.time_label()
+                        } else {
+                            shell.clock.time_label_12h()
+                        };
+                        ui.label(if prefs.date {
+                            format!("{}  {time}", shell.clock.date_label())
+                        } else {
+                            time
+                        });
+                    }
                     if let Some(b) = shell.battery.filter(|_| prefs.battery) {
                         let battery = battery(ui, b, self.theme.foreground);
                         name(
@@ -1426,11 +1433,23 @@ impl ShellUi {
                 ),
                 StrokeKind::Inside,
             );
-            // A miniature of each window, so workspaces read as thumbnails.
+            // A miniature of each window with its app's icon, so a
+            // workspace reads as what is open on it.
             let minis = grid(windows.len(), inset(*cell, 12), 4);
-            for mini in &minis {
+            for (mini, w) in minis.iter().zip(&windows) {
+                let m = to_rect(*mini);
                 ui.painter()
-                    .rect_filled(to_rect(*mini), 3, self.theme.border.gamma_multiply(0.35));
+                    .rect_filled(m, 3, self.theme.border.gamma_multiply(0.35));
+                let (app, _) = shell.window_label(*w).unwrap_or_default();
+                let side = (m.height().min(m.width()) * 0.6).min(32.0);
+                if side >= 10.0 {
+                    let look = shell.apps.look(app);
+                    self.paint_app_icon(
+                        ui.painter(),
+                        Rect::from_center_size(m.center(), vec2(side, side)),
+                        &look,
+                    );
+                }
             }
             ui.painter().text(
                 r.center(),
@@ -1611,6 +1630,10 @@ impl ShellUi {
                     for widget in Widget::DEFAULT {
                         self.widget(ui, shell, widget, actions);
                     }
+                    for widget in shell.widgets.list() {
+                        custom_widget(ui, &self.theme, widget, actions);
+                        ui.add_space(10.0);
+                    }
                 });
             },
         );
@@ -1644,9 +1667,45 @@ impl ShellUi {
                 if suggestions.is_empty() {
                     ui.label(RichText::new("Apps you use will appear here.").color(theme.border));
                 }
+                // Each app by its icon and name, never its desktop file ID.
                 ui.horizontal_wrapped(|ui| {
                     for app in suggestions {
-                        if ui.button(&app).clicked() {
+                        let look = shell.apps.look(&app);
+                        let text = RichText::new(look.name.as_ref());
+                        let side = 18.0;
+                        let galley = egui::WidgetText::from(text).into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Truncate),
+                            ui.available_width() - side - 24.0,
+                            egui::TextStyle::Button,
+                        );
+                        let pad = ui.spacing().button_padding;
+                        let size = vec2(
+                            pad.x * 2.0 + side + 6.0 + galley.size().x,
+                            (pad.y * 2.0 + side.max(galley.size().y))
+                                .max(ui.spacing().interact_size.y),
+                        );
+                        let (r, response) = ui.allocate_exact_size(size, Sense::click());
+                        let visuals = ui.style().interact(&response);
+                        ui.painter().rect(
+                            r,
+                            visuals.corner_radius,
+                            visuals.weak_bg_fill,
+                            visuals.bg_stroke,
+                            StrokeKind::Inside,
+                        );
+                        let icon = Rect::from_min_size(
+                            pos2(r.left() + pad.x, r.center().y - side / 2.0),
+                            vec2(side, side),
+                        );
+                        self.paint_app_icon(ui.painter(), icon, &look);
+                        ui.painter().galley(
+                            pos2(icon.right() + 6.0, r.center().y - galley.size().y / 2.0),
+                            galley,
+                            visuals.text_color(),
+                        );
+                        name(ui, &response, Role::Button, look.name.to_string());
+                        if response.on_hover_text(look.name.as_ref()).clicked() {
                             actions.push(Action::Launch { app });
                             actions.push(Action::Overview {
                                 visible: Some(false),
@@ -1677,10 +1736,16 @@ impl ShellUi {
             }),
             Widget::Notes => card(ui, &theme, |ui| {
                 ui.label(RichText::new("Notes").strong());
+                // The field takes the card's own color and the card's width
+                // less its frame, instead of the theme's darkest input fill
+                // stretched past the card's edge.
+                let width = ui.available_width();
                 ui.add(
                     egui::TextEdit::multiline(&mut self.notes)
                         .desired_rows(4)
-                        .desired_width(f32::INFINITY),
+                        .desired_width(width)
+                        .background_color(theme.surface)
+                        .hint_text(RichText::new("Write something down").color(theme.border)),
                 );
             }),
         }
@@ -2263,8 +2328,14 @@ fn palette_row(
 fn calendar(ui: &mut Ui, shell: &Shell, theme: &Theme) {
     let clock = shell.clock;
     ui.label(RichText::new(clock.date_label()).strong());
+    // Seven columns that share the card's width: left to egui, each would
+    // take a full button's width and push the card past the overview's edge.
+    let gap = 4.0;
+    let col = ((ui.available_width() - 6.0 * gap) / 7.0).floor().max(1.0);
     egui::Grid::new("derisk-calendar")
-        .spacing(vec2(6.0, 4.0))
+        .spacing(vec2(gap, 4.0))
+        .min_col_width(col)
+        .max_col_width(col)
         .show(ui, |ui| {
             for d in ["M", "T", "W", "T", "F", "S", "S"] {
                 ui.label(RichText::new(d).color(theme.border));
@@ -2286,6 +2357,43 @@ fn calendar(ui: &mut Ui, shell: &Shell, theme: &Theme) {
                 }
             }
         });
+}
+
+/// A program's custom widget, drawn as a card like the built-in ones.
+fn custom_widget(ui: &mut Ui, theme: &Theme, widget: &CustomWidget, actions: &mut Vec<Action>) {
+    card(ui, theme, |ui| {
+        ui.horizontal(|ui| {
+            if let Some(icon) = &widget.icon {
+                icons::show(ui, icon, 16.0, theme.foreground);
+            }
+            ui.add(egui::Label::new(RichText::new(&widget.title).strong()).truncate());
+        });
+        for row in &widget.rows {
+            match row {
+                WidgetRow::Text { text, dim } => {
+                    let text = RichText::new(text);
+                    ui.add(
+                        egui::Label::new(if *dim { text.color(theme.border) } else { text }).wrap(),
+                    );
+                }
+                WidgetRow::Progress { value, label } => {
+                    let mut bar = egui::ProgressBar::new(value.clamp(0.0, 1.0));
+                    if let Some(label) = label {
+                        bar = bar.text(label.as_str());
+                    }
+                    ui.add(bar);
+                }
+                WidgetRow::Button { label, item } => {
+                    if ui.button(label.as_str()).clicked() {
+                        actions.push(Action::ActivateWidget {
+                            id: widget.id.clone(),
+                            item: item.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn menu_button(ui: &mut Ui, menu: &Menu, window: Option<u64>, actions: &mut Vec<Action>) {
