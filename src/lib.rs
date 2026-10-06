@@ -82,6 +82,7 @@ pub mod time;
 pub mod tray;
 pub mod ui;
 pub mod wallpaper;
+pub mod widgets;
 pub mod wifi;
 pub mod wizard;
 

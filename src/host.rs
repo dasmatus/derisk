@@ -50,6 +50,7 @@ use derisk::{
     time::Clock,
     ui::{ShellUi, set_touch_style, show_lock},
     wallpaper::{self, Visibility, WallpaperPainter},
+    widgets,
 };
 use derisk_settings::{Privacy, Shortcuts};
 use mcsapi::WindowId;
@@ -469,6 +470,25 @@ impl Session {
             }
             return respond(result);
         }
+        // Likewise the connection that registers a custom widget owns it.
+        match serde_json::from_str::<ipc::Request>(line) {
+            Ok(ipc::Request::RegisterWidget { widget }) => {
+                let result = self.shell.widgets.register(widget, Some(conn));
+                if result.is_ok() {
+                    self.listeners.insert(conn, events.clone());
+                }
+                return respond(result.map(|()| Value::Null));
+            }
+            Ok(ipc::Request::RemoveWidget { id }) => {
+                return respond(
+                    self.shell
+                        .widgets
+                        .remove(&id, Some(conn))
+                        .map(|()| Value::Null),
+                );
+            }
+            _ => {}
+        }
         let request = match ipc::live_request(line) {
             None => {
                 let (response, effects) = ipc::handle_line(&mut self.shell, line);
@@ -549,6 +569,7 @@ impl Session {
     fn agent_disconnected(&mut self, conn: u64) {
         self.registered.retain(|_, (owner, _)| *owner != conn);
         self.shell.menus.disown(conn);
+        self.shell.widgets.disown(conn);
         self.listeners.remove(&conn);
     }
 
@@ -780,6 +801,22 @@ impl Session {
                     {
                         Some(events) => {
                             let _ = events.send(ipc::menu_event(*window, item).to_string());
+                        }
+                        None => log(
+                            Priority::Info,
+                            &serde_json::to_string(&effect).unwrap_or_default(),
+                        ),
+                    }
+                }
+                Effect::WidgetActivated { id, item } => {
+                    match self
+                        .shell
+                        .widgets
+                        .recipient(id, item)
+                        .and_then(|conn| self.listeners.get(&conn))
+                    {
+                        Some(events) => {
+                            let _ = events.send(widgets::widget_event(id, item).to_string());
                         }
                         None => log(
                             Priority::Info,

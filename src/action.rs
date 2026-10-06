@@ -174,6 +174,13 @@ pub enum Action {
         #[serde(default)]
         item: Option<String>,
     },
+    /// Press a button on a custom overview widget.
+    ActivateWidget {
+        /// Widget ID.
+        id: String,
+        /// The button's item.
+        item: String,
+    },
     /// Restart a failed user unit.
     RestartUnit {
         /// Unit name.
@@ -257,6 +264,7 @@ impl Action {
             Self::ActivateMenu { item, .. } => format!("Choose menu item {item}"),
             Self::Session { op, .. } => format!("{op:?}"),
             Self::ActivateTray { id, .. } => format!("Activate tray item {id}"),
+            Self::ActivateWidget { id, item } => format!("Press {item} on widget {id}"),
             Self::RestartUnit { unit } => format!("Restart {unit}"),
             Self::ResetFailed { unit } => format!("Dismiss {unit}"),
             Self::Confirm { accept: true } => "Confirm".into(),
@@ -328,6 +336,13 @@ pub enum Effect {
         id: String,
         /// Menu item ID, if a menu entry was chosen.
         item: Option<String>,
+    },
+    /// Tell a custom widget's owner a button was pressed.
+    WidgetActivated {
+        /// Widget ID.
+        id: String,
+        /// The button's item.
+        item: String,
     },
     /// Restart a user unit.
     RestartUnit {

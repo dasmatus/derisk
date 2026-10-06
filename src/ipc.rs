@@ -8,7 +8,14 @@
 //! {"method":"dispatch","actions":[{"action":"snap","zone":"left"}]}
 //! {"method":"ask","text":"open firefox and snap it left"}
 //! {"method":"register_menu","window":1,"menus":[...]}
+//! {"method":"register_widget","widget":{"id":"weather","title":"Weather","rows":[...]}}
+//! {"method":"remove_widget","id":"weather"}
 //! ```
+//!
+//! `register_widget` adds a card to the overview, built from text, progress
+//! and button rows ([`crate::widgets`]); on a live session the connection
+//! owns it and hears of button presses as
+//! `{"event":"widget","id":"weather","item":"refresh"}`.
 //!
 //! On a live session's socket, `register_menu` makes the connection the
 //! owner of that window's menus: a pick from them in the top bar or the
@@ -54,6 +61,7 @@ use crate::{
     overview::Battery,
     shell::{Mode, Outcome, Shell},
     time::Clock,
+    widgets::CustomWidget,
 };
 
 /// A request from an agent.
@@ -81,6 +89,17 @@ pub enum Request {
         window: u64,
         /// Menus.
         menus: Vec<Menu>,
+    },
+    /// Add or replace a custom overview widget. On a live session's socket
+    /// the connection then owns it and is told of button presses.
+    RegisterWidget {
+        /// The widget.
+        widget: CustomWidget,
+    },
+    /// Remove a custom overview widget.
+    RemoveWidget {
+        /// Its ID.
+        id: String,
     },
 }
 
@@ -422,6 +441,7 @@ pub fn tools() -> Value {
             {"type": "object", "required": ["action", "item"], "properties": {"action": {"const": "activate_menu"}, "window": window, "item": {"type": "string"}}},
             {"type": "object", "required": ["action", "op"], "properties": {"action": {"const": "session"}, "op": {"enum": ["lock", "suspend", "hibernate", "logout", "reboot", "power_off"]}, "confirmed": {"type": "boolean", "description": "Required for logout/reboot/power_off. Even then the person is asked on screen, and only they can accept"}}},
             {"type": "object", "required": ["action", "id"], "properties": {"action": {"const": "activate_tray"}, "id": {"type": "string"}, "item": {"type": "string"}}},
+            {"type": "object", "required": ["action", "id", "item"], "properties": {"action": {"const": "activate_widget"}, "id": {"type": "string", "description": "A custom widget's ID"}, "item": {"type": "string", "description": "One of that widget's button items"}}},
             {"type": "object", "required": ["action", "unit"], "properties": {"action": {"enum": ["restart_unit", "reset_failed"]}, "unit": {"type": "string", "description": "A unit listed in failed_units"}}}
         ]
     });
@@ -653,6 +673,14 @@ fn handle(shell: &mut Shell, request: Request) -> (Result<Value, String>, Vec<Ef
             shell.menus.register(window, menus);
             (Ok(Value::Null), Vec::new())
         }
+        Request::RegisterWidget { widget } => (
+            shell.widgets.register(widget, None).map(|()| Value::Null),
+            Vec::new(),
+        ),
+        Request::RemoveWidget { id } => (
+            shell.widgets.remove(&id, None).map(|()| Value::Null),
+            Vec::new(),
+        ),
     };
     (result, effects)
 }

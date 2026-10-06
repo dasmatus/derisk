@@ -27,6 +27,7 @@ use crate::{
     systemd::{self, SessionOp},
     time::Clock,
     tray::Tray,
+    widgets::CustomWidgets,
 };
 
 /// A window action waiting for a launched app's window, with the
@@ -67,6 +68,8 @@ pub enum Error {
     NotLaunchable(String),
     /// No tray item has this ID.
     UnknownTrayItem(String),
+    /// No custom widget has that button.
+    UnknownWidgetButton(String, String),
     /// Unit actions only apply to currently failed user units.
     UnknownUnit(String),
     /// The path is not an absolute path to an existing, non-executable file
@@ -99,6 +102,9 @@ impl std::fmt::Display for Error {
             ),
             Self::NotLaunchable(app) => write!(f, "not a launchable app name: {app:?}"),
             Self::UnknownTrayItem(id) => write!(f, "unknown tray item: {id:?}"),
+            Self::UnknownWidgetButton(id, item) => {
+                write!(f, "widget {id:?} has no button {item:?}")
+            }
             Self::UnknownUnit(unit) => write!(f, "not a failed user unit: {unit:?}"),
             Self::NotOpenable(path) => write!(f, "cannot open {path:?}"),
             Self::NotUnderstood(text) => write!(f, "I don't know how to \"{text}\""),
@@ -264,6 +270,8 @@ pub struct Shell {
     pub menus: GlobalMenu,
     /// System tray items.
     pub tray: Tray,
+    /// Custom overview widgets registered by programs.
+    pub widgets: CustomWidgets,
     /// Learned launch habits.
     pub habits: Habits,
     /// Current time, updated by the host.
@@ -374,6 +382,7 @@ impl Shell {
             conversation: Conversation::default(),
             menus: GlobalMenu::default(),
             tray: Tray::default(),
+            widgets: CustomWidgets::default(),
             habits: Habits::default(),
             clock: Clock::default(),
             battery: None,
@@ -1088,6 +1097,12 @@ impl Shell {
                     return Err(Error::UnknownTrayItem(id));
                 }
                 return Ok(vec![Effect::TrayActivated { id, item }]);
+            }
+            Action::ActivateWidget { id, item } => {
+                if !self.widgets.has_button(&id, &item) {
+                    return Err(Error::UnknownWidgetButton(id, item));
+                }
+                return Ok(vec![Effect::WidgetActivated { id, item }]);
             }
             Action::RestartUnit { unit } => {
                 self.check_failed_unit(&unit)?;
