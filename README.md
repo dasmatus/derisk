@@ -67,7 +67,7 @@ with `{"action":"palette"}` and open files with `{"action":"open","path":...}`
 
 ## Agent-first
 
-Everything the shell can do is an `Action` (see `src/action.rs`). The UI,
+Everything the shell can do is an `Action` (see `crates/derisk/src/action.rs`). The UI,
 keyboard, assistant and external agents all go through the same actions, so
 anything a person can do an agent can do too, under the same rules.
 
@@ -200,7 +200,7 @@ same theme.
   command palette, assistant or agents, acting on this session
   (`XDG_SESSION_ID`): Log out ends the logind session, not just the target.
 - **Lock screen.** Locking hides every window and sends every key to a
-  password field checked by PAM (the `derisk` service, `data/pam.d/derisk`).
+  password field checked by PAM (the `derisk` service, `crates/derisk/data/pam.d/derisk`).
   With `--execute` the session also locks when logind asks it to (`loginctl
   lock-session`, `lock-sessions`, `busctl wait` on the session's `Lock`
   signal) and sets logind's `LockedHint`. While locked every agent request,
@@ -210,7 +210,7 @@ same theme.
 - **Display manager.** `derisk display-manager` replaces gdm: run as root
   from a system service, it starts `derisk greeter` (the lock screen as a
   login screen) on a VT as an unprivileged user, checks the password it is
-  given with PAM (`data/pam.d/derisk-login`), and then opens the user's PAM
+  given with PAM (`crates/derisk/data/pam.d/derisk-login`), and then opens the user's PAM
   session, so pam_systemd registers it with logind and pam_systemd_home
   unlocks a homed home area, and runs the session command as the user. When
   the session ends the greeter comes back. The root half draws nothing; the
@@ -226,19 +226,19 @@ same theme.
   ```
 
   It needs a `derisk-greeter` system user and the two PAM services in
-  `data/pam.d`.
+  `crates/derisk/data/pam.d`.
 - **Failed units widget.** Failed user units show in the top bar and overview
   with restart and reset actions.
 
 Install the units:
 
 ```console
-$ cargo install --path .
-$ cp data/systemd/user/* ~/.config/systemd/user/
+$ cargo install --path crates/derisk
+$ cp crates/derisk/data/systemd/user/* crates/derisk-portal/data/systemd/user/* ~/.config/systemd/user/
 $ systemctl --user daemon-reload
 $ systemctl --user start derisk-agent.socket   # headless only; a session serves the socket itself
-$ sudo install -m644 data/pam.d/derisk /etc/pam.d/derisk   # for the lock screen
-$ sudo install -m644 data/pam.d/derisk-login data/pam.d/derisk-greeter /etc/pam.d/   # for the display manager
+$ sudo install -m644 crates/derisk/data/pam.d/derisk /etc/pam.d/derisk   # for the lock screen
+$ sudo install -m644 crates/derisk/data/pam.d/derisk-login crates/derisk/data/pam.d/derisk-greeter /etc/pam.d/   # for the display manager
 ```
 
 ## Usage
@@ -315,7 +315,7 @@ notifications, screenshots) are set to Ask, Allow or Deny through
 `xdg-desktop-portal-derisk` (`crates/derisk-portal`, on
 [ashpd](https://github.com/bilelmoussaoui/ashpd)'s backend traits) is the
 xdg-desktop-portal backend for a derisk session. It serves what only the
-session knows, and `data/portal/derisk-portals.conf` leaves everything else
+session knows, and `crates/derisk-portal/data/portal/derisk-portals.conf` leaves everything else
 (file chooser, access dialog, printing, ...) to the GTK backend:
 
 | Portal | What it does |
@@ -332,7 +332,7 @@ confirm, and it asks through the GTK backend's access dialog
 picker yet, and the lock screen draws its own gradient, so a wallpaper for
 the lock screen alone is refused.
 
-Install `data/portal/derisk.portal` to `share/xdg-desktop-portal/portals`,
+Install `crates/derisk-portal/data/portal/derisk.portal` to `share/xdg-desktop-portal/portals`,
 `derisk-portals.conf` to `share/xdg-desktop-portal`, the D-Bus service to
 `share/dbus-1/services` and the unit to `share/systemd/user`, with `Exec=` and
 `ExecStart=` made absolute; `nix build` does.
@@ -363,13 +363,13 @@ screen and the session. `--dry-run --force` walks the pages without saving.
 
 `derisk installer` draws the pages and joins networks; the disk work is a
 backend's, started from the command after `--`, which speaks JSON lines
-(`src/install.rs`): it says hello with the system's name and source, lists
+(`crates/derisk-install/src/install.rs`): it says hello with the system's name and source, lists
 disks, installs one with its steps and output, and reboots. LosOS's backend
 is `losos-installer serve`. The installer names the disk and asks once more,
 with the only red button, before anything is erased.
 
 Both share the Network page: wired ports as networkd sees them and Wi-Fi
-over wpa_supplicant's control socket (`src/network.rs`, as NixOS runs it with
+over wpa_supplicant's control socket (`crates/derisk-install/src/network.rs`, as NixOS runs it with
 `userControlled`). The setup saves a network it joins (`SAVE_CONFIG`).
 
 ### Headless commands
@@ -416,8 +416,33 @@ $ PATH=$PWD/target/release:$PATH scripts/showcase.py derisk-showcase.mp4
 
 ## Core apps
 
-The repository is a Cargo workspace: the shell is the root package and the
-core apps live under `crates/`. Each app is an `mcsapi_ui::App` with its logic
+The repository is a Cargo workspace with every crate under `crates/` and
+nothing but the workspace at the root:
+
+| Crate | What it holds |
+| --- | --- |
+| `derisk` | The shell (`shell`, `ui`, `palette`, `ipc`, ...) and the `derisk` binary with all its subcommands. |
+| `derisk-geom` | Geometry, snapping and server-side decorations. |
+| `derisk-desktop` | `.desktop` entries and app names and icons by app ID. |
+| `derisk-install` | The installer's backend protocol, locales and time zones, and the network. |
+| `derisk-login` | The greetd login protocol and the lock screen's state. |
+| `derisk-portal` | `xdg-desktop-portal-derisk`. |
+| `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
+
+Each crate keeps everything it needs in its own directory (its README,
+LICENSE and any `data/`), and reaches its siblings only through the
+workspace's `[workspace.dependencies]`, so any crate can move to a
+repository of its own.
+
+The four shell crates have nothing of the shell's above them, so they build
+and test without egui or the compositor; `derisk` re-exports each of their
+modules at the path it had before (`derisk::geom`, `derisk::install`, ...).
+The rest of the shell stays one crate because its modules use one another
+in a cycle (the shell's model, its egui drawing and the phone UI). A bare
+`cargo build` or `cargo test` at the root covers `derisk` and those four
+crates; `--workspace` adds the apps, the portal and GPUI.
+
+The core apps live under `crates/` too. Each app is an `mcsapi_ui::App` with its logic
 in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
 
 | App | Crate | What it does |

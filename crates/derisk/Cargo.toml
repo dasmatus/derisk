@@ -1,0 +1,58 @@
+[package]
+name = "derisk"
+description = "An adaptive, agent-first Wayland desktop shell built on mcsapi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+derisk-desktop.workspace = true
+derisk-geom.workspace = true
+derisk-install.workspace = true
+derisk-login.workspace = true
+derisk-icons.workspace = true
+derisk-settings.workspace = true
+mcsapi.workspace = true
+# Buttons, fields and alerts for the installer and first-boot setup.
+mcsapi-components.workspace = true
+# Wallpapers in the formats the Settings app offers.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+mcsapi-theme.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# `derisk session` runs on mcsapi-compositor with the derisk core apps. Off by
+# default so the shell library and headless commands build without graphics.
+derisk-apps = { workspace = true, optional = true }
+mcsapi-compositor = { workspace = true, optional = true }
+mcsapi-runtime = { workspace = true, optional = true }
+# Only its list of ported apps; the GPUI build is its own binary.
+derisk-gpui = { workspace = true, optional = true }
+# The lock screen's PAM conversation allocates with libc, which PAM frees.
+libc = { version = "0.2", optional = true }
+# Screenshots for agents (`{"method":"screenshot"}`).
+png = { version = "0.18.1", optional = true }
+# GrapheneOS's hardened_malloc as the allocator (`hardened-malloc`). Links the
+# system's libhardened_malloc.so, so it is off by default: a build host
+# without that library can still build derisk.
+mcsapi-hardened-malloc = { workspace = true, optional = true }
+
+[features]
+host = [
+    "dep:derisk-apps",
+    "dep:derisk-gpui",
+    "dep:libc",
+    "dep:mcsapi-compositor",
+    # The display manager starts the login screen and the session on the
+    # bare seat, with no compositor underneath to nest in.
+    "mcsapi-compositor/kms",
+    "dep:mcsapi-runtime",
+    "dep:png",
+]
+# Make hardened_malloc derisk's allocator, for the Rust heap and every C
+# library in the process. Turn it on only where the system has
+# libhardened_malloc.so and a 48-bit address space (see the crate's docs);
+# LosOS does on PCs, where it also preloads it into every process.
+hardened-malloc = ["dep:mcsapi-hardened-malloc"]

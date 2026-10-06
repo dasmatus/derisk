@@ -1,0 +1,12 @@
+[package]
+name = "derisk-install"
+description = "The derisk installer's backend protocol, and the languages, time zones and networks its setup pages offer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
