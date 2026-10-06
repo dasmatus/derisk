@@ -215,7 +215,18 @@ fn backend_protocol_round_trips() {
         install::parse_event("{\"event\":\"hello\",\"name\":\"LosOS Desktop\"}"),
         Some(Event::Hello {
             name: "LosOS Desktop".into(),
-            source: None
+            source: None,
+            release: None
+        })
+    );
+    assert_eq!(
+        install::parse_event(
+            "{\"event\":\"hello\",\"name\":\"LosOS Desktop\",\"release\":\"/run/losos/release\"}"
+        ),
+        Some(Event::Hello {
+            name: "LosOS Desktop".into(),
+            source: None,
+            release: Some("/run/losos/release".into())
         })
     );
     let disks = install::parse_event(
