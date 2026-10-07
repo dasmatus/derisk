@@ -174,6 +174,7 @@ impl ScreenshotImpl for Screenshots {
                 &token.to_string(),
                 &Question {
                     app_id: &id,
+                    app: &app,
                     parent_window: &parent,
                     title: "Take a screenshot?",
                     subtitle: &format!("{app} wants a picture of the whole screen."),
@@ -262,6 +263,7 @@ impl WallpaperImpl for Wallpaper {
                 &token.to_string(),
                 &Question {
                     app_id: &id,
+                    app: &app,
                     parent_window: &parent,
                     title: "Change the background?",
                     subtitle: &format!("{app} wants to set {name} as the desktop background."),

@@ -11,11 +11,10 @@ repository.workspace = true
 derisk-calculator.workspace = true
 derisk-settings.workspace = true
 mcsapi-theme.workspace = true
-gpui = { version = "0.2.2", default-features = false, features = ["wayland", "x11"], optional = true }
+gpui = { workspace = true, optional = true }
+gpui_platform = { workspace = true, optional = true }
 mcsapi-components-gpui = { workspace = true, optional = true }
-# GPUI 0.2.2 pulls xattr 0.2.3, which needs libc's removed Linux ENOATTR
-# alias; mcsapi pins the same version for the same reason.
-libc = { version = "=0.2.189", optional = true }
+mcsapi-ui.workspace = true
 tracing.workspace = true
 # Only the `derisk-gpui` binary installs a subscriber and prints reports.
 tracing-subscriber = { workspace = true, optional = true }
@@ -27,8 +26,8 @@ thiserror = { workspace = true, optional = true }
 # mcsapi's own `gpui` feature, so the workspace builds without them.
 gpui = [
     "dep:gpui",
+    "dep:gpui_platform",
     "dep:mcsapi-components-gpui",
-    "dep:libc",
     "mcsapi-components-gpui/gpui",
     "dep:miette",
     "dep:thiserror",

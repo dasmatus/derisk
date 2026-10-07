@@ -13,13 +13,13 @@ path = "src/main.rs"
 
 [dependencies]
 # The portal backend traits and their D-Bus glue. Only the interfaces derisk
-# serves are switched on; the rest (file chooser, access dialog, ...) come
-# from the GTK backend, which derisk-portals.conf puts behind this one.
+# serves are switched on; the rest (file chooser, ...) come from the GTK
+# backend, which derisk-portals.conf puts behind this one.
 ashpd = { version = "0.13.13", default-features = false, features = ["backend", "tokio", "settings", "screenshot", "wallpaper", "background"] }
 # The wallpaper portal writes the same settings file the Settings app does.
 derisk-settings.workspace = true
 serde_json = "1.0.145"
-tokio = { version = "1.43", features = ["rt", "macros", "net", "io-util", "time"] }
+tokio = { version = "1.43", features = ["rt", "macros", "net", "io-util", "time", "process", "sync"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 # The binary prints its fatal error as a report.

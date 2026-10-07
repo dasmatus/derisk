@@ -4,18 +4,36 @@ use std::io::IsTerminal;
 
 use tracing_subscriber::EnvFilter;
 
-/// `derisk-gpui` takes exactly one app ID.
+/// `derisk-gpui` takes exactly one app ID, or `ask` and a question.
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
-#[error("usage: derisk-gpui <app-id>")]
+#[error(
+    "usage: derisk-gpui <app-id> | derisk-gpui ask --title <question> [--subtitle, --body, --grant, --deny, --app, --parent <value>]"
+)]
 #[diagnostic(code(derisk_gpui::usage))]
 struct Usage {
     #[help]
     apps: String,
 }
 
+/// `derisk-gpui ask` was given options it cannot read.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[error("derisk-gpui ask: {0}")]
+#[diagnostic(code(derisk_gpui::ask_usage))]
+struct AskUsage(String);
+
 fn main() -> miette::Result<()> {
     logging();
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().map(String::as_str) == Some("ask") {
+        let question = derisk_gpui::ask::Question::from_args(args.skip(1)).map_err(AskUsage)?;
+        // The answer is the exit status, which is all the portal reads:
+        // 0 grants, 1 declines or closes.
+        std::process::exit(if derisk_gpui::ask::ask(question) {
+            0
+        } else {
+            1
+        });
+    }
     let id = match (args.next(), args.next()) {
         (Some(id), None) if !id.starts_with('-') => id,
         _ => {

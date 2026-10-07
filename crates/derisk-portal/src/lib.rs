@@ -13,8 +13,9 @@
 //!
 //! Everything else (the file chooser, the access dialog, printing, ...) is
 //! left to the GTK backend, which `derisk-portals.conf` lists after this
-//! one. The portals that show this backend's own consent ask through the
-//! GTK access dialog ([`access`]).
+//! one. The portals that show this backend's own consent ask with derisk's
+//! dialog, `derisk-gpui ask`, or the GTK access dialog without it
+//! ([`access`]).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
