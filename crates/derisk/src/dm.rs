@@ -39,8 +39,9 @@ use std::{
 
 use derisk::{
     greetd::{self, AuthMessageType, Request, Response},
-    systemd::{self, Priority},
+    systemd,
 };
+use tracing::{error, info};
 
 use crate::pam::{
     self, PAM_BUF_ERR, PAM_CONV_ERR, PAM_ERROR_MSG, PAM_PROMPT_ECHO_OFF, PAM_PROMPT_ECHO_ON,
@@ -384,7 +385,7 @@ pub fn run(options: Options) -> Result {
         match round(&options, &greeter) {
             Ok(()) => {}
             Err(e) => {
-                log(Priority::Error, &format!("{e}"));
+                error!("{e}");
                 // Don't spin if something is persistently broken.
                 std::thread::sleep(Duration::from_secs(2));
             }
@@ -464,10 +465,10 @@ fn round(options: &Options, greeter: &Account) -> Result {
     // Whose session it is goes to logind, which records it with the session;
     // the log says only that one started, since the name came from the
     // greeter's text field.
-    log(Priority::Notice, "starting a session");
+    info!("starting a session");
     let worker = spawn_session(pam, &user, options.vt, "user", &cmd, &env, true)?;
     wait(worker);
-    log(Priority::Notice, "the session ended");
+    info!("the session ended");
     Ok(())
 }
 
@@ -575,7 +576,7 @@ fn authenticate(options: &Options, stream: &mut UnixStream, username: &str) -> A
     if let Err(e) = auth {
         // No name: a failed login's user name is whatever was typed, which
         // is sometimes the password typed into the wrong field.
-        log(Priority::Notice, &format!("a login failed: {e}"));
+        info!("a login failed: {e}");
         return Auth::Failed(e);
     }
     // SAFETY: as above.
@@ -679,7 +680,7 @@ fn session_worker(
         // SAFETY: valid handle.
         let status = unsafe { pam::pam_acct_mgmt(pam.handle, 0) };
         if let Err(e) = pam.check("pam_acct_mgmt", status) {
-            log(Priority::Error, &e);
+            error!("{e}");
             return 1;
         }
     }
@@ -689,14 +690,14 @@ fn session_worker(
         // SAFETY: valid handle.
         let status = unsafe { pam_setcred(pam.handle, PAM_ESTABLISH_CRED) };
         if let Err(e) = pam.check("pam_setcred", status) {
-            log(Priority::Error, &e);
+            error!("{e}");
             return 1;
         }
     }
     // SAFETY: valid handle.
     let status = unsafe { pam_open_session(pam.handle, 0) };
     if let Err(e) = pam.check("pam_open_session", status) {
-        log(Priority::Error, &e);
+        error!("{e}");
         if authenticated {
             // SAFETY: valid handle.
             unsafe { pam_setcred(pam.handle, PAM_DELETE_CRED) };
@@ -753,7 +754,7 @@ fn session_worker(
     if child > 0 {
         wait(child);
     } else {
-        log(Priority::Error, "fork for the session failed");
+        error!("fork for the session failed");
     }
     // SAFETY: valid handle; close what was opened above.
     unsafe {
@@ -802,10 +803,6 @@ fn activate_vt(vt: u32) {
         libc::ioctl(fd, VT_ACTIVATE, vt as c_int);
         libc::ioctl(fd, VT_WAITACTIVE, vt as c_int);
     }
-}
-
-fn log(priority: Priority, message: &str) {
-    systemd::log(priority, message, &[]);
 }
 
 #[cfg(test)]

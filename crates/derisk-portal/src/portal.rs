@@ -325,7 +325,7 @@ impl BackgroundImpl for Apps {
         // The frontend asks only about apps with no stored choice. Allow this
         // instance and store nothing: a choice nobody made should not show
         // up as the person's in Settings → Privacy, where they can forbid it.
-        eprintln!("xdg-desktop-portal-derisk: {name} ({app_id}) is running in the background");
+        tracing::info!("{name} ({app_id}) is running in the background");
         Ok(Background::new(Activity::AllowInstance))
     }
 

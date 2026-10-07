@@ -8,16 +8,10 @@ use crate::{
 };
 
 /// A request clause the assistant did not understand.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error, miette::Diagnostic)]
+#[error("I don't know how to \"{0}\"")]
+#[diagnostic(code(derisk::assistant::not_understood))]
 pub struct NotUnderstood(pub String);
-
-impl std::fmt::Display for NotUnderstood {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "I don't know how to \"{}\"", self.0)
-    }
-}
-
-impl std::error::Error for NotUnderstood {}
 
 const NUMBERS: [&str; 9] = [
     "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",

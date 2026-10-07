@@ -23,7 +23,7 @@ mod pam;
 mod wizard_host;
 
 use std::{
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, IsTerminal, Write},
     os::{
         fd::{FromRawFd, OwnedFd},
         unix::{
@@ -46,12 +46,14 @@ use derisk::{
     overview::Battery,
     shell::Shell,
     snap::SnapZone,
-    systemd::{self, Priority},
+    systemd,
     time::Clock,
     tray::Pixmap,
     ui::ShellUi,
 };
 use mcsapi::{WindowId, toolkit::egui};
+use tracing::{info, warn};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 const USAGE: &str = "\
 derisk: an adaptive, agent-first Wayland desktop shell built on mcsapi
@@ -119,6 +121,74 @@ AGENT OPTIONS:
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// A command line derisk does not understand. Its report carries the usage
+/// text as help, which used to follow the message on stderr.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[error("{message}")]
+#[diagnostic(code(derisk::usage))]
+struct Usage {
+    message: String,
+    #[help]
+    usage: &'static str,
+}
+
+fn usage(message: impl Into<String>) -> Box<dyn std::error::Error> {
+    Box::new(Usage {
+        message: message.into(),
+        usage: USAGE,
+    })
+}
+
+/// The report `main` ends with. The commands return boxed errors, mostly
+/// strings; derisk's own diagnostics are taken back out so their codes and
+/// help survive.
+fn report(error: Box<dyn std::error::Error>) -> miette::Report {
+    let error = match error.downcast::<Usage>() {
+        Ok(usage) => return miette::Report::new(*usage),
+        Err(error) => error,
+    };
+    let error = match error.downcast::<assistant::NotUnderstood>() {
+        Ok(not_understood) => return miette::Report::new(*not_understood),
+        Err(error) => error,
+    };
+    match error.downcast::<derisk::shell::Error>() {
+        Ok(shell) => miette::Report::new(*shell),
+        Err(error) => miette::miette!("{error}"),
+    }
+}
+
+/// Sends `tracing` events to journald, with their fields, when the journal
+/// is there to take them (under systemd, or on any host running it), and to
+/// stderr otherwise. `RUST_LOG` picks what is logged: `info` and up when it
+/// is unset or does not parse.
+fn logging() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // `layer()` fails when nothing listens on the journal socket. With
+    // JOURNAL_STREAM set and no socket, stderr is the journal anyway.
+    let journald = tracing_journald::layer().ok().map(|layer| {
+        layer
+            // Fields keep the names the hand-written logger gave them
+            // (DERISK_EFFECT), not tracing-journald's default `F` prefix.
+            .with_field_prefix(None)
+            // Every unit derisk starts is `app-derisk-...`; its own lines
+            // keep the identifier they had, whatever argv[0] says.
+            .with_syslog_identifier(systemd::LAUNCHER.to_owned())
+    });
+    let stderr = journald.is_none().then(|| {
+        tracing_subscriber::fmt::layer()
+            // stdout is program output here: JSON answers, the demo and the
+            // agent protocol on stdio.
+            .with_writer(io::stderr)
+            // No colour escapes in a pipe or a log file.
+            .with_ansi(io::stderr().is_terminal())
+    });
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(journald)
+        .with(stderr)
+        .init();
+}
+
 // derisk is the display manager, the compositor and every core app in one
 // process, holding the login screen's password and whatever the apps open, so
 // its heap is the one most worth hardening. Under LosOS this is the same
@@ -127,7 +197,14 @@ type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[global_allocator]
 static GLOBAL: mcsapi_hardened_malloc::HardenedMalloc = mcsapi_hardened_malloc::HardenedMalloc;
 
-fn main() {
+fn main() -> miette::Result<()> {
+    logging();
+    // The usage text in a report's help is laid out in columns already;
+    // miette's wrapping at 80 columns would break them.
+    miette::set_hook(Box::new(|_| {
+        Box::new(miette::MietteHandlerOpts::new().wrap_lines(false).build())
+    }))
+    .ok();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("session") => session(&args[1..]),
@@ -148,12 +225,10 @@ fn main() {
             print!("{USAGE}");
             Ok(())
         }
-        Some(other) => Err(format!("unknown command: {other}\n\n{USAGE}").into()),
+        Some(other) => Err(usage(format!("unknown command: {other}"))),
     };
-    if let Err(e) = result {
-        eprintln!("derisk: {e}");
-        std::process::exit(1);
-    }
+    // An error exits with status 1, as before; miette prints the report.
+    result.map_err(report)
 }
 
 #[cfg(feature = "host")]
@@ -192,7 +267,7 @@ fn session(args: &[String]) -> Result {
                     .runtime
                     .push(mcsapi_compositor::RuntimeClient::new(argv, role).restart(restart));
             }
-            other => return Err(format!("unknown session option: {other}").into()),
+            other => return Err(usage(format!("unknown session option: {other}"))),
         }
     }
     host::run(options)
@@ -221,7 +296,7 @@ fn greeter(args: &[String]) -> Result {
                 options.command = it.cloned().collect();
                 break;
             }
-            other => return Err(format!("unknown greeter option: {other}").into()),
+            other => return Err(usage(format!("unknown greeter option: {other}"))),
         }
     }
     greeter::run(options)
@@ -252,7 +327,7 @@ fn display_manager(args: &[String]) -> Result {
                 options.greeter = it.cloned().collect();
                 break;
             }
-            other => return Err(format!("unknown display-manager option: {other}").into()),
+            other => return Err(usage(format!("unknown display-manager option: {other}"))),
         }
     }
     dm::run(options)
@@ -272,7 +347,7 @@ fn setup(args: &[String]) -> Result {
             "--force" => options.force = true,
             "--dry-run" => options.dry_run = true,
             "--size" => options.size = parse_size(it.next())?,
-            other => return Err(format!("unknown setup option: {other}").into()),
+            other => return Err(usage(format!("unknown setup option: {other}"))),
         }
     }
     firstboot::run(options)
@@ -291,10 +366,12 @@ fn installer(args: &[String]) -> Result {
         match arg.as_str() {
             "--size" => size = parse_size(it.next())?,
             "--" => return installer::run(it.cloned().collect(), size),
-            other => return Err(format!("unknown installer option: {other}").into()),
+            other => return Err(usage(format!("unknown installer option: {other}"))),
         }
     }
-    Err("derisk installer needs `--` and the backend's command".into())
+    Err(usage(
+        "derisk installer needs `--` and the backend's command",
+    ))
 }
 
 #[cfg(feature = "host")]
@@ -310,7 +387,7 @@ fn installer(_args: &[String]) -> Result {
 }
 
 fn ask(text: &str) -> Result {
-    let actions = assistant::interpret(text).map_err(|e| format!("{e:?}"))?;
+    let actions = assistant::interpret(text)?;
     println!("{}", serde_json::to_string_pretty(&actions)?);
     Ok(())
 }
@@ -334,7 +411,7 @@ fn launch(args: &[String]) -> Result {
         [app, flag, id] if flag == "--action" => {
             serde_json::json!({"action": "launch_action", "app": app, "id": id})
         }
-        _ => return Err(format!("usage: derisk launch <APP> [--action <ID>]\n\n{USAGE}").into()),
+        _ => return Err(usage("usage: derisk launch <APP> [--action <ID>]")),
     };
     send(&serde_json::json!({"method": "dispatch", "actions": [action]}).to_string())
 }
@@ -461,7 +538,7 @@ fn demo() -> Result {
 
     let request = "open firefox and snap it top left";
     println!("\nassistant: {request:?}");
-    let actions = assistant::interpret(request).map_err(|e| format!("{e:?}"))?;
+    let actions = assistant::interpret(request)?;
     let effects = shell.run(actions).into_result()?;
     for effect in &effects {
         println!("  effect: {}", serde_json::to_string(effect)?);
@@ -571,15 +648,13 @@ impl Host {
         if let Some(argv) = systemd::effect_argv(effect, instance, self.session_id.as_deref()) {
             let ok = systemd::run(&argv).is_ok_and(|o| o.status.success());
             let effect_json = serde_json::to_string(effect).unwrap_or_default();
-            systemd::log(
-                if ok {
-                    Priority::Info
-                } else {
-                    Priority::Warning
-                },
-                &format!("{} {}", if ok { "ran" } else { "failed" }, argv.join(" ")),
-                &[("DERISK_EFFECT", &effect_json)],
-            );
+            // The effect goes along as a field (DERISK_EFFECT in the
+            // journal) so a failure can be matched to what asked for it.
+            if ok {
+                info!(derisk_effect = %effect_json, "ran {}", argv.join(" "));
+            } else {
+                warn!(derisk_effect = %effect_json, "failed {}", argv.join(" "));
+            }
         }
     }
 }
@@ -594,7 +669,7 @@ fn agent(args: &[String]) -> Result {
             "--socket" => socket = Some(PathBuf::from(it.next().ok_or("--socket needs a path")?)),
             "--socket-activated" => activated = true,
             "--execute" => execute = true,
-            other => return Err(format!("unknown agent option: {other}").into()),
+            other => return Err(usage(format!("unknown agent option: {other}"))),
         }
     }
     let host = Arc::new(Mutex::new(Host {
@@ -647,18 +722,18 @@ fn agent(args: &[String]) -> Result {
     };
 
     systemd::notify_ready("serving the agent protocol");
-    systemd::log(Priority::Notice, "derisk agent socket ready", &[]);
+    info!("derisk agent socket ready");
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let host = Arc::clone(&host);
                 thread::spawn(move || {
                     if let Err(e) = serve(stream, &host) {
-                        systemd::log(Priority::Info, &format!("agent disconnected: {e}"), &[]);
+                        info!("agent disconnected: {e}");
                     }
                 });
             }
-            Err(e) => systemd::log(Priority::Warning, &format!("accept failed: {e}"), &[]),
+            Err(e) => warn!("accept failed: {e}"),
         }
     }
     systemd::notify_stopping();

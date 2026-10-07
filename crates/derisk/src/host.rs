@@ -46,7 +46,7 @@ use derisk::{
     privacy,
     shell::{Mode, PointerOutcome, Shell},
     snap::{Direction, SnapZone},
-    systemd::{self, Priority, SessionOp},
+    systemd::{self, SessionOp},
     time::Clock,
     ui::{ShellUi, set_touch_style, show_lock},
     wallpaper::{self, Visibility, WallpaperPainter},
@@ -54,6 +54,7 @@ use derisk::{
 };
 use derisk_settings::{Privacy, Shortcuts};
 use mcsapi::WindowId;
+use tracing::{info, warn};
 
 use crate::pam;
 use mcsapi_compositor::{
@@ -339,16 +340,15 @@ impl Session {
         // PAM would be asked about user "" and refuse every password, so the
         // lock could only be left from another VT.
         if self.user.is_empty() {
-            log(
-                Priority::Warning,
-                "not locking: the session's user name is unknown, so no password could unlock it",
+            warn!(
+                "not locking: the session's user name is unknown, so no password could unlock it"
             );
             return;
         }
         self.lock.lock();
         self.shell.pointer_up();
         self.set_locked_hint(true);
-        log(Priority::Notice, "screen locked");
+        info!("screen locked");
     }
 
     fn set_locked_hint(&self, locked: bool) {
@@ -382,9 +382,9 @@ impl Session {
         self.lock.finish(ok);
         if ok {
             self.set_locked_hint(false);
-            log(Priority::Notice, "screen unlocked");
+            info!("screen unlocked");
         } else {
-            log(Priority::Notice, "lock screen: authentication failed");
+            info!("lock screen: authentication failed");
         }
     }
 
@@ -395,12 +395,9 @@ impl Session {
         let library = mcsapi_theme::Library::xdg("derisk");
         let (theme, error) = settings.theme_spec(&library);
         if let Some(error) = error {
-            log(
-                Priority::Warning,
-                &format!(
-                    "theme {}: {error}; using the automatic theme",
-                    settings.appearance.theme
-                ),
+            warn!(
+                "theme {}: {error}; using the automatic theme",
+                settings.appearance.theme
             );
         }
         self.ui.theme = Theme::from(&theme);
@@ -418,10 +415,7 @@ impl Session {
             return;
         };
         if let Err(error) = derisk::theme::publish(&dir, &id, &theme) {
-            log(
-                Priority::Warning,
-                &format!("publishing the theme to {}: {error}", dir.display()),
-            );
+            warn!("publishing the theme to {}: {error}", dir.display());
         }
         self.theme_env =
             derisk::theme::environment(&dir, &theme, std::env::var_os("XDG_CONFIG_DIRS"));
@@ -436,7 +430,7 @@ impl Session {
                     Err(error) => Some(error.to_string()),
                 };
                 if let Some(error) = failed {
-                    log(Priority::Warning, &format!("{}: {error}", argv[0]));
+                    warn!("{}: {error}", argv[0]);
                 }
             }
             self.synced_icons = Some(theme.icons.theme.clone());
@@ -619,7 +613,7 @@ impl Session {
         // Actions before a failure stay applied, so their effects still run.
         self.perform(outcome.effects);
         if let Err(e) = outcome.result {
-            log(Priority::Info, &format!("action failed: {e}"));
+            info!("action failed: {e}");
         }
         self.palette_opened();
     }
@@ -671,7 +665,7 @@ impl Session {
                 .envs(self.theme_env.iter().map(|(k, v)| (k, v)))
                 .spawn()
         {
-            log(Priority::Warning, &format!("{program}: {e}"));
+            warn!("{program}: {e}");
         }
     }
 
@@ -707,7 +701,7 @@ impl Session {
     fn launch_action(&mut self, app: &str, id: &str) {
         if let Some(core) = derisk_apps::find(app) {
             if core.create_action(id).is_none() {
-                log(Priority::Info, &format!("{} has no action {id:?}", core.id));
+                info!("{} has no action {id:?}", core.id);
                 return;
             }
             if let Ok(mut pending) = self.pending_actions.lock() {
@@ -722,7 +716,7 @@ impl Session {
             .find(|e| e.id == app)
             .and_then(|e| e.action_argv(id))
         else {
-            log(Priority::Info, &format!("{app} has no action {id:?}"));
+            info!("{app} has no action {id:?}");
             return;
         };
         self.spawn_command(app, &argv);
@@ -758,12 +752,9 @@ impl Session {
                             let _ = systemd::run(&argv);
                         }
                     } else {
-                        log(
-                            Priority::Info,
-                            &format!(
-                                "not executing {} (run with --execute)",
-                                serde_json::to_string(&effect).unwrap_or_default()
-                            ),
+                        info!(
+                            "not executing {} (run with --execute)",
+                            serde_json::to_string(&effect).unwrap_or_default()
                         );
                     }
                 }
@@ -787,7 +778,7 @@ impl Session {
                         .envs(self.theme_env.iter().map(|(k, v)| (k, v)))
                         .spawn()
                     {
-                        log(Priority::Warning, &format!("xdg-open {path}: {e}"));
+                        warn!("xdg-open {path}: {e}");
                     }
                 }
                 Effect::MenuActivated { window, item } => {
@@ -802,10 +793,7 @@ impl Session {
                         Some(events) => {
                             let _ = events.send(ipc::menu_event(*window, item).to_string());
                         }
-                        None => log(
-                            Priority::Info,
-                            &serde_json::to_string(&effect).unwrap_or_default(),
-                        ),
+                        None => info!("{}", serde_json::to_string(&effect).unwrap_or_default()),
                     }
                 }
                 Effect::WidgetActivated { id, item } => {
@@ -818,16 +806,12 @@ impl Session {
                         Some(events) => {
                             let _ = events.send(widgets::widget_event(id, item).to_string());
                         }
-                        None => log(
-                            Priority::Info,
-                            &serde_json::to_string(&effect).unwrap_or_default(),
-                        ),
+                        None => info!("{}", serde_json::to_string(&effect).unwrap_or_default()),
                     }
                 }
-                Effect::TrayActivated { .. } => log(
-                    Priority::Info,
-                    &serde_json::to_string(&effect).unwrap_or_default(),
-                ),
+                Effect::TrayActivated { .. } => {
+                    info!("{}", serde_json::to_string(&effect).unwrap_or_default())
+                }
             }
         }
     }
@@ -850,12 +834,11 @@ impl Session {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
         match privacy::sweep(&self.privacy, &data, now) {
-            Ok(swept) if swept.trashed > 0 => log(
-                Priority::Info,
-                &format!("emptied {} old item(s) from the trash", swept.trashed),
-            ),
+            Ok(swept) if swept.trashed > 0 => {
+                info!("emptied {} old item(s) from the trash", swept.trashed)
+            }
             Ok(_) => {}
-            Err(e) => log(Priority::Warning, &format!("privacy sweep: {e}")),
+            Err(e) => warn!("privacy sweep: {e}"),
         }
     }
 
@@ -941,10 +924,7 @@ impl compositor::Shell for Session {
                 let _ = systemd::run(&argv);
             }
         }
-        log(
-            Priority::Notice,
-            &format!("derisk session on WAYLAND_DISPLAY={wayland_display}"),
-        );
+        info!("derisk session on WAYLAND_DISPLAY={wayland_display}");
         systemd::notify_ready("derisk session running");
     }
 
@@ -984,7 +964,7 @@ impl compositor::Shell for Session {
         {
             self.words_saved = Instant::now();
             if let Err(e) = self.ui.keyboard.predictor.save(path) {
-                log(Priority::Warning, &format!("{}: {e}", path.display()));
+                warn!("{}: {e}", path.display());
             }
         }
     }
@@ -1185,7 +1165,7 @@ impl compositor::Shell for Session {
             let outcome = self.shell.ask(&ask.text, Source::User, ask.confirmed);
             self.perform(outcome.effects);
             if let Err(e) = outcome.result {
-                log(Priority::Info, &format!("request failed: {e}"));
+                info!("request failed: {e}");
             }
         }
         self.palette_opened();
@@ -1220,7 +1200,7 @@ impl compositor::Shell for Session {
 
     fn spawn_argv(&mut self, app: &str) -> Vec<String> {
         if !systemd::is_launchable(app) {
-            log(Priority::Warning, &format!("refusing to launch {app:?}"));
+            warn!("refusing to launch {app:?}");
             return Vec::new();
         }
         // An installed app's desktop file ID runs its `Exec`; any other name
@@ -1230,7 +1210,7 @@ impl compositor::Shell for Session {
             None => vec![app.strip_suffix(".desktop").unwrap_or(app).to_owned()],
         };
         if command.is_empty() {
-            log(Priority::Warning, &format!("invalid Exec for {app:?}"));
+            warn!("invalid Exec for {app:?}");
             return Vec::new();
         }
         self.launches += 1;
@@ -1467,10 +1447,7 @@ pub fn run(options: Options) -> Result {
     // compositor's job channel, which would disconnect the earlier handles.
     let remote = compositor.remote();
     if let Some(path) = agent_socket(options.socket, remote.clone())? {
-        log(
-            Priority::Notice,
-            &format!("agent protocol on {}", path.display()),
-        );
+        info!("agent protocol on {}", path.display());
     }
     let lock_watch = lock_path.map(|path| LockWatch::start(path, remote));
     for app in options.launch {
@@ -1541,12 +1518,9 @@ impl LockWatch {
                     // requests off for the rest of the session: keep trying,
                     // more slowly, until the session ends.
                     Err(e) => {
-                        log(
-                            Priority::Warning,
-                            &format!(
-                                "lost logind lock requests ({e}); retrying in {}s",
-                                backoff.as_secs()
-                            ),
+                        warn!(
+                            "lost logind lock requests ({e}); retrying in {}s",
+                            backoff.as_secs()
                         );
                         if !sleep_unless_stopped(backoff, &stopping) {
                             return;
@@ -1618,10 +1592,6 @@ fn wait_for_lock(
         drop(slot);
         std::thread::sleep(Duration::from_millis(250));
     }
-}
-
-fn log(priority: Priority, message: &str) {
-    systemd::log(priority, message, &[]);
 }
 
 /// Binds the agent socket and serves each connection on its own thread,

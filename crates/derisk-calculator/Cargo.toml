@@ -10,3 +10,5 @@ repository.workspace = true
 [dependencies]
 derisk-icons.workspace = true
 mcsapi-ui.workspace = true
+miette.workspace = true
+thiserror.workspace = true

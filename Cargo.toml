@@ -46,6 +46,17 @@ derisk-gpui = { path = "crates/derisk-gpui", version = "0.1.0" }
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+# Diagnostics go out as `tracing` events; only the binaries install a
+# subscriber, so a library never decides where its logs land.
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+# `derisk` logs straight to journald with structured fields when it runs
+# under systemd.
+tracing-journald = "0.3.2"
+# Errors that reach a person are miette reports. Libraries take it without
+# `fancy`; each binary turns `fancy` on for the graphical report.
+miette = "7.6.0"
+thiserror = "2"
 
 # One codegen unit and fat LTO across every crate, mcsapi included: release
 # builds are the ones that ship, so they trade build time for inlining across

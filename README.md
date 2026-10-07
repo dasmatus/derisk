@@ -201,8 +201,10 @@ same theme.
   stops the headless agent first and the socket unit conflicts with
   `derisk-session.target`.
 - **sd_notify, watchdog and journald.** Readiness, status, watchdog
-  keep-alives and stopping are reported to the service manager; logs go to
-  the journal with structured fields (stderr outside systemd).
+  keep-alives and stopping are reported to the service manager; logs are
+  `tracing` events, which go to the journal with structured fields through
+  tracing-journald (stderr where no journal is running). `RUST_LOG` filters
+  them, `info` and up by default.
 - **logind.** Lock, suspend, hibernate, log out, reboot and power off from the
   command palette, assistant or agents, acting on this session
   (`XDG_SESSION_ID`): Log out ends the logind session, not just the target.
