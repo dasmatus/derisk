@@ -121,7 +121,12 @@ pub fn shuffled(n: usize, seed: u64) -> Vec<usize> {
 
 /// The ffmpeg arguments that decode `path` in a loop as raw RGBA frames of
 /// `size`, fitted per `fit` with `bars` around a fitted video.
-pub fn ffmpeg_args(path: &Path, size: [u32; 2], fit: Fit, bars: Rgb) -> Vec<String> {
+pub fn ffmpeg_args(
+    path: &Path,
+    size: [u32; 2],
+    fit: Fit,
+    bars: Rgb,
+) -> impl Iterator<Item = String> + use<> {
     let [w, h] = size;
     let scale = match fit {
         Fit::Stretch => format!("scale={w}:{h}"),
@@ -154,7 +159,6 @@ pub fn ffmpeg_args(path: &Path, size: [u32; 2], fit: Fit, bars: Rgb) -> Vec<Stri
             ]
             .map(str::to_owned),
         )
-        .collect()
 }
 
 /// The video frame size for a `screen`-pixel screen: its shape, at most

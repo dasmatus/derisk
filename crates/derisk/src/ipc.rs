@@ -407,7 +407,7 @@ pub fn state(shell: &Shell) -> State {
         windows,
         overview: shell.overview_visible(),
         palette: shell.palette_visible(),
-        menus: shell.menus.bar(focused.map(|w| w.get())),
+        menus: shell.menus.bar(focused.map(|w| w.get())).collect(),
         tray: shell.tray.items().map(|i| i.title.clone()).collect(),
         suggestions: shell.habits.suggestions(shell.clock.hour, 5),
         clock: shell.clock,

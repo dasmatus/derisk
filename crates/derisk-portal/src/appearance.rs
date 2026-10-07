@@ -88,18 +88,23 @@ impl Appearance {
 
     /// The keys whose value differs from `before`, for `SettingChanged`.
     /// Without a `before`, every key has changed.
-    pub fn changed_since(&self, before: Option<&Self>) -> Vec<&'static str> {
-        let mut keys = Vec::new();
-        if before.is_none_or(|b| b.color_scheme != self.color_scheme) {
-            keys.push(COLOR_SCHEME);
-        }
-        if before.is_none_or(|b| b.accent_color != self.accent_color) {
-            keys.push(ACCENT_COLOR);
-        }
-        if before.is_none_or(|b| b.contrast != self.contrast) {
-            keys.push(CONTRAST);
-        }
-        keys
+    pub fn changed_since(
+        &self,
+        before: Option<&Self>,
+    ) -> impl Iterator<Item = &'static str> + use<> {
+        [
+            (
+                COLOR_SCHEME,
+                before.is_none_or(|b| b.color_scheme != self.color_scheme),
+            ),
+            (
+                ACCENT_COLOR,
+                before.is_none_or(|b| b.accent_color != self.accent_color),
+            ),
+            (CONTRAST, before.is_none_or(|b| b.contrast != self.contrast)),
+        ]
+        .into_iter()
+        .filter_map(|(key, changed)| changed.then_some(key))
     }
 }
 
@@ -152,9 +157,9 @@ mod tests {
             color_scheme: 2,
             ..dark
         };
-        assert_eq!(light.changed_since(Some(&dark)), vec![COLOR_SCHEME]);
-        assert_eq!(dark.changed_since(Some(&dark)), Vec::<&str>::new());
-        assert_eq!(dark.changed_since(None).len(), 3);
+        assert!(light.changed_since(Some(&dark)).eq([COLOR_SCHEME]));
+        assert_eq!(dark.changed_since(Some(&dark)).count(), 0);
+        assert_eq!(dark.changed_since(None).count(), 3);
     }
 
     #[test]

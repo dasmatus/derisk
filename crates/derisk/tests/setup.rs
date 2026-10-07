@@ -65,13 +65,13 @@ fn saved_keyboard_becomes_xkb_defaults() {
         }
     );
     assert_eq!(
-        locale::xkb_environment(&keyboard),
+        locale::xkb_environment(&keyboard).collect::<Vec<_>>(),
         [
             "XKB_DEFAULT_LAYOUT=de,ru",
             "XKB_DEFAULT_OPTIONS=grp:alt_shift_toggle"
         ]
     );
-    assert!(locale::xkb_environment(&Keyboard::default()).is_empty());
+    assert_eq!(locale::xkb_environment(&Keyboard::default()).count(), 0);
 }
 
 #[test]

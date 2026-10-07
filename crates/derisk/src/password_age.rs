@@ -23,7 +23,7 @@
 //!
 //! let age = PasswordAge::parse("password.max_age_days = 90\npassword.warn_days = 7\n");
 //! assert_eq!(
-//!     age.homectl_args(),
+//!     age.homectl_args().collect::<Vec<_>>(),
 //!     ["--password-change-max=90d", "--password-change-warn=7d"]
 //! );
 //! ```
@@ -81,17 +81,19 @@ impl PasswordAge {
     /// `homectl create` and `update` options that set this age. With no
     /// maximum they clear both fields, so turning the policy off reaches
     /// accounts made under it.
-    pub fn homectl_args(&self) -> Vec<String> {
+    pub fn homectl_args(&self) -> impl Iterator<Item = String> + use<> {
         if self.max_days == 0 {
-            return vec![
+            return [
                 "--password-change-max=".into(),
                 "--password-change-warn=".into(),
-            ];
+            ]
+            .into_iter();
         }
-        vec![
+        [
             format!("--password-change-max={}d", self.max_days),
             format!("--password-change-warn={}d", self.warn_days),
         ]
+        .into_iter()
     }
 
     /// Whether a homed record (`homectl inspect --json=short`) already says

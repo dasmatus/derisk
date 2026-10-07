@@ -89,7 +89,7 @@ fn effects_map_to_systemd_commands() {
 
 #[test]
 fn session_start_exports_environment_then_starts_the_target() {
-    let cmds = systemd::session_start_argv("wayland-7");
+    let cmds: Vec<_> = systemd::session_start_argv("wayland-7").collect();
     assert_eq!(cmds[0][..3], ["systemctl", "--user", "set-environment"]);
     assert!(cmds[0].contains(&"WAYLAND_DISPLAY=wayland-7".to_owned()));
     assert!(cmds[0].contains(&"XDG_SESSION_TYPE=wayland".to_owned()));
@@ -113,7 +113,7 @@ fn units_are_found_from_cgroups_and_failed_lists() {
     assert_eq!(systemd::unit_from_cgroup("12:cpu:/x\n"), None);
     let out = "foo.service loaded failed failed Foo\nbar.socket loaded failed failed Bar\n";
     assert_eq!(
-        systemd::parse_failed_units(out),
+        systemd::parse_failed_units(out).collect::<Vec<_>>(),
         ["foo.service", "bar.socket"]
     );
 }
@@ -121,16 +121,16 @@ fn units_are_found_from_cgroups_and_failed_lists() {
 #[test]
 fn focus_boost_moves_weight_between_app_units_only() {
     let mut boost = FocusBoost::default();
-    let first = boost.focus(Some("app-a.service"));
+    let first: Vec<_> = boost.focus(Some("app-a.service")).collect();
     assert_eq!(first.len(), 1);
     assert!(first[0].contains(&"CPUWeight=400".to_owned()));
-    assert!(boost.focus(Some("app-a.service")).is_empty());
-    let second = boost.focus(Some("app-b.service"));
+    assert_eq!(boost.focus(Some("app-a.service")).count(), 0);
+    let second: Vec<_> = boost.focus(Some("app-b.service")).collect();
     assert_eq!(second.len(), 2);
     assert!(second[0].contains(&"app-a.service".to_owned()));
     assert!(second[0].contains(&"CPUWeight=100".to_owned()));
     // Never boosts system or session units.
-    let third = boost.focus(Some("dbus.service"));
+    let third: Vec<_> = boost.focus(Some("dbus.service")).collect();
     assert_eq!(third.len(), 1);
     assert!(third[0].contains(&"app-b.service".to_owned()));
 }

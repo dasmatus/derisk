@@ -212,22 +212,23 @@ impl Keyboard {
 
     /// Each key's tap area inside `area`, top row first, below the
     /// suggestion strip. Every row spans the full width.
-    pub fn keys(&self, area: Geometry) -> Vec<(Key, Geometry)> {
+    pub fn keys(&self, area: Geometry) -> impl Iterator<Item = (Key, Geometry)> + use<> {
         let top = area.loc.y + SUGGESTION_HEIGHT;
-        let mut out = Vec::new();
-        for (r, row) in rows(self.page).into_iter().enumerate() {
-            let units: i32 = row.iter().map(|(_, w)| w).sum();
-            // Short rows (the home row) are centered, as on a real keyboard.
-            let full = units.max(100);
-            let mut x = area.loc.x * full + (full - units) * area.size.w / 2;
-            let y = top + r as i32 * ROW_HEIGHT;
-            for (key, w) in row {
-                let left = x / full;
-                x += w * area.size.w;
-                out.push((key, rect(left, y, x / full - left, ROW_HEIGHT)));
-            }
-        }
-        out
+        rows(self.page)
+            .into_iter()
+            .enumerate()
+            .flat_map(move |(r, row)| {
+                let units: i32 = row.iter().map(|(_, w)| w).sum();
+                // Short rows (the home row) are centered, as on a real keyboard.
+                let full = units.max(100);
+                let start = area.loc.x * full + (full - units) * area.size.w / 2;
+                let y = top + r as i32 * ROW_HEIGHT;
+                row.into_iter().scan(start, move |x, (key, w)| {
+                    let left = *x / full;
+                    *x += w * area.size.w;
+                    Some((key, rect(left, y, *x / full - left, ROW_HEIGHT)))
+                })
+            })
     }
 
     /// The suggestion strip's cells inside `area`.
@@ -695,7 +696,7 @@ mod tests {
     fn keys_fill_each_row_and_reach_both_edges() {
         let k = Keyboard::new();
         let area = rect(0, 500, 392, HEIGHT);
-        let keys = k.keys(area);
+        let keys: Vec<_> = k.keys(area).collect();
         let top_row: Vec<_> = keys
             .iter()
             .filter(|(_, g)| g.loc.y == 500 + SUGGESTION_HEIGHT)
