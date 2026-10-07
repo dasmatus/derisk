@@ -146,6 +146,7 @@ impl Setup {
                 .cloned()
                 .unwrap_or_default(),
             account: self.account.clone(),
+            password_age: derisk::password_age::PasswordAge::system(),
         }
     }
 

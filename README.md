@@ -209,8 +209,14 @@ same theme.
   command palette, assistant or agents, acting on this session
   (`XDG_SESSION_ID`): Log out ends the logind session, not just the target.
 - **Lock screen.** Locking hides every window and sends every key to a
-  password field checked by PAM (the `derisk` service, `crates/derisk/data/pam.d/derisk`).
-  With `--execute` the session also locks when logind asks it to (`loginctl
+  field that answers PAM (the `derisk` service, `crates/derisk/data/pam.d/derisk`)
+  through a `derisk auth` child process speaking greetd's protocol, so
+  whatever the stack asks for is asked: the password, a security key's PIN
+  and touch (systemd-homed's FIDO2 unlock), a verification code. When
+  `/etc/pam.d/derisk-fingerprint` is installed, a second conversation
+  listens to the fingerprint reader beside the field, and whichever PAM
+  accepts first unlocks. An expired password still unlocks a running
+  session, with a reminder; the next login asks for a new one. With `--execute` the session also locks when logind asks it to (`loginctl
   lock-session`, `lock-sessions`, `busctl wait` on the session's `Lock`
   signal) and sets logind's `LockedHint`. While locked every agent request,
   `tree`, `screenshot` and `input` included, gets `"the session is locked"`,
@@ -221,7 +227,12 @@ same theme.
   login screen) on a VT as an unprivileged user, checks the password it is
   given with PAM (`crates/derisk/data/pam.d/derisk-login`), and then opens the user's PAM
   session, so pam_systemd registers it with logind and pam_systemd_home
-  unlocks a homed home area, and runs the session command as the user. When
+  unlocks a homed home area, and runs the session command as the user. An
+  expired password is changed in the same conversation before the session
+  starts, and the account's homed record is brought up to the system's
+  password age (`/etc/derisk/sign-in.conf`, `password.max_age_days` and
+  `password.warn_days`), which first-boot setup also creates accounts
+  under. When
   the session ends the greeter comes back. The root half draws nothing; the
   greeter talks to it over greetd's protocol on a socket only the greeter
   user can open, so `derisk greeter` also runs unchanged under greetd. The
@@ -247,6 +258,7 @@ $ cp crates/derisk/data/systemd/user/* crates/derisk-portal/data/systemd/user/* 
 $ systemctl --user daemon-reload
 $ systemctl --user start derisk-agent.socket   # headless only; a session serves the socket itself
 $ sudo install -m644 crates/derisk/data/pam.d/derisk /etc/pam.d/derisk   # for the lock screen
+$ sudo install -m644 crates/derisk/data/pam.d/derisk-fingerprint /etc/pam.d/   # the lock screen's fingerprint reader (fprintd)
 $ sudo install -m644 crates/derisk/data/pam.d/derisk-login crates/derisk/data/pam.d/derisk-greeter /etc/pam.d/   # for the display manager
 ```
 

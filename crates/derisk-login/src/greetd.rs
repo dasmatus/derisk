@@ -146,8 +146,51 @@ pub enum Phase {
         /// Whether to start over for the same user.
         retry: bool,
     },
-    /// greetd will start the session when the greeter exits.
+    /// greetd will start the session when the greeter exits; for an
+    /// [`unlock`](Login::unlock), PAM accepted and the screen may unlock.
     Started,
+}
+
+/// What a PAM prompt asks for, read from its text, so the field's hint and
+/// the line under it can say it in words rather than echo the module.
+///
+/// The texts are the modules' own: pam_unix and pam_systemd_home ask for a
+/// "Password" and, when it has expired, a "New password"; pam_systemd_home
+/// asks for a "Security token PIN" before a FIDO2 key unlocks the home; and
+/// pam_google_authenticator asks for a "Verification code".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// The account's password (or the current one, before a change).
+    Password,
+    /// A new password, or the same one again, after it expired.
+    NewPassword,
+    /// A one-time code from an authenticator app.
+    Code,
+    /// A security key's PIN.
+    Pin,
+    /// Anything else; the prompt's own text is shown.
+    Other,
+}
+
+impl Ask {
+    /// What `prompt` asks for.
+    pub fn of(prompt: &str) -> Self {
+        let p = prompt.to_lowercase();
+        if p.contains("new password") || p.contains("retype") {
+            Self::NewPassword
+        } else if p.contains("verification code")
+            || p.contains("one-time")
+            || p.contains("authenticator")
+        {
+            Self::Code
+        } else if p.contains("pin") {
+            Self::Pin
+        } else if p.contains("password") {
+            Self::Password
+        } else {
+            Self::Other
+        }
+    }
 }
 
 /// A line under the field: PAM's info, or what went wrong.
@@ -170,6 +213,12 @@ pub struct Login {
     notice: Option<Notice>,
     cmd: Vec<String>,
     env: Vec<String>,
+    /// Unlocking a session that is already running: authenticated is done,
+    /// with no session to start.
+    unlock: bool,
+    /// What PAM asked for since the last `create_session`, to say which
+    /// answer was wrong.
+    asked: Vec<Ask>,
 }
 
 impl Login {
@@ -183,6 +232,31 @@ impl Login {
             notice: None,
             cmd,
             env,
+            unlock: false,
+            asked: Vec::new(),
+        }
+    }
+
+    /// A conversation that unlocks `username`'s running session: it never
+    /// asks who is logging in, and ends at [`Phase::Started`] once PAM
+    /// accepts, without a session to start.
+    pub fn unlock(username: String) -> Self {
+        Self {
+            unlock: true,
+            ..Self::new(username, Vec::new(), Vec::new())
+        }
+    }
+
+    /// Whether this conversation unlocks a running session.
+    pub fn is_unlock(&self) -> bool {
+        self.unlock
+    }
+
+    /// What the current prompt asks for, if PAM is asking.
+    pub fn ask(&self) -> Option<Ask> {
+        match &self.phase {
+            Phase::Prompt { text, .. } => Some(Ask::of(text)),
+            _ => None,
         }
     }
 
@@ -212,6 +286,7 @@ impl Login {
                 }
                 self.username = username.clone();
                 self.notice = None;
+                self.asked.clear();
                 self.phase = Phase::Waiting;
                 Some(Request::CreateSession { username })
             }
@@ -252,6 +327,7 @@ impl Login {
             ) => match auth_message_type {
                 AuthMessageType::Visible | AuthMessageType::Secret => {
                     self.answer.clear();
+                    self.asked.push(Ask::of(&auth_message));
                     self.phase = Phase::Prompt {
                         secret: auth_message_type == AuthMessageType::Secret,
                         text: auth_message.trim().to_owned(),
@@ -268,6 +344,10 @@ impl Login {
                     Some(Request::PostAuthMessageResponse { response: None })
                 }
             },
+            (Response::Success, Phase::Waiting) if self.unlock => {
+                self.phase = Phase::Started;
+                None
+            }
             (Response::Success, Phase::Waiting) => {
                 self.phase = Phase::Starting;
                 Some(Request::StartSession {
@@ -280,6 +360,7 @@ impl Login {
                 None
             }
             (Response::Success, Phase::Cancelling { retry: true }) => {
+                self.asked.clear();
                 self.phase = Phase::Waiting;
                 Some(Request::CreateSession {
                     username: self.username.clone(),
@@ -301,7 +382,7 @@ impl Login {
                 let wrong_password = error_type == "auth_error" && self.phase == Phase::Waiting;
                 self.notice = Some(Notice {
                     text: if wrong_password {
-                        "Wrong password, try again".to_owned()
+                        self.wrong().to_owned()
                     } else {
                         description
                     },
@@ -335,6 +416,20 @@ impl Login {
         }
     }
 
+    /// What to say when PAM refused: the stack fails as a whole, so with a
+    /// code or a new password in the round the message names both.
+    fn wrong(&self) -> &'static str {
+        if self.asked.contains(&Ask::NewPassword) {
+            "The new password was not accepted, try again"
+        } else if self.asked.contains(&Ask::Code) {
+            "Wrong password or code, try again"
+        } else if self.asked.contains(&Ask::Pin) && !self.asked.contains(&Ask::Password) {
+            "Wrong PIN, try again"
+        } else {
+            "Wrong password, try again"
+        }
+    }
+
     /// The request could not be sent or answered: greetd is gone.
     pub fn disconnected(&mut self, error: &str) {
         self.answer.clear();
@@ -347,22 +442,34 @@ impl Login {
 
     /// The hint in the field.
     pub fn hint(&self) -> &str {
-        match &self.phase {
-            Phase::Prompt { text, .. } if !text.is_empty() => text.trim_end_matches(':'),
-            Phase::Prompt { secret: true, .. } => "Password",
-            Phase::Prompt { .. } => "Answer",
+        match (&self.phase, self.ask()) {
+            (Phase::Prompt { .. }, Some(Ask::Code)) => "Verification code",
+            (Phase::Prompt { .. }, Some(Ask::Pin)) => "Security key PIN",
+            (Phase::Prompt { text, .. }, _) if !text.is_empty() => text.trim_end_matches(':'),
+            (Phase::Prompt { secret: true, .. }, _) => "Password",
+            (Phase::Prompt { .. }, _) => "Answer",
+            (Phase::User, _) if self.unlock => "Press Enter to try again",
             _ => "User name",
         }
     }
 
     /// The line under the field when there is no notice.
     pub fn status(&self) -> &'static str {
-        match self.phase {
-            Phase::User => "Enter your user name",
-            Phase::Waiting | Phase::Cancelling { .. } => "Checking…",
-            Phase::Prompt { secret: true, .. } => "Enter your password to log in",
-            Phase::Prompt { .. } => "Press Escape to log in as someone else",
-            Phase::Starting | Phase::Started => "Starting your session…",
+        match (&self.phase, self.ask()) {
+            (Phase::User, _) if self.unlock => "Press Enter to try again",
+            (Phase::User, _) => "Enter your user name",
+            (Phase::Waiting | Phase::Cancelling { .. }, _) => "Checking…",
+            (Phase::Prompt { .. }, Some(Ask::NewPassword)) => "Choose a new password",
+            (Phase::Prompt { .. }, Some(Ask::Code)) => "Enter the code from your authenticator app",
+            (Phase::Prompt { .. }, Some(Ask::Pin)) => "Enter your security key's PIN",
+            (Phase::Prompt { secret: true, .. }, _) if self.unlock => {
+                "Enter your password to unlock"
+            }
+            (Phase::Prompt { secret: true, .. }, _) => "Enter your password to log in",
+            (Phase::Prompt { .. }, _) if self.unlock => "Answer to unlock",
+            (Phase::Prompt { .. }, _) => "Press Escape to log in as someone else",
+            (Phase::Starting | Phase::Started, _) if self.unlock => "Unlocking…",
+            (Phase::Starting | Phase::Started, _) => "Starting your session…",
         }
     }
 }
@@ -584,5 +691,142 @@ mod tests {
         assert_eq!(login.phase(), &Phase::User);
         assert!(login.answer.is_empty());
         assert_eq!(login.username, "alice");
+    }
+
+    fn prompt(text: &str) -> Response {
+        Response::AuthMessage {
+            auth_message_type: AuthMessageType::Secret,
+            auth_message: text.into(),
+        }
+    }
+
+    #[test]
+    fn prompts_are_read_from_the_modules_texts() {
+        assert_eq!(Ask::of("Password: "), Ask::Password);
+        assert_eq!(Ask::of("Current password: "), Ask::Password);
+        assert_eq!(Ask::of("New password: "), Ask::NewPassword);
+        assert_eq!(Ask::of("Retype new password: "), Ask::NewPassword);
+        assert_eq!(Ask::of("Verification code: "), Ask::Code);
+        assert_eq!(Ask::of("Security token PIN: "), Ask::Pin);
+        assert_eq!(Ask::of("Sorry, retry security token PIN: "), Ask::Pin);
+        assert_eq!(Ask::of("Recovery key: "), Ask::Other);
+    }
+
+    #[test]
+    fn a_code_after_the_password_gets_its_own_words() {
+        let mut login = at_prompt();
+        login.answer = ANSWER.into();
+        login.submit();
+        assert_eq!(login.respond(prompt("Verification code: ")), None);
+        assert_eq!(login.ask(), Some(Ask::Code));
+        assert_eq!(login.hint(), "Verification code");
+        assert_eq!(login.status(), "Enter the code from your authenticator app");
+        login.answer = "123456".into();
+        login.submit();
+        login.respond(auth_error());
+        assert_eq!(
+            login.notice().unwrap().text,
+            "Wrong password or code, try again"
+        );
+        // The retry starts a fresh round: a plain wrong password next time
+        // is called that again.
+        login.respond(Response::Success);
+        login.respond(secret());
+        login.answer = ANSWER.into();
+        login.submit();
+        login.respond(auth_error());
+        assert_eq!(login.notice().unwrap().text, "Wrong password, try again");
+    }
+
+    #[test]
+    fn an_expired_password_is_changed_in_the_same_conversation() {
+        let mut login = at_prompt();
+        login.answer = ANSWER.into();
+        login.submit();
+        let expired = Response::AuthMessage {
+            auth_message_type: AuthMessageType::Error,
+            auth_message: "Password expired, change required.".into(),
+        };
+        assert_eq!(
+            login.respond(expired),
+            Some(Request::PostAuthMessageResponse { response: None })
+        );
+        assert_eq!(login.respond(prompt("New password: ")), None);
+        assert_eq!(login.status(), "Choose a new password");
+        assert_eq!(login.hint(), "New password");
+        // The reason stays up while the new password is typed.
+        assert_eq!(
+            login.notice().unwrap().text,
+            "Password expired, change required."
+        );
+        login.answer = ANSWER.into();
+        login.submit();
+        assert_eq!(login.respond(prompt("Retype new password: ")), None);
+        login.answer = ANSWER.into();
+        login.submit();
+        assert!(matches!(
+            login.respond(Response::Success),
+            Some(Request::StartSession { .. })
+        ));
+    }
+
+    #[test]
+    fn a_refused_new_password_says_so() {
+        let mut login = at_prompt();
+        login.answer = ANSWER.into();
+        login.submit();
+        login.respond(prompt("New password: "));
+        login.answer = ANSWER.into();
+        login.submit();
+        login.respond(auth_error());
+        assert_eq!(
+            login.notice().unwrap().text,
+            "The new password was not accepted, try again"
+        );
+    }
+
+    #[test]
+    fn unlocking_ends_without_a_session_to_start() {
+        let mut login = Login::unlock("alice".into());
+        assert!(login.is_unlock());
+        assert_eq!(
+            login.submit(),
+            Some(Request::CreateSession {
+                username: "alice".into()
+            })
+        );
+        login.respond(secret());
+        assert_eq!(login.status(), "Enter your password to unlock");
+        login.answer = ANSWER.into();
+        login.submit();
+        assert_eq!(login.respond(Response::Success), None);
+        assert_eq!(login.phase(), &Phase::Started);
+    }
+
+    #[test]
+    fn an_unlock_that_stopped_offers_to_try_again() {
+        let mut login = Login::unlock("alice".into());
+        login.submit();
+        let unavailable = Response::Error {
+            error_type: "error".into(),
+            description: "no fingerprint reader".into(),
+        };
+        assert_eq!(login.respond(unavailable), Some(Request::CancelSession));
+        assert_eq!(login.respond(Response::Success), None);
+        assert_eq!(login.phase(), &Phase::User);
+        assert_eq!(login.hint(), "Press Enter to try again");
+        assert!(login.submit().is_some());
+    }
+
+    #[test]
+    fn a_pin_alone_is_called_a_pin() {
+        let mut login = login();
+        login.submit();
+        login.respond(prompt("Security token PIN: "));
+        assert_eq!(login.hint(), "Security key PIN");
+        login.answer = "1234".into();
+        login.submit();
+        login.respond(auth_error());
+        assert_eq!(login.notice().unwrap().text, "Wrong PIN, try again");
     }
 }

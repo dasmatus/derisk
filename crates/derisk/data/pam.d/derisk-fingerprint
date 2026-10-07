@@ -1,0 +1,8 @@
+#%PAM-1.0
+# The lock screen's fingerprint reader, asked beside the password field
+# (`derisk auth --service derisk-fingerprint`). Only pam_fprintd: whatever it
+# cannot answer, the field's own conversation (`derisk`) does. The lock
+# screen offers the reader only when this file is installed, as
+# /etc/pam.d/derisk-fingerprint.
+auth     required  pam_fprintd.so
+account  include   derisk
