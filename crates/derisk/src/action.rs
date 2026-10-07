@@ -149,6 +149,13 @@ pub enum Action {
         /// What to search for.
         query: String,
     },
+    /// Open a web address in the default browser. Only `http://` and
+    /// `https://` URLs, so xdg-open cannot read it as an option or hand it
+    /// to some other scheme's handler.
+    OpenUrl {
+        /// The URL.
+        url: String,
+    },
     /// Hand a request the built-in assistant can't follow to the agent set
     /// up in Sonne, with whichever model key or agent CLI the person chose
     /// there. It opens in Sonne's agent panel for the person to send, so
@@ -270,6 +277,7 @@ impl Action {
             Self::Keyboard { visible: None } => "Toggle the on-screen keyboard".into(),
             Self::Open { path } => format!("Open {path}"),
             Self::SearchWeb { query } => format!("Search the web for {query}"),
+            Self::OpenUrl { url } => format!("Open {url}"),
             Self::AskAgent { text } => format!("Ask Sonne's agent: {text}"),
             Self::ActivateMenu { item, .. } => format!("Choose menu item {item}"),
             Self::Session { op, .. } => format!("{op:?}"),

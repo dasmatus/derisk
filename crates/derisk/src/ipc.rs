@@ -438,6 +438,7 @@ pub fn tools() -> Value {
             {"type": "object", "required": ["action", "layout"], "properties": {"action": {"const": "set_layout"}, "layout": {"enum": ["tall", "monocle"]}}},
             {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["overview", "palette"]}, "visible": {"type": "boolean"}}},
             {"type": "object", "required": ["action", "path"], "properties": {"action": {"const": "open"}, "path": {"type": "string", "description": "Absolute path to an existing file or folder; executables and .desktop files are refused"}}},
+            {"type": "object", "required": ["action", "url"], "properties": {"action": {"const": "open_url"}, "url": {"type": "string", "description": "An http:// or https:// URL, opened in the default browser"}}},
             {"type": "object", "required": ["action", "item"], "properties": {"action": {"const": "activate_menu"}, "window": window, "item": {"type": "string"}}},
             {"type": "object", "required": ["action", "op"], "properties": {"action": {"const": "session"}, "op": {"enum": ["lock", "suspend", "hibernate", "logout", "reboot", "power_off"]}, "confirmed": {"type": "boolean", "description": "Required for logout/reboot/power_off. Even then the person is asked on screen, and only they can accept"}}},
             {"type": "object", "required": ["action", "id"], "properties": {"action": {"const": "activate_tray"}, "id": {"type": "string"}, "item": {"type": "string"}}},

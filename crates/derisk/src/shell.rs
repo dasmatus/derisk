@@ -1059,6 +1059,13 @@ impl Shell {
                     path: engine.url(&query),
                 }]);
             }
+            Action::OpenUrl { url } => {
+                let lower = url.to_ascii_lowercase();
+                if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+                    return Err(Error::NotOpenable(url));
+                }
+                return Ok(vec![Effect::Open { path: url }]);
+            }
             Action::AskAgent { text } => {
                 // Sonne registers the zed: scheme; xdg-open cannot read a
                 // URL that starts with it as an option.
