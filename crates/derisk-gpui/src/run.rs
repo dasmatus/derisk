@@ -3,8 +3,7 @@
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Application, Bounds, Global, TitlebarOptions, WindowBounds, WindowOptions, px,
-    size,
+    App, AppContext, Bounds, Global, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
 use mcsapi_components_gpui::Tokens;
 use mcsapi_theme::Theme;
@@ -17,7 +16,7 @@ pub struct DesktopTheme(pub Theme);
 
 impl Global for DesktopTheme {}
 
-fn install(theme: Theme, cx: &mut App) {
+pub(crate) fn install(theme: Theme, cx: &mut App) {
     Tokens::from_spec(&theme).install(cx);
     cx.set_global(DesktopTheme(theme));
     cx.refresh_windows();
@@ -34,49 +33,50 @@ pub fn run(id: &str) -> Result<(), String> {
         ));
     }
     let id = id.to_owned();
-    Application::new().run(move |cx: &mut App| {
-        mcsapi_components_gpui::bind_text_input_keys(cx);
-        let mut watch = ThemeWatch::default();
-        install(watch.poll().unwrap_or_default(), cx);
-        // Settings are a file; re-read it about once a second, like the
-        // session does, so a theme change reaches running apps too.
-        cx.spawn(async move |cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                if let Some(theme) = watch.poll()
-                    && cx.update(|cx| install(theme, cx)).is_err()
-                {
-                    break;
+    gpui_platform::application()
+        .with_assets(mcsapi_components_gpui::Assets::new())
+        .run(move |cx: &mut App| {
+            mcsapi_components_gpui::bind_text_input_keys(cx);
+            let mut watch = ThemeWatch::default();
+            install(watch.poll().unwrap_or_default(), cx);
+            // Settings are a file; re-read it about once a second, like the
+            // session does, so a theme change reaches running apps too.
+            cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    // The process ends with the app, so the loop needs no exit.
+                    if let Some(theme) = watch.poll() {
+                        cx.update(|cx| install(theme, cx));
+                    }
                 }
-            }
-        })
-        .detach();
-        let (title, width, height) = match id.as_str() {
-            CALCULATOR => ("Calculator", 640.0, 480.0),
-            _ => unreachable!("checked against APPS above"),
-        };
-        let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some(title.into()),
+            })
+            .detach();
+            let (title, width, height) = match id.as_str() {
+                CALCULATOR => ("Calculator", 640.0, 480.0),
+                _ => unreachable!("checked against APPS above"),
+            };
+            let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some(title.into()),
+                    ..Default::default()
+                }),
+                // The compositor matches windows to apps (and their .desktop
+                // files) by this.
+                app_id: Some(id.clone()),
                 ..Default::default()
-            }),
-            // The compositor matches windows to apps (and their .desktop
-            // files) by this.
-            app_id: Some(id.clone()),
-            ..Default::default()
-        };
-        let opened = cx.open_window(options, |window, cx| {
-            cx.new(|cx| Calculator::new(window, cx))
+            };
+            let opened = cx.open_window(options, |window, cx| {
+                cx.new(|cx| Calculator::new(window, cx))
+            });
+            if let Err(error) = opened {
+                tracing::error!("opening the {title} window: {error}");
+                cx.quit();
+                return;
+            }
+            cx.on_window_closed(|cx, _| cx.quit()).detach();
+            cx.activate(true);
         });
-        if let Err(error) = opened {
-            tracing::error!("opening the {title} window: {error}");
-            cx.quit();
-            return;
-        }
-        cx.on_window_closed(|cx| cx.quit()).detach();
-        cx.activate(true);
-    });
     Ok(())
 }

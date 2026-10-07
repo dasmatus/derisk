@@ -348,8 +348,10 @@ session knows, and `crates/derisk-portal/data/portal/derisk-portals.conf` leaves
 
 xdg-desktop-portal asks before a non-interactive screenshot or a wallpaper
 without a preview. The interactive and preview cases are the backend's to
-confirm, and it asks through the GTK backend's access dialog
-(`$DERISK_PORTAL_ACCESS` names another). There is no area picker or color
+confirm, and it asks with derisk's own consent dialog, `derisk-gpui ask`
+(an mcsapi `NativeDialog` on the desktop theme; `$DERISK_PORTAL_DIALOG` names
+another program). Where `derisk-gpui` is not installed it asks through the GTK
+backend's access dialog instead (`$DERISK_PORTAL_ACCESS` names another backend). There is no area picker or color
 picker yet, and the lock screen draws its own gradient, so a wallpaper for
 the lock screen alone is refused.
 

@@ -14,8 +14,12 @@
 //!
 //! Ported so far: [`CALCULATOR`]. The others still run in-process with egui.
 //!
+//! [`ask`] is the portal's consent dialog, run as `derisk-gpui ask` so the
+//! portal can show it from its D-Bus service by spawning a process.
+//!
 //! ```console
 //! $ cargo run -p derisk-gpui --features gpui -- org.derisk.calculator
+//! $ cargo run -p derisk-gpui --features gpui -- ask --title "Take a screenshot?"
 //! ```
 
 #![forbid(unsafe_code)]
@@ -26,6 +30,7 @@ use std::{path::PathBuf, time::SystemTime};
 use derisk_settings::Settings;
 use mcsapi_theme::{Library, Theme};
 
+pub mod ask;
 #[cfg(feature = "gpui")]
 pub mod calculator;
 #[cfg(feature = "gpui")]

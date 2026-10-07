@@ -1,15 +1,23 @@
-//! Asking the person, through another backend's access dialog.
+//! Asking the person before a portal request goes through.
 //!
-//! derisk has no dialog of its own a portal can open yet, but the frontend
-//! leaves some consent to the backend: an interactive screenshot and a
-//! wallpaper with a preview are both supposed to show the person something
-//! before they happen. Doing them silently would let any app take the
-//! screen or change the background by setting one flag, so this backend
-//! asks through the `org.freedesktop.impl.portal.Access` dialog of the GTK
-//! backend, the same dialog the frontend itself uses for the
-//! non-interactive cases.
+//! The frontend leaves some consent to the backend: an interactive
+//! screenshot and a wallpaper with a preview are both supposed to show the
+//! person something before they happen. Doing them silently would let any
+//! app take the screen or change the background by setting one flag, so
+//! this backend asks first.
+//!
+//! It asks with derisk's own dialog, `derisk-gpui ask`: an mcsapi
+//! `NativeDialog` on the desktop theme, run as a process because this
+//! service has no windows, answering with its exit status. Where that
+//! binary is not installed it falls back to the
+//! `org.freedesktop.impl.portal.Access` dialog of the GTK backend, the same
+//! dialog the frontend itself uses for the non-interactive cases.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use ashpd::zbus::{
     self,
@@ -33,6 +41,8 @@ pub fn handle(token: &str) -> String {
 pub struct Question<'a> {
     /// The asking app's ID, empty for a host app.
     pub app_id: &'a str,
+    /// The asking app's name, the dialog window's title.
+    pub app: &'a str,
     /// The app's window, `wayland:<handle>` or empty.
     pub parent_window: &'a str,
     /// The dialog's heading.
@@ -45,8 +55,92 @@ pub struct Question<'a> {
     pub grant_label: &'a str,
 }
 
+/// derisk's dialog program: `$DERISK_PORTAL_DIALOG`, else `derisk-gpui`
+/// beside this binary or on `PATH`. `None` when there is none, and then the
+/// GTK backend asks.
+pub fn dialog_program() -> Option<PathBuf> {
+    if let Some(program) = std::env::var_os("DERISK_PORTAL_DIALOG") {
+        return Some(PathBuf::from(program));
+    }
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("derisk-gpui")));
+    let on_path = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|dir| dir.join("derisk-gpui"));
+    beside.into_iter().chain(on_path).find(|p| is_executable(p))
+}
+
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// The `derisk-gpui ask` arguments for `q`.
+pub fn dialog_args(q: &Question<'_>, deny_label: &str) -> Vec<String> {
+    let mut args = vec!["ask".to_owned()];
+    for (flag, value) in [
+        ("--title", q.title),
+        ("--subtitle", q.subtitle),
+        ("--body", q.body),
+        ("--grant", q.grant_label),
+        ("--deny", deny_label),
+        ("--app", q.app),
+        ("--parent", q.parent_window),
+    ] {
+        if !value.is_empty() {
+            args.extend([flag.to_owned(), value.to_owned()]);
+        }
+    }
+    args
+}
+
+/// Dialogs `derisk-gpui ask` is showing, by request token, so `close` can
+/// end one.
+static SHOWING: Mutex<Option<HashMap<String, tokio::sync::oneshot::Sender<()>>>> = Mutex::new(None);
+
 /// Shows the dialog and waits: `Ok(true)` only when the person grants it.
 pub async fn ask(
+    connection: &zbus::Connection,
+    token: &str,
+    q: &Question<'_>,
+) -> zbus::Result<bool> {
+    match dialog_program() {
+        Some(program) => ask_derisk(&program, token, q)
+            .await
+            .map_err(|e| zbus::Error::Failure(format!("{}: {e}", program.display()))),
+        None => ask_gtk(connection, token, q).await,
+    }
+}
+
+async fn ask_derisk(program: &Path, token: &str, q: &Question<'_>) -> std::io::Result<bool> {
+    let mut child = tokio::process::Command::new(program)
+        .args(dialog_args(q, "Cancel"))
+        .kill_on_drop(true)
+        .spawn()?;
+    let (closed, close) = tokio::sync::oneshot::channel();
+    SHOWING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_default()
+        .insert(token.to_owned(), closed);
+    let granted = tokio::select! {
+        status = child.wait() => status?.success(),
+        // The app gave up on its request: take the dialog down unanswered.
+        _ = close => {
+            child.kill().await?;
+            false
+        }
+    };
+    if let Some(showing) = SHOWING.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        showing.remove(token);
+    }
+    Ok(granted)
+}
+
+async fn ask_gtk(
     connection: &zbus::Connection,
     token: &str,
     q: &Question<'_>,
@@ -80,6 +174,15 @@ pub async fn ask(
 /// Closes a dialog [`ask`] is still showing for `token`, when the app
 /// gives up on its request.
 pub async fn close(connection: &zbus::Connection, token: &str) {
+    let derisk = SHOWING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_mut()
+        .and_then(|showing| showing.remove(token));
+    if let Some(close) = derisk {
+        let _ = close.send(());
+        return;
+    }
     let _ = connection
         .call_method(
             Some(backend().as_str()),
@@ -89,4 +192,38 @@ pub async fn close(connection: &zbus::Connection, token: &str) {
             &(),
         )
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dialog_args_leave_out_empty_values() {
+        let q = Question {
+            app_id: "org.example.App",
+            app: "Example",
+            parent_window: "",
+            title: "Take a screenshot?",
+            subtitle: "Example wants a picture of the whole screen.",
+            body: "",
+            grant_label: "Take Screenshot",
+        };
+        assert_eq!(
+            dialog_args(&q, "Cancel"),
+            [
+                "ask",
+                "--title",
+                "Take a screenshot?",
+                "--subtitle",
+                "Example wants a picture of the whole screen.",
+                "--grant",
+                "Take Screenshot",
+                "--deny",
+                "Cancel",
+                "--app",
+                "Example",
+            ]
+        );
+    }
 }
