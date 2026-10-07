@@ -200,7 +200,7 @@ fn clock_follows_the_time_zone_file() {
 
 #[test]
 fn overview_grid_and_battery() {
-    let cells = grid(5, rect(0, 0, 1000, 600), 10);
+    let cells: Vec<_> = grid(5, rect(0, 0, 1000, 600), 10).collect();
     assert_eq!(cells.len(), 5);
     for pair in cells.windows(2) {
         assert!(pair[0] != pair[1]);

@@ -58,24 +58,24 @@ impl Question {
     }
 
     /// The arguments [`Question::from_args`] reads back into this question.
-    pub fn to_args(&self) -> Vec<String> {
-        let mut args = Vec::new();
-        for (flag, value) in [
+    pub fn to_args(&self) -> impl Iterator<Item = String> + '_ {
+        [
             ("--title", &self.title),
             ("--subtitle", &self.subtitle),
             ("--body", &self.body),
             ("--grant", &self.grant),
             ("--deny", &self.deny),
             ("--app", &self.app),
-        ] {
-            if !value.is_empty() {
-                args.extend([flag.to_owned(), value.clone()]);
-            }
-        }
-        if !self.parent.is_none() {
-            args.extend(["--parent".to_owned(), self.parent.to_string()]);
-        }
-        args
+        ]
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .flat_map(|(flag, value)| [flag.to_owned(), value.clone()])
+        .chain(
+            (!self.parent.is_none())
+                .then(|| ["--parent".to_owned(), self.parent.to_string()])
+                .into_iter()
+                .flatten(),
+        )
     }
 }
 

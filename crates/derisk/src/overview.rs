@@ -100,33 +100,31 @@ pub fn row(count: usize, area: Geometry, gap: i32) -> Vec<Geometry> {
 /// Grid cells for `count` windows inside `area`, filled row by row.
 ///
 /// Columns are chosen so cells stay close to the area's aspect ratio.
-pub fn grid(count: usize, area: Geometry, gap: i32) -> Vec<Geometry> {
-    if count == 0 {
-        return Vec::new();
-    }
+pub fn grid(count: usize, area: Geometry, gap: i32) -> impl Iterator<Item = Geometry> {
     let aspect = f64::from(area.size.w) / f64::from(area.size.h.max(1));
-    let cols = ((count as f64 * aspect).sqrt().ceil() as usize).clamp(1, count);
-    let rows = count.div_ceil(cols);
+    // No windows is laid out as one, so nothing divides by zero; the range
+    // below still yields no cells.
+    let n = count.max(1);
+    let cols = ((n as f64 * aspect).sqrt().ceil() as usize).clamp(1, n);
+    let rows = n.div_ceil(cols);
     let cw = (area.size.w - gap * (cols as i32 - 1)) / cols as i32;
     let ch = (area.size.h - gap * (rows as i32 - 1)) / rows as i32;
-    (0..count)
-        .map(|i| {
-            let (r, c) = ((i / cols) as i32, (i % cols) as i32);
-            // Center a short last row.
-            let in_row = if r as usize == rows - 1 {
-                count - (rows - 1) * cols
-            } else {
-                cols
-            } as i32;
-            let offset = (cols as i32 - in_row) * (cw + gap) / 2;
-            rect(
-                area.loc.x + offset + c * (cw + gap),
-                area.loc.y + r * (ch + gap),
-                cw.max(1),
-                ch.max(1),
-            )
-        })
-        .collect()
+    (0..count).map(move |i| {
+        let (r, c) = ((i / cols) as i32, (i % cols) as i32);
+        // Center a short last row.
+        let in_row = if r as usize == rows - 1 {
+            count - (rows - 1) * cols
+        } else {
+            cols
+        } as i32;
+        let offset = (cols as i32 - in_row) * (cw + gap) / 2;
+        rect(
+            area.loc.x + offset + c * (cw + gap),
+            area.loc.y + r * (ch + gap),
+            cw.max(1),
+            ch.max(1),
+        )
+    })
 }
 
 /// Scales a window frame to fit a cell, preserving its aspect ratio.

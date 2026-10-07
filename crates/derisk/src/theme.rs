@@ -90,26 +90,28 @@ fn icon_theme_name(icons: &str) -> Option<&str> {
 /// `dconf` so no schema has to be installed, and the user manager's and
 /// D-Bus activation's [`QT_ICON_THEME`]. Empty for a name that cannot be
 /// handed on.
-pub fn icon_theme_argv(icons: &str) -> Vec<Vec<String>> {
-    let Some(name) = icon_theme_name(icons) else {
-        return Vec::new();
-    };
-    // A GVariant string literal: single quotes, with quotes and
-    // backslashes inside escaped.
-    let quoted = format!("'{}'", name.replace('\\', "\\\\").replace('\'', "\\'"));
-    vec![
-        vec![
-            "dconf".to_owned(),
-            "write".to_owned(),
-            "/org/gnome/desktop/interface/icon-theme".to_owned(),
-            quoted,
-        ],
-        vec![
-            "dbus-update-activation-environment".to_owned(),
-            "--systemd".to_owned(),
-            format!("{QT_ICON_THEME}={name}"),
-        ],
-    ]
+pub fn icon_theme_argv(icons: &str) -> impl Iterator<Item = Vec<String>> + use<> {
+    icon_theme_name(icons)
+        .map(|name| {
+            // A GVariant string literal: single quotes, with quotes and
+            // backslashes inside escaped.
+            let quoted = format!("'{}'", name.replace('\\', "\\\\").replace('\'', "\\'"));
+            [
+                vec![
+                    "dconf".to_owned(),
+                    "write".to_owned(),
+                    "/org/gnome/desktop/interface/icon-theme".to_owned(),
+                    quoted,
+                ],
+                vec![
+                    "dbus-update-activation-environment".to_owned(),
+                    "--systemd".to_owned(),
+                    format!("{QT_ICON_THEME}={name}"),
+                ],
+            ]
+        })
+        .into_iter()
+        .flatten()
 }
 
 /// Environment for apps launched under `theme` published in `dir`.
@@ -184,7 +186,7 @@ mod tests {
 
     #[test]
     fn icon_theme_argv_quotes_the_name_for_dconf() {
-        let argv = icon_theme_argv("Papirus-Dark");
+        let argv: Vec<_> = icon_theme_argv("Papirus-Dark").collect();
         assert_eq!(
             argv[0],
             [
@@ -202,8 +204,11 @@ mod tests {
                 "QT_QPA_SYSTEM_ICON_THEME=Papirus-Dark"
             ]
         );
-        assert_eq!(icon_theme_argv(r"It's\Odd")[0][3], r"'It\'s\\Odd'");
-        assert!(icon_theme_argv("").is_empty());
-        assert!(icon_theme_argv("Bad\nName").is_empty());
+        assert_eq!(
+            icon_theme_argv(r"It's\Odd").next().unwrap()[3],
+            r"'It\'s\\Odd'"
+        );
+        assert!(icon_theme_argv("").next().is_none());
+        assert!(icon_theme_argv("Bad\nName").next().is_none());
     }
 }

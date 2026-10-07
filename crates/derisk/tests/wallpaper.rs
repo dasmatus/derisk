@@ -93,7 +93,8 @@ fn videos_decode_at_most_1080p_with_even_sides() {
 
 #[test]
 fn ffmpeg_writes_looping_raw_frames_at_the_screen_size() {
-    let args = ffmpeg_args(Path::new("/v/a b.mp4"), [1280, 720], Fit::Fit, Rgb(1, 2, 3));
+    let args: Vec<_> =
+        ffmpeg_args(Path::new("/v/a b.mp4"), [1280, 720], Fit::Fit, Rgb(1, 2, 3)).collect();
     let at = |flag: &str| args[args.iter().position(|a| a == flag).unwrap() + 1].clone();
     assert_eq!(at("-i"), "/v/a b.mp4");
     assert_eq!(at("-stream_loop"), "-1");

@@ -79,9 +79,11 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// The `derisk-gpui ask` arguments for `q`.
-pub fn dialog_args(q: &Question<'_>, deny_label: &str) -> Vec<String> {
-    let mut args = vec!["ask".to_owned()];
-    for (flag, value) in [
+pub fn dialog_args<'a>(
+    q: &Question<'a>,
+    deny_label: &'a str,
+) -> impl Iterator<Item = String> + use<'a> {
+    let flags = [
         ("--title", q.title),
         ("--subtitle", q.subtitle),
         ("--body", q.body),
@@ -89,12 +91,13 @@ pub fn dialog_args(q: &Question<'_>, deny_label: &str) -> Vec<String> {
         ("--deny", deny_label),
         ("--app", q.app),
         ("--parent", q.parent_window),
-    ] {
-        if !value.is_empty() {
-            args.extend([flag.to_owned(), value.to_owned()]);
-        }
-    }
-    args
+    ];
+    std::iter::once("ask".to_owned()).chain(
+        flags
+            .into_iter()
+            .filter(|(_, value)| !value.is_empty())
+            .flat_map(|(flag, value)| [flag.to_owned(), value.to_owned()]),
+    )
 }
 
 /// Dialogs `derisk-gpui ask` is showing, by request token, so `close` can
@@ -210,7 +213,7 @@ mod tests {
             grant_label: "Take Screenshot",
         };
         assert_eq!(
-            dialog_args(&q, "Cancel"),
+            dialog_args(&q, "Cancel").collect::<Vec<_>>(),
             [
                 "ask",
                 "--title",
