@@ -17,7 +17,10 @@ use egui::{
     Stroke, StrokeKind, Ui, UiBuilder, vec2,
 };
 use mcsapi::{Geometry, toolkit::egui, widgets::Theme};
-use mcsapi_components::{Alert, AlertVariant, Button, ButtonSize, ButtonVariant, Spinner, Tokens};
+use mcsapi_components::{
+    Alert, AlertVariant, Button, ButtonSize, ButtonVariant, ErrorDialog, Spinner, Tokens,
+};
+use mcsapi_ui::{DocLink, Error};
 
 use crate::{
     geom::rect,
@@ -324,6 +327,23 @@ pub fn notice(ui: &mut Ui, text: &str, error: bool) {
                 .color(tokens.muted_foreground),
         );
     }
+}
+
+/// A failure as an alert dialog: the message, its causes and the address
+/// of the documentation section it names, until "OK" takes it out of
+/// `error`. The address, not a "Learn more": the installer and setup run
+/// before any session, with no browser to open, so the person reads it on
+/// another device.
+pub fn error(ui: &Ui, id: &str, error: &mut Option<Error>) {
+    ErrorDialog::new(id, error)
+        .address_only(true)
+        .show(ui.ctx());
+}
+
+/// A message from the installer's or setup's backend as an [`Error`] that
+/// points at `heading` on the troubleshooting page.
+pub fn failure(message: String, heading: &'static str) -> Error {
+    Error::msg(message).with_doc(DocLink::new("troubleshooting").section(heading))
 }
 
 /// A spinner with a line beside it, for work in progress.

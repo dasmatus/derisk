@@ -11,4 +11,5 @@ repository.workspace = true
 derisk-icons.workspace = true
 # Only for the O_NOFOLLOW and O_DIRECTORY values, which differ by architecture.
 libc = "0.2"
+mcsapi-components.workspace = true
 mcsapi-ui.workspace = true

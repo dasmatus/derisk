@@ -27,7 +27,11 @@ mod thumbs;
 
 use std::path::PathBuf;
 
-use mcsapi_ui::{App, Theme, egui};
+use mcsapi_components::{ErrorDialog, Tokens};
+use mcsapi_ui::{
+    App, Context as _, DocLink, Error, Theme, egui,
+    error::miette::{MietteDiagnostic, Severity},
+};
 pub use model::{
     Accent, Appearance, BarPosition, ColorScheme, Defaults, DesktopPrefs, Fit, Input, Layout,
     LowPower, Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings, ThemeId, TopBar,
@@ -110,6 +114,7 @@ pub struct SettingsApp {
     /// The visible page.
     pub page: Page,
     status: Option<String>,
+    error: Option<Error>,
     drafts: pages::Drafts,
     thumbs: thumbs::Thumbnails,
     privacy: privacy::PrivacyUi,
@@ -119,6 +124,18 @@ pub struct SettingsApp {
     policy: choice::Policy,
     /// The choice screens' lists, built when first shown.
     choice: Option<choice::ChoiceUi>,
+}
+
+/// The documentation section on `heading` of the troubleshooting page.
+fn doc(heading: &'static str) -> DocLink {
+    DocLink::new("troubleshooting").section(heading)
+}
+
+/// Settings edits in memory when there is nowhere to save them.
+fn no_config_dir() -> Error {
+    let diagnostic = MietteDiagnostic::new("Not saved: no config directory")
+        .with_help("Settings saves to $XDG_CONFIG_HOME/derisk, or ~/.config/derisk without it.");
+    Error::new(diagnostic).with_doc(doc("settings-could-not-be-read-or-saved"))
 }
 
 impl Default for SettingsApp {
@@ -146,23 +163,27 @@ impl SettingsApp {
     /// A missing file starts from defaults; an unreadable or partly invalid
     /// one is reported in the status line.
     pub fn open(path: Option<PathBuf>) -> Self {
-        let (saved, status) = match path.as_deref().map(Settings::load) {
-            None => (
-                Settings::default(),
-                Some("Not saved: no config directory".into()),
-            ),
+        let (saved, error) = match path.as_deref().map(Settings::load) {
+            None => (Settings::default(), Some(no_config_dir())),
             Some(Ok((settings, warnings))) if warnings.is_empty() => (settings, None),
             Some(Ok((settings, warnings))) => {
-                let status = format!(
+                let skipped = MietteDiagnostic::new(format!(
                     "Skipped {} invalid line(s): {}",
                     warnings.len(),
                     warnings[0]
-                );
-                (settings, Some(status))
+                ))
+                .with_severity(Severity::Warning)
+                .with_help("Those settings keep their defaults until the lines are fixed.");
+                let error = Error::new(skipped).with_doc(doc("settings-skipped-some-lines"));
+                (settings, Some(error))
             }
             Some(Err(error)) => (
                 Settings::default(),
-                Some(format!("Could not read: {error}")),
+                Some(
+                    Error::plain(error)
+                        .context("Could not read the settings file")
+                        .with_doc(doc("settings-could-not-be-read-or-saved")),
+                ),
             ),
         };
         Self {
@@ -173,7 +194,8 @@ impl SettingsApp {
             privacy: privacy::PrivacyUi::default(),
             saved,
             page: Page::default(),
-            status,
+            status: error.as_ref().map(ToString::to_string),
+            error,
             themes: mcsapi_theme::Library::xdg("derisk").ids(),
             policy: choice::Policy::load(),
             choice: None,
@@ -207,30 +229,55 @@ impl SettingsApp {
         self.status.as_deref()
     }
 
+    /// The error or warning the app is showing, with its causes and
+    /// documentation.
+    pub fn error(&self) -> Option<&Error> {
+        self.error.as_ref()
+    }
+
+    /// Shows `error` in a dialog until the next save or revert, or until
+    /// "OK"; the status line carries its message too.
+    fn fail(&mut self, error: Error) {
+        self.status = Some(error.to_string());
+        self.error = Some(error);
+    }
+
     /// Writes the edited settings to the file.
     pub fn save(&mut self) {
+        self.error = None;
         let Some(path) = &self.path else {
-            self.status = Some("Not saved: no config directory".into());
+            self.fail(no_config_dir());
             return;
         };
-        self.status = Some(match self.settings.save(path) {
+        let saved = self
+            .settings
+            .save(path)
+            .context("Could not save")
+            .doc(doc("settings-could-not-be-read-or-saved"));
+        match saved {
+            Err(error) => self.fail(error),
             Ok(()) => {
                 let before = std::mem::replace(&mut self.saved, self.settings.clone());
                 let browser = &self.settings.defaults.browser;
                 let mimeapps = (before.defaults.browser != *browser && !browser.is_empty())
                     .then(choice::mimeapps_path)
                     .flatten()
-                    .and_then(|path| choice::apply_browser(&path, browser).err())
-                    .map(|e| format!("Saved, but could not set the browser: {e}"));
-                mimeapps
-                    .or_else(|| {
-                        self.privacy
-                            .apply_masters(&before.privacy, &self.settings.privacy)
-                    })
-                    .unwrap_or_else(|| "Saved".into())
+                    .and_then(|path| choice::apply_browser(&path, browser).err());
+                if let Some(error) = mimeapps {
+                    self.fail(
+                        Error::plain(error)
+                            .context("Saved, but could not set the browser")
+                            .with_doc(doc("the-default-browser-did-not-change")),
+                    );
+                    return;
+                }
+                self.status = Some(
+                    self.privacy
+                        .apply_masters(&before.privacy, &self.settings.privacy)
+                        .unwrap_or_else(|| "Saved".into()),
+                );
             }
-            Err(error) => format!("Could not save: {error}"),
-        });
+        }
     }
 
     /// Discards unsaved changes.
@@ -238,6 +285,7 @@ impl SettingsApp {
         self.settings = self.saved.clone();
         self.drafts = pages::Drafts::new(&self.saved);
         self.status = None;
+        self.error = None;
     }
 
     fn page_ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
@@ -539,11 +587,20 @@ impl App for SettingsApp {
                 }
                 if dirty {
                     ui.label(egui::RichText::new("Unsaved changes").color(theme.accent));
-                } else if let Some(status) = &self.status {
+                } else if let Some(status) = self.status.as_ref().filter(|_| self.error.is_none()) {
+                    // An error has its own dialog, so the line does not
+                    // repeat it.
                     ui.label(status);
                 }
             });
         });
+        if self.error.is_some() {
+            Tokens::from_theme(theme).install(ui.ctx());
+            let shown = ErrorDialog::new("settings-error", &mut self.error).show(ui.ctx());
+            if shown.closed {
+                self.status = None;
+            }
+        }
         egui::CentralPanel::default_margins().show(ui, |ui| {
             // A row of controls wider than a phone scrolls rather than being
             // cut off where nothing can reach it.

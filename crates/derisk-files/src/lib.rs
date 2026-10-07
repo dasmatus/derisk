@@ -35,7 +35,14 @@ use std::{
 
 pub use browser::{Browser, ClipboardOp, SortKey};
 pub use fs_ops::{Entry, Kind, Trash};
-use mcsapi_ui::{App, Theme, egui};
+use mcsapi_components::{ErrorDialog, Tokens};
+use mcsapi_ui::{App, Context as _, DocLink, Error, Theme, egui};
+
+/// The documentation section that explains why Files could not open or
+/// change something.
+fn doc() -> DocLink {
+    DocLink::new("troubleshooting").section("files-could-not-open-or-change-something")
+}
 
 /// Opens a file with the user's default application.
 pub type Opener = Box<dyn FnMut(&Path) -> io::Result<()>>;
@@ -70,6 +77,7 @@ pub struct FilesApp {
     location: String,
     prompt: Option<Prompt>,
     status: Option<String>,
+    error: Option<Error>,
 }
 
 impl std::fmt::Debug for FilesApp {
@@ -77,6 +85,7 @@ impl std::fmt::Debug for FilesApp {
         f.debug_struct("FilesApp")
             .field("browser", &self.browser)
             .field("status", &self.status)
+            .field("error", &self.error)
             .finish_non_exhaustive()
     }
 }
@@ -93,9 +102,16 @@ impl FilesApp {
     /// Shows `browser`, opening files with `opener`. An `Err` browser is
     /// reported and leaves the app empty until a place is chosen.
     pub fn new(browser: io::Result<Browser>, opener: Opener) -> Self {
-        let (browser, status) = match browser {
+        let (browser, error) = match browser {
             Ok(browser) => (Some(browser), None),
-            Err(error) => (None, Some(format!("Could not open folder: {error}"))),
+            Err(error) => (
+                None,
+                Some(
+                    Error::plain(error)
+                        .context("Could not open folder")
+                        .with_doc(doc()),
+                ),
+            ),
         };
         let location = browser
             .as_ref()
@@ -106,7 +122,8 @@ impl FilesApp {
             opener,
             location,
             prompt: None,
-            status,
+            status: error.as_ref().map(ToString::to_string),
+            error,
         }
     }
 
@@ -115,12 +132,27 @@ impl FilesApp {
         self.status.as_deref()
     }
 
+    /// The error the app is showing, with its causes and documentation.
+    pub fn error(&self) -> Option<&Error> {
+        self.error.as_ref()
+    }
+
+    /// Shows `error` in a dialog until the next action or until "OK"; the
+    /// status line carries its message too.
+    fn fail(&mut self, error: Error) {
+        self.status = Some(error.to_string());
+        self.error = Some(error);
+    }
+
     /// Opens a folder, or a file with the default application.
     pub fn activate(&mut self, path: &Path) {
         if path.is_dir() {
             self.go(|b| b.navigate(path));
-        } else if let Err(error) = (self.opener)(path) {
-            self.status = Some(format!("Could not open {}: {error}", path.display()));
+        } else if let Err(error) = (self.opener)(path)
+            .context(format!("Could not open {}", path.display()))
+            .doc(doc())
+        {
+            self.fail(error);
         }
     }
 
@@ -152,10 +184,11 @@ impl FilesApp {
     }
 
     fn report(&mut self, result: io::Result<Option<String>>) {
-        match result {
+        self.error = None;
+        match result.context("Could not change the files").doc(doc()) {
             Ok(Some(message)) => self.status = Some(message),
             Ok(None) => self.status = None,
-            Err(error) => self.status = Some(format!("Error: {error}")),
+            Err(error) => self.fail(error),
         }
     }
 
@@ -591,12 +624,21 @@ impl App for FilesApp {
             });
             ui.horizontal(|ui| {
                 ui.label(summary.unwrap_or_default());
-                if let Some(status) = &self.status {
+                // An error has its own dialog, so the line does not
+                // repeat it.
+                if let Some(status) = self.status.as_ref().filter(|_| self.error.is_none()) {
                     ui.separator();
                     ui.label(egui::RichText::new(status).color(theme.accent));
                 }
             });
         });
+        if self.error.is_some() {
+            Tokens::from_theme(theme).install(ui.ctx());
+            let shown = ErrorDialog::new("files-error", &mut self.error).show(ui.ctx());
+            if shown.closed {
+                self.status = None;
+            }
+        }
         let mut place = None;
         let mut places = |ui: &mut egui::Ui| {
             let cwd = self.browser.as_ref().map(|b| b.cwd().to_owned());

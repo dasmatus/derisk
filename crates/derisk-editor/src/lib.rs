@@ -27,7 +27,13 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use mcsapi_ui::{App, Theme, egui};
+use mcsapi_components::{ErrorDialog, Tokens};
+use mcsapi_ui::{App, Context as _, DocLink, Error, Theme, egui};
+
+/// The documentation section on files the editor could not open or save.
+fn doc() -> DocLink {
+    DocLink::new("troubleshooting").section("the-editor-could-not-open-or-save-a-file")
+}
 
 /// Files larger than this are refused rather than loaded into the editor.
 pub const MAX_FILE_SIZE: u64 = 8 * 1024 * 1024;
@@ -158,6 +164,7 @@ pub struct EditorApp {
     show_find: bool,
     cursor: usize,
     status: Option<String>,
+    error: Option<Error>,
     confirm_discard: Option<Pending>,
 }
 
@@ -180,7 +187,7 @@ impl EditorApp {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 app.status = Some("New file; it is created when you save".into());
             }
-            Err(error) => app.status = Some(format!("Could not open: {error}")),
+            Err(error) => app.fail_open(error, &path),
         }
         app
     }
@@ -193,6 +200,26 @@ impl EditorApp {
     /// The latest status or error message.
     pub fn status(&self) -> Option<&str> {
         self.status.as_deref()
+    }
+
+    /// The error the app is showing, with its causes and documentation.
+    pub fn error(&self) -> Option<&Error> {
+        self.error.as_ref()
+    }
+
+    /// Shows `error` in a dialog until the next action or until "OK"; the
+    /// status line carries its message too.
+    fn fail(&mut self, error: Error) {
+        self.status = Some(error.to_string());
+        self.error = Some(error);
+    }
+
+    fn fail_open(&mut self, error: io::Error, path: &std::path::Path) {
+        self.fail(
+            Error::plain(error)
+                .context(format!("Could not open {}", path.display()))
+                .with_doc(doc()),
+        );
     }
 
     /// Saves to the location field, which may differ from the open file.
@@ -208,10 +235,11 @@ impl EditorApp {
         } else {
             self.document.save_as(&target)
         };
-        self.status = Some(match result {
-            Ok(()) => format!("Saved {}", self.document.name()),
-            Err(error) => format!("Could not save: {error}"),
-        });
+        self.error = None;
+        match result.context("Could not save").doc(doc()) {
+            Ok(()) => self.status = Some(format!("Saved {}", self.document.name())),
+            Err(error) => self.fail(error),
+        }
     }
 
     fn run(&mut self, pending: Pending) {
@@ -220,6 +248,7 @@ impl EditorApp {
             return;
         }
         self.confirm_discard = None;
+        self.error = None;
         match pending {
             Pending::New => {
                 self.document = Document::default();
@@ -231,7 +260,7 @@ impl EditorApp {
                     self.document = document;
                     self.status = None;
                 }
-                Err(error) => self.status = Some(format!("Could not open: {error}")),
+                Err(error) => self.fail_open(error, &path),
             },
         }
     }
@@ -319,12 +348,21 @@ impl App for EditorApp {
                     self.document.text.lines().count().max(1),
                     self.document.text.chars().count()
                 ));
-                if let Some(status) = &self.status {
+                // An error has its own dialog, so the line does not
+                // repeat it.
+                if let Some(status) = self.status.as_ref().filter(|_| self.error.is_none()) {
                     ui.separator();
                     ui.label(status);
                 }
             });
         });
+        if self.error.is_some() {
+            Tokens::from_theme(theme).install(ui.ctx());
+            let shown = ErrorDialog::new("editor-error", &mut self.error).show(ui.ctx());
+            if shown.closed {
+                self.status = None;
+            }
+        }
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
                 // The text area fills the window, so a click anywhere below

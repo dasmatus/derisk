@@ -8,4 +8,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+mcsapi-components.workspace = true
 mcsapi-ui.workspace = true

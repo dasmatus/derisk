@@ -56,7 +56,7 @@ fn invalid_lines_warn_and_keep_defaults() {
     let (settings, warnings) = Settings::parse(text);
     assert_eq!(settings.desktop.workspaces, 9);
     assert_eq!(settings.desktop.gaps, 16);
-    assert_eq!(settings.appearance.accent, Accent::Lime);
+    assert_eq!(settings.appearance.accent, Accent::Teal);
     assert!(!settings.input.tap_to_click);
     let lines: Vec<usize> = warnings.iter().map(|w| w.line).collect();
     assert_eq!(lines, [2, 4, 5, 6]);
@@ -130,6 +130,8 @@ fn app_reports_invalid_files() {
     std::fs::write(&path, "desktop.gaps = lots\n").unwrap();
     let app = SettingsApp::open(Some(path));
     assert!(app.status().unwrap().contains("line 1"));
+    assert!(app.error().unwrap().is_warning());
+    assert!(app.error().unwrap().doc().is_some());
     let mut memory_only = SettingsApp::open(None);
     memory_only.settings.desktop.gaps = 2;
     memory_only.save();
