@@ -544,7 +544,7 @@ fn drag_to_slot_with(
     let layout = OverviewLayout::new(shell.work_area(), shell.profile().form_factor);
     let active = shell.workspaces()[shell.active_workspace() as usize - 1];
     let windows = shell.windows_on(active);
-    let cell = grid(windows.len(), layout.windows, 24)[0];
+    let cell = grid(windows.len(), layout.windows, 24).next().unwrap();
     let frame0 = shell
         .placements()
         .into_iter()
@@ -849,7 +849,7 @@ fn the_keyboard_types_into_the_palette_and_completes_words() {
         keyboard::HEIGHT,
     );
     assert_eq!(shell.keyboard_area(), Some(area));
-    let keys = ui.keyboard.keys(area);
+    let keys: Vec<_> = ui.keyboard.keys(area).collect();
     let at = |k: Key| to_rect(keys.iter().find(|(key, _)| *key == k).unwrap().1).center();
     for c in "tom".chars() {
         touch(&ctx, &mut ui, &shell, size, at(Key::Char(c)), &[]);
@@ -892,7 +892,7 @@ fn the_keyboard_button_types_into_the_focused_window() {
         nav.size.w,
         keyboard::HEIGHT,
     );
-    let keys = ui.keyboard.keys(area);
+    let keys: Vec<_> = ui.keyboard.keys(area).collect();
     let at = |k: Key| to_rect(keys.iter().find(|(key, _)| *key == k).unwrap().1).center();
     touch(&ctx, &mut ui, &shell, size, at(Key::Char('h')), &[]);
     touch(&ctx, &mut ui, &shell, size, at(Key::Char('i')), &[]);

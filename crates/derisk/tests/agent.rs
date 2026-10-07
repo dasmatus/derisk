@@ -100,7 +100,7 @@ fn ipc_menus_feed_the_global_menu() {
         true,
         "{resp}"
     );
-    let bar = shell.menus.bar(Some(w.get()));
+    let bar: Vec<_> = shell.menus.bar(Some(w.get())).collect();
     assert_eq!(bar[0].title, "File");
     assert_eq!(bar.last().unwrap().title, "Window");
 }

@@ -185,33 +185,26 @@ pub fn layouts(base_lst: &str) -> Vec<Layout> {
 
 /// Where xkeyboard-config's rules list may be: `$XKB_CONFIG_ROOT` first
 /// (NixOS has no fixed path for it), then the usual places.
-fn base_lst_paths() -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = std::env::var_os("XKB_CONFIG_ROOT")
+fn base_lst_paths() -> impl Iterator<Item = PathBuf> {
+    std::env::var_os("XKB_CONFIG_ROOT")
         .map(PathBuf::from)
         .into_iter()
-        .collect();
-    roots.extend(
-        [
-            "/run/current-system/sw/share/X11/xkb",
-            "/usr/share/X11/xkb",
-            "/etc/X11/xkb",
-        ]
-        .map(PathBuf::from),
-    );
-    roots
-        .into_iter()
+        .chain(
+            [
+                "/run/current-system/sw/share/X11/xkb",
+                "/usr/share/X11/xkb",
+                "/etc/X11/xkb",
+            ]
+            .map(PathBuf::from),
+        )
         .map(|root| root.join("rules/base.lst"))
-        .collect()
 }
 
 /// The keyboard layouts xkeyboard-config describes. When its list cannot be
 /// found, the names from `localectl list-x11-keymap-layouts`, described by
 /// themselves.
 pub fn installed_layouts() -> Vec<Layout> {
-    if let Some(text) = base_lst_paths()
-        .iter()
-        .find_map(|p| fs::read_to_string(p).ok())
-    {
+    if let Some(text) = base_lst_paths().find_map(|p| fs::read_to_string(p).ok()) {
         let found = layouts(&text);
         if !found.is_empty() {
             return found;
@@ -269,7 +262,7 @@ pub fn saved_keyboard(path: &Path) -> Keyboard {
 /// `XKB_DEFAULT_*` pairs for the saved keyboard: what xkbcommon reads when a
 /// compositor asks for the default keymap. Empty fields are left out, so
 /// xkbcommon's own defaults stand.
-pub fn xkb_environment(keyboard: &Keyboard) -> Vec<String> {
+pub fn xkb_environment(keyboard: &Keyboard) -> impl Iterator<Item = String> {
     [
         ("XKB_DEFAULT_LAYOUT", &keyboard.layout),
         ("XKB_DEFAULT_VARIANT", &keyboard.variant),
@@ -278,7 +271,6 @@ pub fn xkb_environment(keyboard: &Keyboard) -> Vec<String> {
     .into_iter()
     .filter(|(_, v)| !v.is_empty())
     .map(|(k, v)| format!("{k}={v}"))
-    .collect()
 }
 
 /// The time zones `timedatectl` knows, such as `Europe/Bratislava`.

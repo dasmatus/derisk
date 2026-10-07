@@ -206,12 +206,13 @@ impl GlobalMenu {
     }
 
     /// Everything the bar shows for `window`: app menus then the Window menu.
-    pub fn bar(&self, window: Option<u64>) -> Vec<Menu> {
-        let mut menus = window.map_or_else(Vec::new, |w| self.app_menus(w).to_vec());
-        if window.is_some() {
-            menus.push(window_menu());
-        }
-        menus
+    pub fn bar(&self, window: Option<u64>) -> impl Iterator<Item = Menu> + '_ {
+        window.into_iter().flat_map(|w| {
+            self.app_menus(w)
+                .iter()
+                .cloned()
+                .chain(std::iter::once_with(window_menu))
+        })
     }
 }
 

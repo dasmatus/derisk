@@ -193,29 +193,27 @@ impl FilesApp {
     }
 
     /// The sidebar's places: symbolic icon, label and folder.
-    fn places(&self) -> Vec<(&'static str, &'static str, PathBuf)> {
-        let mut places = Vec::new();
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            places.push(("user-home", "Home", home.clone()));
-            for (icon, dir) in [
+    fn places(&self) -> impl Iterator<Item = (&'static str, &'static str, PathBuf)> + use<> {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let folders = home.clone().into_iter().flat_map(|home| {
+            [
                 ("user-desktop", "Desktop"),
                 ("folder-documents", "Documents"),
                 ("folder-download", "Downloads"),
                 ("folder-music", "Music"),
                 ("folder-pictures", "Pictures"),
                 ("folder-videos", "Videos"),
-            ] {
-                let path = home.join(dir);
-                if path.is_dir() {
-                    places.push((icon, dir, path));
-                }
-            }
-        }
-        if let Some(trash) = self.browser.as_ref().and_then(Browser::trash) {
-            places.push(("user-trash", "Trash", trash.files_dir()));
-        }
-        places.push(("computer", "Computer", PathBuf::from("/")));
-        places
+            ]
+            .into_iter()
+            .map(move |(icon, dir)| (icon, dir, home.join(dir)))
+            .filter(|(_, _, path)| path.is_dir())
+        });
+        let trash = self.browser.as_ref().and_then(Browser::trash);
+        home.map(|home| ("user-home", "Home", home))
+            .into_iter()
+            .chain(folders)
+            .chain(trash.map(|trash| ("user-trash", "Trash", trash.files_dir())))
+            .chain([("computer", "Computer", PathBuf::from("/"))])
     }
 
     fn submit_prompt(&mut self) {

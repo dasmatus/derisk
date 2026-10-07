@@ -1451,8 +1451,8 @@ impl ShellUi {
             // A miniature of each window with its app's icon, so a
             // workspace reads as what is open on it.
             let minis = grid(windows.len(), inset(*cell, 12), 4);
-            for (mini, w) in minis.iter().zip(&windows) {
-                let m = to_rect(*mini);
+            for (mini, w) in minis.zip(&windows) {
+                let m = to_rect(mini);
                 ui.painter()
                     .rect_filled(m, 3, self.theme.border.gamma_multiply(0.35));
                 let (app, _) = shell.window_label(*w).unwrap_or_default();

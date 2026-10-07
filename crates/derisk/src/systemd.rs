@@ -208,7 +208,7 @@ pub fn effect_argv(
 /// environment, then starts [`SESSION_TARGET`] (which binds
 /// `graphical-session.target`), so portals, tray hosts and autostart units see
 /// the right display.
-pub fn session_start_argv(wayland_display: &str) -> Vec<Vec<String>> {
+pub fn session_start_argv(wayland_display: &str) -> impl Iterator<Item = Vec<String>> + use<> {
     let environment = [
         format!("WAYLAND_DISPLAY={wayland_display}"),
         "XDG_CURRENT_DESKTOP=derisk".to_owned(),
@@ -224,13 +224,14 @@ pub fn session_start_argv(wayland_display: &str) -> Vec<Vec<String>> {
         .map(str::to_owned)
         .to_vec();
     dbus_environment.extend(environment);
-    vec![
+    [
         systemd_environment,
         dbus_environment,
         ["systemctl", "--user", "--no-block", "start", SESSION_TARGET]
             .map(str::to_owned)
             .to_vec(),
     ]
+    .into_iter()
 }
 
 /// The unit owning a process, parsed from `/proc/<pid>/cgroup` (cgroup v2).
@@ -256,11 +257,8 @@ impl FocusBoost {
     /// Commands to move the boost to `unit`; empty if it already has it.
     ///
     /// Only app units (`app-*`) are touched, never the session or system.
-    pub fn focus(&mut self, unit: Option<&str>) -> Vec<Vec<String>> {
+    pub fn focus(&mut self, unit: Option<&str>) -> impl Iterator<Item = Vec<String>> + use<> {
         let unit = unit.filter(|u| u.starts_with("app-")).map(str::to_owned);
-        if unit == self.boosted {
-            return Vec::new();
-        }
         let set = |unit: &str, weight: u32| -> Vec<String> {
             [
                 "systemctl",
@@ -275,26 +273,26 @@ impl FocusBoost {
             .map(str::to_owned)
             .to_vec()
         };
-        let mut commands = Vec::new();
-        if let Some(old) = self.boosted.take() {
-            commands.push(set(&old, DEFAULT_WEIGHT));
+        // Worked out now, not as the commands are read: the boost has moved
+        // whether or not the caller runs them.
+        let mut commands = [None, None];
+        if unit != self.boosted {
+            commands = [
+                self.boosted.take().map(|old| set(&old, DEFAULT_WEIGHT)),
+                unit.as_deref().map(|new| set(new, FOCUS_WEIGHT)),
+            ];
+            self.boosted = unit;
         }
-        if let Some(new) = &unit {
-            commands.push(set(new, FOCUS_WEIGHT));
-        }
-        self.boosted = unit;
-        commands
+        commands.into_iter().flatten()
     }
 }
 
 /// Parses `systemctl --user list-units --state=failed --plain --no-legend`.
-pub fn parse_failed_units(output: &str) -> Vec<String> {
+pub fn parse_failed_units(output: &str) -> impl Iterator<Item = &str> {
     output
         .lines()
         .filter_map(|l| l.split_whitespace().next())
         .filter(|u| u.contains('.'))
-        .map(str::to_owned)
-        .collect()
 }
 
 /// Runs a command without a shell, returning its output.
@@ -320,7 +318,11 @@ pub fn failed_units() -> Vec<String> {
     run(&argv)
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| parse_failed_units(&String::from_utf8_lossy(&o.stdout)))
+        .map(|o| {
+            parse_failed_units(&String::from_utf8_lossy(&o.stdout))
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
