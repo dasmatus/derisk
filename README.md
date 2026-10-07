@@ -557,7 +557,7 @@ $ derisk session --runtime overlay "my-gpui-launcher"
 
 ## Building
 
-Requires Rust 1.95 and the system libraries mcsapi links against, for
+Requires Rust 1.96 (wasmtime's minimum, for the palette plugins) and the system libraries mcsapi links against, for
 example on Debian/Ubuntu:
 
 ```console
