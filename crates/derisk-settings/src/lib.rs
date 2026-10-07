@@ -23,7 +23,9 @@ mod model;
 mod pages;
 mod privacy;
 mod shortcuts;
+mod signin;
 mod thumbs;
+mod totp;
 
 use std::path::PathBuf;
 
@@ -55,6 +57,8 @@ pub enum Page {
     Shortcuts,
     /// Device access, history, trash, and Flatpak app permissions.
     Privacy,
+    /// The password, fingerprints, verification codes and security keys.
+    SignIn,
     /// Banners and sounds.
     Notifications,
     /// Dimming, locking, suspend, and low power mode.
@@ -68,7 +72,7 @@ pub enum Page {
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Appearance,
         Self::Wallpaper,
         Self::TopBar,
@@ -76,6 +80,7 @@ impl Page {
         Self::Input,
         Self::Shortcuts,
         Self::Privacy,
+        Self::SignIn,
         Self::Notifications,
         Self::Power,
         Self::DefaultApps,
@@ -90,6 +95,7 @@ impl Page {
             Self::TopBar => "Top bar",
             Self::Shortcuts => "Shortcuts",
             Self::Privacy => "Privacy",
+            Self::SignIn => "Sign-in",
             Self::Desktop => "Desktop",
             Self::Input => "Keyboard & pointer",
             Self::Notifications => "Notifications",
@@ -113,6 +119,7 @@ pub struct SettingsApp {
     drafts: pages::Drafts,
     thumbs: thumbs::Thumbnails,
     privacy: privacy::PrivacyUi,
+    signin: signin::SigninUi,
     /// Theme IDs offered on the Appearance page, read once when opened.
     themes: Vec<String>,
     /// Which choice screens are on, read once when opened.
@@ -171,6 +178,7 @@ impl SettingsApp {
             drafts: pages::Drafts::new(&saved),
             thumbs: thumbs::Thumbnails::default(),
             privacy: privacy::PrivacyUi::default(),
+            signin: signin::SigninUi::default(),
             saved,
             page: Page::default(),
             status,
@@ -252,6 +260,9 @@ impl SettingsApp {
         ui.spacing_mut().text_edit_width = control;
         if self.page == Page::Privacy {
             return privacy::page(ui, &mut s.privacy, &mut self.privacy, theme);
+        }
+        if self.page == Page::SignIn {
+            return signin::page(ui, &mut self.signin, theme);
         }
         if self.page == Page::DefaultApps {
             let state = self.choice.get_or_insert_with(choice::ChoiceUi::default);
@@ -355,7 +366,7 @@ impl SettingsApp {
                     theme,
                 ),
                 Page::TopBar => pages::top_bar(ui, &mut s.top_bar, theme),
-                Page::Privacy | Page::DefaultApps => {}
+                Page::Privacy | Page::SignIn | Page::DefaultApps => {}
                 Page::Shortcuts => pages::shortcuts(ui, &mut s.shortcuts, &mut self.drafts, theme),
                 Page::Desktop => {
                     let d = &mut s.desktop;
