@@ -15,7 +15,7 @@
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
 
-use std::{cell::RefCell, collections::HashMap, path::PathBuf, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use derisk_settings::BarPosition;
 use egui::{
@@ -230,14 +230,16 @@ pub struct ShellUi {
 /// the shell draws them on a HiDPI screen.
 const ICON_PX: u32 = 64;
 
-/// Command palette state. The host fills [`PaletteUi::extra`] and
-/// [`PaletteUi::files`]; the rest is kept between openings.
+/// Command palette state. The host fills [`PaletteUi::apps`] and the files
+/// ([`PaletteUi::set_files`]); the rest is kept between openings.
 #[derive(Default)]
 pub struct PaletteUi {
-    /// Host-provided entries: apps, settings pages.
-    pub extra: Vec<Entry>,
-    /// Indexed files (see [`palette::index_files`]).
-    pub files: Vec<PathBuf>,
+    /// Installed apps, for the apps plugin.
+    pub apps: Vec<palette::App>,
+    /// Indexed files (see [`palette::index_files`]), for the files plugin.
+    files: Vec<palette::File>,
+    /// The plugins' rows, kept until what they read changes.
+    catalog: palette::Catalog,
     /// What was chosen before, for ranking.
     pub history: History,
     /// Text to start the next opening with, instead of an empty query.
@@ -254,6 +256,18 @@ pub struct PaletteUi {
     armed: Option<String>,
     message: Option<String>,
     open: bool,
+}
+
+impl PaletteUi {
+    /// Replaces the indexed files. The host re-indexes each time the
+    /// palette opens; when nothing changed, the files plugin is not asked
+    /// again, which for a full index is the one call long enough to notice.
+    pub fn set_files(&mut self, files: Vec<palette::File>) {
+        if files != self.files {
+            self.files = files;
+            self.catalog.files_changed();
+        }
+    }
 }
 
 /// A key press as a hardware keyboard would send it.
@@ -1795,45 +1809,22 @@ impl ShellUi {
             state.chat = true;
         }
 
-        let web = (!state.chat)
-            .then(|| palette::web(&state.query, shell.effects.search))
-            .flatten();
-        let (entries, hits, ask) = if state.chat {
-            (Vec::new(), Vec::new(), None)
+        let plugins = palette::plugins();
+        let view = palette::view(shell, &state.apps);
+        let (entries, hits, query_rows) = if state.chat {
+            (&[][..], Vec::new(), None)
         } else {
-            let entries = palette::entries(shell, &state.extra, &state.files);
-            let hits = palette::search(&entries, &state.query, &state.history);
-            let (scope, text) = palette::scope(&state.query);
-            // The assistant joins everything-searches; a request it does not
-            // understand only shows when nothing else matched, to say why.
-            let ask = (!text.is_empty() && scope == palette::Scope::All)
-                .then(|| palette::ask(&state.query))
-                .filter(|ask| !ask.actions.is_empty() || hits.is_empty());
-            (entries, hits, ask)
+            let query_rows = state.catalog.rows(plugins, &view, &state.query).clone();
+            let entries = state.catalog.entries(plugins, &view, &state.files);
+            let hits = palette::search(entries, &state.query, &state.history);
+            (
+                entries,
+                limit_palette_hits(entries, &hits, 60),
+                Some(query_rows),
+            )
         };
-        let mut rows: Vec<&Entry> = limit_palette_hits(&entries, &hits, 60)
-            .iter()
-            .map(|&i| &entries[i])
-            .collect();
-        if let Some(ask) = &ask {
-            if palette::prefer_assistant(&entries, &hits, &state.query) {
-                rows.insert(0, ask);
-            } else {
-                rows.push(ask);
-            }
-        }
-        // What the assistant could not do, Sonne's agent may: offered after
-        // the assistant's reason, before searching the web for it.
-        let agent = ask
-            .as_ref()
-            .filter(|ask| ask.actions.is_empty())
-            .and_then(|_| palette::agent(&state.query));
-        if let Some(agent) = &agent {
-            rows.push(agent);
-        }
-        if let Some(web) = &web {
-            rows.push(web);
-        }
+        let query_rows = query_rows.unwrap_or_default();
+        let rows: Vec<&Entry> = palette::list(entries, &hits, &query_rows, &state.query);
         if state.query != state.shown_query {
             state.shown_query = state.query.clone();
             state.selected = 0;

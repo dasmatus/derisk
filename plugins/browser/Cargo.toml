@@ -1,0 +1,15 @@
+[package]
+name = "palette-browser"
+description = "derisk palette plugin: A browser's tabs, address entry and extensions, from what it registers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-palette-sdk = { path = "../sdk" }

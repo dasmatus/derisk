@@ -41,6 +41,10 @@
               ./crates/derisk-portal/data
               ./crates/derisk-apps/data
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./crates)
+              # The command palette's plugins, which derisk-palette's build
+              # script compiles to WebAssembly, and the interface they share.
+              (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./plugins)
+              ./crates/derisk-palette/wit
             ];
           };
 
@@ -78,7 +82,13 @@
             strictDeps = true;
             pname = "derisk-workspace";
             version = "0.1.0";
-            nativeBuildInputs = [ pkgs.pkg-config ];
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              # nixpkgs' rustc carries wasm32-unknown-unknown's std, for the
+              # palette plugins, but links it with lld from PATH rather than
+              # a bundled rust-lld.
+              pkgs.lld
+            ];
             buildInputs = buildLibs;
             LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibs;
           };

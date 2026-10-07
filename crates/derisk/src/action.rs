@@ -149,6 +149,21 @@ pub enum Action {
         /// What to search for.
         query: String,
     },
+    /// Open a web address in the default browser. Only `https://` and
+    /// `http://` URLs are accepted, so this opens nothing but a page.
+    OpenUrl {
+        /// The address.
+        url: String,
+    },
+    /// Hand a command from a palette row to the program that registered
+    /// the row's data (`register_palette`), such as "switch to this tab" to
+    /// a browser. The program decides what it means.
+    PaletteCommand {
+        /// The registered source, such as `danube`.
+        source: String,
+        /// The command, as the source documents it.
+        command: serde_json::Value,
+    },
     /// Hand a request the built-in assistant can't follow to the agent set
     /// up in Sonne, with whichever model key or agent CLI the person chose
     /// there. It opens in Sonne's agent panel for the person to send, so
@@ -270,6 +285,8 @@ impl Action {
             Self::Keyboard { visible: None } => "Toggle the on-screen keyboard".into(),
             Self::Open { path } => format!("Open {path}"),
             Self::SearchWeb { query } => format!("Search the web for {query}"),
+            Self::OpenUrl { url } => format!("Open {url}"),
+            Self::PaletteCommand { source, command } => format!("Tell {source}: {command}"),
             Self::AskAgent { text } => format!("Ask Sonne's agent: {text}"),
             Self::ActivateMenu { item, .. } => format!("Choose menu item {item}"),
             Self::Session { op, .. } => format!("{op:?}"),
@@ -320,6 +337,14 @@ pub enum Effect {
     Close {
         /// Window.
         window: u64,
+    },
+    /// Tell the program that registered `source` that one of its palette
+    /// rows was picked.
+    PaletteCommand {
+        /// The registered source.
+        source: String,
+        /// Its command.
+        command: serde_json::Value,
     },
     /// Open a file or folder with its default application (`xdg-open`), or
     /// a web search's results page in the default browser.

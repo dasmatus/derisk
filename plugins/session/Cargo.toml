@@ -1,0 +1,15 @@
+[package]
+name = "palette-session"
+description = "derisk palette plugin: Lock, suspend, hibernate, log out, restart and shut down"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-palette-sdk = { path = "../sdk" }

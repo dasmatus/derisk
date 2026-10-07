@@ -1,0 +1,13 @@
+[package]
+name = "derisk-palette-sdk"
+description = "What a derisk command palette plugin is built with: the WIT bindings and row builders"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+wit-bindgen.workspace = true

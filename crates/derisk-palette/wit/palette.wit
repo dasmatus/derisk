@@ -1,0 +1,336 @@
+// The interface a derisk command palette plugin is compiled against.
+//
+// A plugin is a WebAssembly *component* derisk loads into its own process and
+// asks for palette rows. Every row the palette shows comes from one: apps,
+// windows, menus, shell commands, workspaces, the session, files, the
+// assistant, the web search. The palette core only ranks what they return,
+// remembers what was picked and draws it.
+//
+// Two questions, both answered from a `view` of the desktop the host builds:
+//
+//   * `entries` is the catalog: everything the plugin offers right now, which
+//     the palette searches as the person types. derisk asks again only when a
+//     part of the view the plugin reads has changed.
+//   * `query` is the rows for one piece of typed text that no catalog could
+//     hold in advance: "Ask derisk: ...", "Search the web for ...", an
+//     address to open.
+//
+// The world imports a one-way `log` and the built-in assistant's
+// interpreter, a pure function from text to actions, and nothing else. No
+// WASI, no filesystem, no clock, no network: what a plugin knows about the
+// desktop is the view it is handed, and the view holds only the parts its
+// manifest asked for.
+//
+// The model is pm's (losos-project/pm, `wit/plugin.wit`): a component per
+// plugin, a manifest the host holds the plugin to, fuel and memory limits,
+// and a fresh instance for every call.
+package derisk:palette@0.1.0;
+
+/// The values that cross the boundary.
+interface types {
+    /// What a row is, which decides its heading and which search prefix
+    /// finds it. Mirrors `derisk::palette::Category`.
+    enum category {
+        /// An application to launch.
+        app,
+        /// An app's desktop action, such as "New Private Window".
+        app-action,
+        /// An open window to switch to.
+        window,
+        /// A command from the focused app's own menus.
+        app-command,
+        /// A shell command (window management, overview, layouts).
+        command,
+        /// Switch to a workspace or move the window there.
+        workspace,
+        /// A settings page.
+        setting,
+        /// Lock, suspend, log out, reboot, power off.
+        session,
+        /// A tray item or a failed service.
+        system,
+        /// A file or folder.
+        file,
+        /// Ask the built-in assistant.
+        ask,
+        /// Search the web, or open an address.
+        web,
+        /// Hand the request to the agent set up in Sonne.
+        agent,
+        /// A tab of an app that registered its tabs (a browser).
+        tab,
+        /// An extension of an app that registered them.
+        extension,
+    }
+
+    /// Where a row from `query` goes; catalog rows are ranked against the
+    /// query instead.
+    enum position {
+        /// Above the rows the catalog matched.
+        top,
+        /// Below them.
+        bottom,
+    }
+
+    /// One palette row.
+    record entry {
+        /// Kind of row.
+        category: category,
+        /// Main text.
+        title: string,
+        /// Secondary text (app summary, window title, path, ...).
+        detail: string,
+        /// Extra search terms, not shown.
+        keywords: string,
+        /// A symbolic icon name from the icon theme, or a glyph.
+        icon: string,
+        /// Keyboard shortcut hint.
+        shortcut: option<string>,
+        /// What choosing the row does: derisk `Action`s, each one JSON
+        /// object as the agent socket's `dispatch` takes them
+        /// (`{"action":"launch","app":"firefox"}`). The host refuses an
+        /// action that does not parse or whose kind is not in the manifest's
+        /// `actions`, and drops the row with it.
+        actions: list<string>,
+        /// Ends the session or loses work: needs a second Enter. The host
+        /// sets it on any row that logs out, reboots or powers off, whatever
+        /// the plugin says.
+        confirm: bool,
+        /// Where a `query` row goes.
+        position: position,
+    }
+
+    /// A part of the desktop a plugin may see. The host fills only the parts
+    /// the manifest lists; the rest of the view is empty.
+    enum input {
+        /// `view.apps` and `view.suggested`.
+        apps,
+        /// `view.windows`.
+        windows,
+        /// `view.menus`.
+        menus,
+        /// `view.desk`.
+        workspaces,
+        /// `view.tray`.
+        tray,
+        /// `view.failed-units`.
+        units,
+        /// `view.files`: names of the person's files. Only the files plugin
+        /// needs them, and no other should ask.
+        files,
+        /// `view.search-engine`.
+        search-engine,
+        /// `view.registered`, for the sources in `manifest.sources`.
+        registered,
+    }
+
+    /// A desktop action of an app.
+    record app-action {
+        /// The action's ID from the `.desktop` file.
+        id: string,
+        /// Its name.
+        name: string,
+    }
+
+    /// An installed application.
+    record app {
+        /// Desktop file ID or core app ID, what `launch` takes.
+        id: string,
+        /// Its name.
+        name: string,
+        /// What it is (the desktop file's comment or generic name).
+        summary: string,
+        /// Its icon, or the glyph standing in for one.
+        icon: string,
+        /// Its search terms, space separated.
+        keywords: string,
+        /// Its desktop actions.
+        actions: list<app-action>,
+    }
+
+    /// An open window.
+    record window {
+        /// What `focus` and `restore` take.
+        id: u64,
+        /// The app's name.
+        app: string,
+        /// The window's title, possibly empty.
+        title: string,
+        /// Its workspace, by position from 1.
+        workspace: u32,
+        /// Whether it is minimized.
+        minimized: bool,
+        /// Whether it has focus.
+        focused: bool,
+    }
+
+    /// A command from the focused window's menus.
+    record menu-command {
+        /// The item's own label.
+        label: string,
+        /// Where it sits, `Menu › Submenu › Item`.
+        path: string,
+        /// The focused window's app name.
+        app: string,
+        /// Keyboard shortcut hint.
+        shortcut: option<string>,
+        /// Whether it is from the shell's own Window menu rather than the
+        /// app's menus.
+        shell: bool,
+        /// What choosing it does, as in `entry.actions`.
+        actions: list<string>,
+    }
+
+    /// A workspace.
+    record workspace {
+        /// Its position, from 1.
+        number: u32,
+        /// How many windows are on it.
+        windows: u32,
+        /// Whether it is the one shown.
+        active: bool,
+    }
+
+    /// Workspaces, and what can be done with the focused window.
+    record desk {
+        /// Every workspace, in order.
+        workspaces: list<workspace>,
+        /// Whether a window has focus, so there is one to move.
+        window-focused: bool,
+        /// Whether a new workspace can be added.
+        can-add-workspace: bool,
+    }
+
+    /// A system tray item.
+    record tray-item {
+        /// What `activate_tray` takes.
+        id: string,
+        /// Its title.
+        title: string,
+    }
+
+    /// An indexed file or folder.
+    record file {
+        /// Absolute path.
+        path: string,
+        /// The path as shown, `~/...` under home.
+        shown: string,
+        /// Whether it is a folder.
+        folder: bool,
+    }
+
+    /// Data a program registered for the palette over the agent socket
+    /// (`register_palette`), such as a browser's tabs.
+    record registration {
+        /// The program's source name, such as `danube`.
+        source: string,
+        /// What it registered, as JSON text.
+        data: string,
+    }
+
+    /// The desktop as a plugin sees it.
+    record view {
+        /// The hour of day, 0-23.
+        hour: u8,
+        /// Installed applications. Needs `input.apps`.
+        apps: list<app>,
+        /// App IDs worth suggesting now, best first. Needs `input.apps`.
+        suggested: list<string>,
+        /// Open windows on every workspace. Needs `input.windows`.
+        windows: list<window>,
+        /// The focused window's menu commands. Needs `input.menus`.
+        menus: list<menu-command>,
+        /// Workspaces. Needs `input.workspaces`.
+        desk: desk,
+        /// Tray items. Needs `input.tray`.
+        tray: list<tray-item>,
+        /// Failed systemd user units. Needs `input.units`.
+        failed-units: list<string>,
+        /// Indexed files. Needs `input.files`.
+        files: list<file>,
+        /// The chosen web search engine's name, if any. Needs
+        /// `input.search-engine`.
+        search-engine: option<string>,
+        /// Registered data from `manifest.sources`. Needs
+        /// `input.registered`.
+        registered: list<registration>,
+    }
+
+    /// A function a plugin implements.
+    ///
+    /// The host calls a hook only if the manifest lists it. The exports are
+    /// all mandatory (the component model has no optional export), so a
+    /// plugin implementing one still exports the other and returns nothing
+    /// from it.
+    enum hook {
+        /// `entries` is implemented.
+        entries,
+        /// `query` is implemented.
+        query,
+    }
+
+    /// What a plugin is, and the most it will ever see and do.
+    ///
+    /// Asked for once, at load. The host holds the plugin to it: a plugin
+    /// sees only its `inputs`, and a row naming a category or an action kind
+    /// outside these lists is dropped.
+    record manifest {
+        /// Identifies the plugin in derisk's log.
+        /// 1-32 characters of `[a-z0-9]` and `-`.
+        name: string,
+        /// Free-form version string.
+        version: string,
+        /// One line saying what the plugin is for.
+        summary: string,
+        /// Which hooks to call.
+        hooks: list<hook>,
+        /// The parts of the desktop it may see.
+        inputs: list<input>,
+        /// Registered sources it may read, with `input.registered`.
+        sources: list<string>,
+        /// The categories its rows may have.
+        categories: list<category>,
+        /// The action kinds its rows may run, by their `action` tag
+        /// (`launch`, `focus`, `session`, ...).
+        actions: list<string>,
+    }
+}
+
+/// The one-way log.
+interface host {
+    /// How loud a log line is.
+    enum level {
+        error,
+        warn,
+        info,
+        debug,
+        trace,
+    }
+
+    /// Write a line to derisk's log, tagged with the plugin's name.
+    log: func(level: level, message: string);
+}
+
+/// derisk's built-in assistant, for the plugin that offers it. A pure
+/// function: the same text always gives the same answer.
+interface assistant {
+    /// The actions `text` asks for, as JSON objects like `entry.actions`, or
+    /// the reason the assistant does not understand it.
+    interpret: func(text: string) -> result<list<string>, string>;
+}
+
+/// What a palette plugin is.
+world palette-plugin {
+    use types.{manifest, view, entry};
+
+    import host;
+    import assistant;
+
+    /// Who the plugin is and what it may see and do. Called once, at load.
+    export describe: func() -> manifest;
+    /// The plugin's catalog for this view.
+    export entries: func(view: view) -> list<entry>;
+    /// Rows for typed `text`. Asked only for a query with no scope prefix
+    /// (`>`, `@`, `/`, `~`, `?`), which narrows the palette to the catalog.
+    export query: func(view: view, text: string) -> list<entry>;
+}

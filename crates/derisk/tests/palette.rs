@@ -14,16 +14,16 @@ fn shell() -> Shell {
     Shell::new(rect(0, 0, 1920, 1080), false)
 }
 
-fn apps() -> Vec<Entry> {
+fn apps() -> Vec<palette::App> {
     vec![
-        Entry::app(
+        palette::app(
             "org.derisk.files",
             "Files",
             "Browse files",
             "🗀",
             &["folders"],
         ),
-        Entry::app(
+        palette::app(
             "org.derisk.editor",
             "Text Editor",
             "Edit plain-text files",
@@ -303,14 +303,19 @@ fn unmatched_text_goes_to_the_assistant() {
 
     // ...and Sonne's agent is offered it instead, while requests the
     // assistant does follow stay its own.
-    let agent = palette::agent("frobnicate the flux");
+    let agent = |q: &str| {
+        palette::rows(&shell, q)
+            .bottom
+            .into_iter()
+            .find(|e| e.category == Category::Agent)
+    };
     assert_eq!(
-        agent.map(|entry| entry.actions),
+        agent("frobnicate the flux").map(|entry| entry.actions),
         Some(vec![Action::AskAgent {
             text: "frobnicate the flux".into()
         }])
     );
-    assert!(palette::agent(query).is_none());
+    assert!(agent(query).is_none());
 }
 
 #[test]
@@ -354,6 +359,7 @@ fn files_are_indexed_and_opened_safely() {
     assert_eq!(palette::index_files(&dir, 3, 2).len(), 2, "count limit");
 
     let mut shell = shell();
+    let files: Vec<_> = files.iter().map(|p| palette::file(p, None)).collect();
     let entries = palette::entries(&shell, &[], &files);
     // Files stay out of an empty query.
     let empty = palette::search(&entries, "", &History::default());
@@ -421,22 +427,26 @@ fn close_title_matches_beat_the_assistant() {
 fn web_search_needs_a_chosen_engine_and_opens_only_its_results() {
     use derisk_settings::choice::SearchEngine;
 
-    assert_eq!(palette::web("rust", None), None);
+    let mut shell = shell();
+    let web = |shell: &Shell, q: &str| {
+        palette::rows(shell, q)
+            .bottom
+            .into_iter()
+            .find(|e| e.category == Category::Web)
+    };
+    assert_eq!(web(&shell, "rust"), None);
     let engine = Some(SearchEngine::DuckDuckGo);
-    assert_eq!(palette::web("  ", engine), None);
-    assert_eq!(
-        palette::web(">layout", engine),
-        None,
-        "scoped queries stay local"
-    );
-    let entry = palette::web("rust book", engine).unwrap();
-    assert_eq!(entry.category, Category::Web);
+    shell.effects.search = engine;
+    assert_eq!(web(&shell, "  "), None);
+    assert_eq!(web(&shell, ">layout"), None, "scoped queries stay local");
+    let entry = web(&shell, "rust book").unwrap();
+    assert_eq!(entry.detail, "DuckDuckGo");
     let Action::SearchWeb { query } = &entry.actions[0] else {
         panic!("{entry:?}");
     };
     assert_eq!(query, "rust book");
+    shell.effects.search = None;
 
-    let mut shell = shell();
     let search = Action::SearchWeb {
         query: "--help /etc/passwd".into(),
     };
@@ -452,4 +462,63 @@ fn web_search_needs_a_chosen_engine_and_opens_only_its_results() {
             path: "https://duckduckgo.com/?q=--help+%2Fetc%2Fpasswd".into()
         }]
     );
+}
+
+#[test]
+fn a_registered_browser_gets_tabs_and_hears_of_picks() {
+    let mut shell = shell();
+    let register = r#"{"method":"register_palette","source":"danube","data":{
+        "tabs":[{"id":"7","title":"Rust","url":"https://rust-lang.org","active":true}],
+        "extensions":[{"id":"bitwarden","name":"Bitwarden","enabled":false}]}}"#
+        .replace('\n', "");
+    let (response, _) = derisk::ipc::handle_line(&mut shell, &register);
+    assert!(response.contains(r#""ok":true"#), "{response}");
+
+    let entries = palette::entries(&shell, &[], &[]);
+    let hits = palette::search(&entries, "rust", &History::default());
+    let tab = &entries[hits[0]];
+    assert_eq!((tab.category, tab.title.as_str()), (Category::Tab, "Rust"));
+    let effects = shell.run(tab.actions.clone()).into_result().unwrap();
+    assert_eq!(
+        effects,
+        [derisk::action::Effect::PaletteCommand {
+            source: "danube".into(),
+            command: serde_json::json!({"op": "activate_tab", "id": "7"}),
+        }]
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.category == Category::Extension && e.title == "Enable Bitwarden")
+    );
+
+    // A typed address goes to Danube while it runs, to the default browser
+    // after it has gone.
+    let open =
+        |shell: &Shell| palette::rows(shell, "https://example.org").top[0].actions[0].clone();
+    assert!(matches!(open(&shell), Action::PaletteCommand { .. }));
+    let (response, _) = derisk::ipc::handle_line(
+        &mut shell,
+        r#"{"method":"remove_palette","source":"danube"}"#,
+    );
+    assert!(response.contains(r#""ok":true"#), "{response}");
+    assert_eq!(
+        open(&shell),
+        Action::OpenUrl {
+            url: "https://example.org".into()
+        }
+    );
+    assert!(matches!(
+        shell.apply(Action::PaletteCommand {
+            source: "danube".into(),
+            command: serde_json::json!({"op": "new_tab"}),
+        }),
+        Err(Error::UnknownPaletteSource(_))
+    ));
+    assert!(matches!(
+        shell.apply(Action::OpenUrl {
+            url: "file:///etc/passwd".into()
+        }),
+        Err(Error::NotOpenable(_))
+    ));
 }

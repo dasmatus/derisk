@@ -12,6 +12,8 @@ derisk-desktop.workspace = true
 derisk-geom.workspace = true
 derisk-install.workspace = true
 derisk-login.workspace = true
+# The palette's plugin host; every palette row comes from a plugin.
+derisk-palette.workspace = true
 derisk-icons.workspace = true
 derisk-settings.workspace = true
 mcsapi.workspace = true

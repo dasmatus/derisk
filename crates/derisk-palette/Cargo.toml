@@ -1,0 +1,19 @@
+[package]
+name = "derisk-palette"
+description = "The derisk command palette's plugin host: WebAssembly components that supply its rows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crossbeam-channel.workspace = true
+miette.workspace = true
+pm-signing.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+wasmtime.workspace = true
+
+[build-dependencies]
+wit-component.workspace = true

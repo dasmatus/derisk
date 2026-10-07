@@ -49,8 +49,7 @@ use derisk::{
     keys::{self, Key, Mods, SuperTap},
     lock::LockScreen,
     overview::Battery,
-    palette::{self, Entry},
-    privacy,
+    palette, privacy,
     shell::{Mode, PointerOutcome, Shell},
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
@@ -232,7 +231,7 @@ type PendingActions = Arc<Mutex<Vec<(String, String)>>>;
 
 /// What the palette indexes in the background: files under home and the
 /// installed applications.
-type Index = (Vec<PathBuf>, Vec<DesktopEntry>);
+type Index = (Vec<palette::File>, Vec<DesktopEntry>);
 
 /// The core apps' own `.desktop` files, parsed.
 fn core_desktop_entries() -> Vec<DesktopEntry> {
@@ -250,14 +249,14 @@ fn installed_apps() -> Vec<DesktopEntry> {
         .collect()
 }
 
-/// Palette entries for the core apps and installed apps, with their
-/// desktop actions.
-fn palette_entries(core: &[DesktopEntry], installed: &[DesktopEntry]) -> Vec<Entry> {
-    let core = core.iter().flat_map(|e| {
+/// The core apps and installed apps, with their desktop actions, for the
+/// palette's apps plugin.
+fn palette_apps(core: &[DesktopEntry], installed: &[DesktopEntry]) -> Vec<palette::App> {
+    let core = core.iter().map(|e| {
         let icon = derisk_apps::find(&e.id).map_or("🖥", |app| app.icon);
         palette::desktop_app(e, icon)
     });
-    let installed = installed.iter().flat_map(|e| palette::desktop_app(e, "🖥"));
+    let installed = installed.iter().map(|e| palette::desktop_app(e, "🖥"));
     core.chain(installed).collect()
 }
 
@@ -291,7 +290,7 @@ impl Session {
                 .flat_map(|e| e.name.split_whitespace()),
             200,
         );
-        ui.palette.extra = palette_entries(&core_apps, &installed);
+        ui.palette.apps = palette_apps(&core_apps, &installed);
         let session_id = systemd::session_id();
         let session_path = session_id
             .as_deref()
@@ -589,6 +588,25 @@ impl Session {
                         .map(|()| Value::Null),
                 );
             }
+            // And the connection that registers palette data owns it.
+            Ok(ipc::Request::RegisterPalette { source, data }) => {
+                let result = self
+                    .shell
+                    .palette_sources
+                    .register(source, data, Some(conn));
+                if result.is_ok() {
+                    self.listeners.insert(conn, events.clone());
+                }
+                return respond(result.map(|()| Value::Null));
+            }
+            Ok(ipc::Request::RemovePalette { source }) => {
+                return respond(
+                    self.shell
+                        .palette_sources
+                        .remove(&source, Some(conn))
+                        .map(|()| Value::Null),
+                );
+            }
             _ => {}
         }
         let request = match ipc::live_request(line) {
@@ -672,6 +690,7 @@ impl Session {
         self.registered.retain(|_, (owner, _)| *owner != conn);
         self.shell.menus.disown(conn);
         self.shell.widgets.disown(conn);
+        self.shell.palette_sources.disown(conn);
         self.listeners.remove(&conn);
     }
 
@@ -733,17 +752,22 @@ impl Session {
         if open && !self.palette_open {
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
-                let files = std::env::var_os("HOME")
-                    .map(|home| palette::index_files(Path::new(&home), 4, 20_000))
-                    .unwrap_or_default();
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                let files = home
+                    .as_deref()
+                    .map(|home| palette::index_files(home, 4, 20_000))
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|path| palette::file(path, home.as_deref()))
+                    .collect::<Vec<_>>();
                 let _ = tx.send((files, installed_apps()));
             });
             self.index = Some(rx);
         }
         self.palette_open = open;
         if let Some((files, installed)) = self.index.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            self.ui.palette.files = files;
-            self.ui.palette.extra = palette_entries(&self.core_apps, &installed);
+            self.ui.palette.set_files(files);
+            self.ui.palette.apps = palette_apps(&self.core_apps, &installed);
             self.shell.apps = app_index(&self.core_apps, &installed);
             self.installed = installed;
             self.index = None;
@@ -913,6 +937,19 @@ impl Session {
                     {
                         Some(events) => {
                             let _ = events.send(widgets::widget_event(id, item).to_string());
+                        }
+                        None => info!("{}", serde_json::to_string(&effect).unwrap_or_default()),
+                    }
+                }
+                Effect::PaletteCommand { source, command } => {
+                    match self
+                        .shell
+                        .palette_sources
+                        .recipient(source)
+                        .and_then(|conn| self.listeners.get(&conn))
+                    {
+                        Some(events) => {
+                            let _ = events.send(palette::event(source, command).to_string());
                         }
                         None => info!("{}", serde_json::to_string(&effect).unwrap_or_default()),
                     }
@@ -1590,7 +1627,12 @@ pub fn run(options: Options) -> Result {
     for client in options.runtime {
         compositor = compositor.runtime(client);
     }
-    let result = compositor.run();
+    let result = std::thread::scope(|scope| {
+        // The palette's plugins compile while the session comes up, so its
+        // first opening does not wait for them.
+        scope.spawn(palette::preload);
+        compositor.run()
+    });
     if let Some(watch) = lock_watch {
         watch.stop();
     }

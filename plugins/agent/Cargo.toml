@@ -1,0 +1,15 @@
+[package]
+name = "palette-agent"
+description = "derisk palette plugin: Handing a request the assistant cannot follow to Sonne's agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-palette-sdk = { path = "../sdk" }

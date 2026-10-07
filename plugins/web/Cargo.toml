@@ -1,0 +1,15 @@
+[package]
+name = "palette-web"
+description = "derisk palette plugin: Searching the web with the chosen engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-palette-sdk = { path = "../sdk" }
