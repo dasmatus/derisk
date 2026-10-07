@@ -9,9 +9,11 @@
 //!
 //! While locked the compositor is given no window placements and no focus,
 //! so no client is drawn or receives input; every key goes to the lock
-//! screen's password field, which PAM checks (`crate::pam`). The screen locks
-//! on derisk's own Lock action and, with `--execute`, whenever logind asks
-//! this session to lock (`loginctl lock-session`, `lock-sessions`).
+//! screen's field, which answers PAM through `derisk auth`
+//! (`crate::unlock`), with the fingerprint reader listening beside it when
+//! the system offers one. The screen locks on derisk's own Lock action and,
+//! with `--execute`, whenever logind asks this session to lock
+//! (`loginctl lock-session`, `lock-sessions`).
 
 use std::{
     collections::HashMap,
@@ -37,6 +39,7 @@ use derisk::{
     desktop::{self, DesktopEntry},
     effects::{Effects, SettingsWatch},
     geom::{inset, rect},
+    greetd::{Login, Request},
     ipc::{self, LiveRequest},
     keyboard::{Output as Typed, Predictor},
     keys::{self, Key, Mods, SuperTap},
@@ -56,7 +59,7 @@ use derisk_settings::{Privacy, Shortcuts};
 use mcsapi::WindowId;
 use tracing::{info, warn};
 
-use crate::pam;
+use crate::{pam, unlock};
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
     Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press,
@@ -190,8 +193,10 @@ pub struct Session {
     lock: LockScreen,
     /// Who the lock screen authenticates.
     user: String,
-    /// The running password check, if any.
-    unlock: Option<mpsc::Receiver<bool>>,
+    /// The lock screen field's PAM conversation, while locked.
+    auth: Option<unlock::Conversation>,
+    /// The fingerprint reader's, beside it, when the system offers one.
+    reader: Option<unlock::Conversation>,
     /// This logind session, from `XDG_SESSION_ID`.
     session_id: Option<String>,
     /// Its logind object path, for the lock signal and the locked hint.
@@ -326,7 +331,8 @@ impl Session {
             reserved: Reserved::default(),
             lock: LockScreen::default(),
             user,
-            unlock: None,
+            auth: None,
+            reader: None,
             session_id,
             session_path,
         }
@@ -345,10 +351,38 @@ impl Session {
             );
             return;
         }
-        self.lock.lock();
+        let Some((first, reader)) = self.lock.lock(&self.user, unlock::fingerprint_offered())
+        else {
+            return;
+        };
+        // PAM starts asking at once, so the field shows what this stack
+        // wants (a password, or a security key's PIN) and the reader is
+        // already listening before anything is typed.
+        self.auth = None;
+        self.send_auth(first);
+        self.reader = reader.and_then(|request| {
+            let reader = unlock::start(pam::FINGERPRINT_SERVICE)?;
+            reader.send(request);
+            Some(reader)
+        });
         self.shell.pointer_up();
         self.set_locked_hint(true);
         info!("screen locked");
+    }
+
+    /// Sends the field's next request, starting its conversation first if
+    /// there is none (it stopped, or never started).
+    fn send_auth(&mut self, request: Request) {
+        if self.auth.is_none() {
+            self.auth = unlock::start(pam::SERVICE);
+        }
+        let sent = self.auth.as_ref().is_some_and(|auth| auth.send(request));
+        if !sent {
+            self.auth = None;
+            self.lock
+                .login
+                .disconnected("derisk auth could not be started");
+        }
     }
 
     fn set_locked_hint(&self, locked: bool) {
@@ -359,32 +393,32 @@ impl Session {
         }
     }
 
-    /// Checks a submitted password on a background thread, since PAM may
-    /// take seconds (pam_faildelay) and the frame must keep drawing.
-    fn check_password(&mut self, password: String) {
-        let (tx, rx) = mpsc::channel();
-        let user = self.user.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(pam::authenticate(&user, password));
-        });
-        self.unlock = Some(rx);
-    }
-
-    /// Applies the result of a finished password check.
+    /// Applies what both conversations answered since the last frame, and
+    /// unlocks once PAM accepted either.
     fn poll_unlock(&mut self) {
-        let Some(rx) = &self.unlock else { return };
-        let ok = match rx.try_recv() {
-            Ok(ok) => ok,
-            Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => false,
-        };
-        self.unlock = None;
-        self.lock.finish(ok);
-        if ok {
+        drive(&mut self.auth, &mut self.lock.login);
+        if let Some(reader) = self.lock.fingerprint.as_mut() {
+            drive(&mut self.reader, reader);
+        }
+        if self.lock.poll() {
+            // Ends whichever conversation is still waiting, the reader's
+            // usually: it is killed, as PAM cannot be interrupted.
+            self.auth = None;
+            self.reader = None;
             self.set_locked_hint(false);
             info!("screen unlocked");
-        } else {
-            info!("lock screen: authentication failed");
+        }
+    }
+
+    /// A key on the lock screen: wakes a reader that stopped listening.
+    fn wake_reader(&mut self) {
+        if let Some(request) = self.lock.wake_fingerprint()
+            && !self.reader.as_ref().is_some_and(|r| r.send(request))
+        {
+            // Its process is gone; the field still works, so the reader is
+            // simply no longer offered until the next lock.
+            self.reader = None;
+            self.lock.fingerprint = None;
         }
     }
 
@@ -1020,9 +1054,13 @@ impl compositor::Shell for Session {
     }
 
     fn key(&mut self, key: &KeyInput) -> KeyRoute {
-        // Every key goes to the password field: no shortcut, and no client.
+        // Every key goes to the lock screen's field: no shortcut, and no
+        // client.
         if self.lock.is_locked() {
             self.super_tap.cancel();
+            if key.pressed {
+                self.wake_reader();
+            }
             return KeyRoute::Chrome;
         }
         let is_super = matches!(key.sym, Keysym::Super_L | Keysym::Super_R);
@@ -1136,9 +1174,9 @@ impl compositor::Shell for Session {
         if self.lock.is_locked() {
             let theme = self.ui.theme;
             if show_lock(ui, &mut self.lock, &self.shell, &theme, &self.user)
-                && let Some(password) = self.lock.submit()
+                && let Some(request) = self.lock.login.submit()
             {
-                self.check_password(password);
+                self.send_auth(request);
             }
             return;
         }
@@ -1469,6 +1507,33 @@ pub fn run(options: Options) -> Result {
     result?;
     systemd::notify_stopping();
     Ok(())
+}
+
+/// Feeds `login` what its conversation answered and sends what it asks
+/// next. A conversation whose process is gone is dropped, and `login` told,
+/// so its next request starts a fresh one.
+fn drive(conversation: &mut Option<unlock::Conversation>, login: &mut Login) {
+    let Some(conv) = conversation.as_ref() else {
+        return;
+    };
+    while let Some(answer) = conv.poll() {
+        match answer {
+            Ok(response) => {
+                if let Some(next) = login.respond(response)
+                    && !conv.send(next)
+                {
+                    login.disconnected("derisk auth stopped");
+                    *conversation = None;
+                    return;
+                }
+            }
+            Err(e) => {
+                login.disconnected(&e.to_string());
+                *conversation = None;
+                return;
+            }
+        }
+    }
 }
 
 /// Locks the screen whenever logind sends this session `Lock`, until the

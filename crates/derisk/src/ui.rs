@@ -2651,8 +2651,11 @@ fn login_status(ui: &mut Ui, text: &str, error: bool, theme: &Theme) {
 }
 
 /// Draws the lock screen over the whole output: the wallpaper, the clock,
-/// who is locked out, and the password field. Returns `true` when Enter was
-/// pressed in the field, to check what was typed.
+/// who is locked out, and the field answering whatever PAM asks -- the
+/// password, a security key's PIN, a new password once the old one expired.
+/// The line under it carries PAM's own messages, the fingerprint reader's
+/// among them. Returns `true` when Enter was pressed in the field, to send
+/// what was typed.
 ///
 /// The host also stops drawing windows while locked, so nothing on the
 /// desktop shows through even if this frame were skipped.
@@ -2667,16 +2670,29 @@ pub fn show_lock(
     login_panel(ui, to_rect(shell.output()), &shell.clock, theme, |ui| {
         ui.label(RichText::new(user).size(20.0).strong());
         ui.add_space(8.0);
-        let checking = lock.is_checking();
-        login_field(ui, &mut lock.password, !checking, true, "Password");
-        submit = ui.input(|i| i.key_pressed(Key::Enter));
+        let login = &mut lock.login;
+        let editable = login.editable();
+        let hint = login.hint().to_owned();
+        match login.phase().clone() {
+            Phase::Prompt { secret, .. } => {
+                login_field(ui, &mut login.answer, true, secret, &hint);
+            }
+            // Stopped (PAM could not ask at all) or waiting: an empty field
+            // keeps the column still, and Enter on a stopped one starts over.
+            _ => {
+                let mut nothing = String::new();
+                login_field(ui, &mut nothing, false, true, &hint);
+            }
+        }
+        submit = editable && ui.input(|i| i.key_pressed(Key::Enter));
         ui.add_space(8.0);
-        let failed = lock.failures() > 0 && !lock.is_checking();
-        login_status(ui, lock.message(), failed, theme);
+        let (text, error) = lock.message();
+        login_status(ui, text, error, theme);
     });
-    if lock.is_checking() {
-        ui.ctx().request_repaint();
-    }
+    // Both conversations answer between frames, the reader's whenever a
+    // finger lands, so keep looking for them while locked.
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(100));
     submit
 }
 

@@ -6,6 +6,8 @@
 //! (launching apps as units, session operations) can be executed for real.
 
 #[cfg(feature = "host")]
+mod auth;
+#[cfg(feature = "host")]
 mod computer;
 #[cfg(feature = "host")]
 mod dm;
@@ -19,6 +21,8 @@ mod host;
 mod installer;
 #[cfg(feature = "host")]
 mod pam;
+#[cfg(feature = "host")]
+mod unlock;
 #[cfg(feature = "host")]
 mod wizard_host;
 
@@ -67,6 +71,11 @@ USAGE:
                                   Be the display manager: run the greeter on
                                   a VT, check passwords with PAM, and start
                                   sessions (as root; needs `host`)
+    derisk auth [--service <NAME>]
+                                  Hold the lock screen's PAM conversation on
+                                  stdin and stdout, greetd's protocol, for
+                                  the user it runs as (default service
+                                  derisk; needs `host`)
     derisk setup [OPTIONS]        First-boot setup: language, keyboard, time
                                   zone, network and the first account, when
                                   no regular user exists (as root; needs `host`)
@@ -218,6 +227,7 @@ fn main() -> miette::Result<()> {
         Some("session") => session(&args[1..]),
         Some("greeter") => greeter(&args[1..]),
         Some("display-manager") => display_manager(&args[1..]),
+        Some("auth") => auth(&args[1..]),
         Some("setup") => setup(&args[1..]),
         Some("installer") => installer(&args[1..]),
         Some("demo") => demo(),
@@ -343,6 +353,20 @@ fn display_manager(args: &[String]) -> Result {
 
 #[cfg(not(feature = "host"))]
 fn display_manager(_args: &[String]) -> Result {
+    session(&[])
+}
+
+#[cfg(feature = "host")]
+fn auth(args: &[String]) -> Result {
+    match args {
+        [] => auth::run(pam::SERVICE),
+        [flag, service] if flag == "--service" => auth::run(service),
+        _ => Err(usage("derisk auth takes only --service <NAME>")),
+    }
+}
+
+#[cfg(not(feature = "host"))]
+fn auth(_args: &[String]) -> Result {
     session(&[])
 }
 

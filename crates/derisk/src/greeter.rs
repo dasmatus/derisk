@@ -15,6 +15,7 @@
 //! a slow PAM module never stalls a frame.
 
 use std::{
+    io::{Read, Write},
     os::unix::net::UnixStream,
     sync::mpsc,
     thread,
@@ -207,9 +208,10 @@ impl compositor::Shell for Greeter {
 }
 
 /// Carries requests to greetd and its answers back, one at a time, until
-/// either side hangs up.
-fn spawn_worker(
-    mut stream: UnixStream,
+/// either side hangs up. The lock screen uses it too, with a `derisk auth`
+/// process's pipes in place of greetd's socket.
+pub(crate) fn spawn_worker(
+    mut stream: impl Read + Write + Send + 'static,
 ) -> (
     mpsc::Sender<Request>,
     mpsc::Receiver<std::io::Result<Response>>,

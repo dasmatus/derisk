@@ -38,37 +38,29 @@ use std::{
 };
 
 use derisk::{
-    greetd::{self, AuthMessageType, Request, Response},
+    greetd::{self, Request, Response},
+    password_age::PasswordAge,
     systemd,
 };
 use tracing::{error, info};
 
-use crate::pam::{
-    self, PAM_BUF_ERR, PAM_CONV_ERR, PAM_ERROR_MSG, PAM_PROMPT_ECHO_OFF, PAM_PROMPT_ECHO_ON,
-    PAM_SUCCESS, PAM_TEXT_INFO, PamConv, PamMessage, PamResponse,
-};
+use crate::pam::{self, Auth, Pam};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const PAM_TTY: c_int = 3;
 const PAM_ESTABLISH_CRED: c_int = 0x2;
 const PAM_DELETE_CRED: c_int = 0x4;
-/// Tells modules a pam_end is the parent's copy after a fork, so they free
-/// memory without tearing down what the child still uses.
-const PAM_DATA_SILENT: c_int = 0x4000_0000;
 
 const VT_ACTIVATE: libc::c_ulong = 0x5606;
 const VT_WAITACTIVE: libc::c_ulong = 0x5607;
 
 #[link(name = "pam")]
 unsafe extern "C" {
-    fn pam_set_item(pamh: *mut c_void, item_type: c_int, item: *const c_void) -> c_int;
     fn pam_putenv(pamh: *mut c_void, name_value: *const c_char) -> c_int;
     fn pam_getenvlist(pamh: *mut c_void) -> *mut *mut c_char;
     fn pam_setcred(pamh: *mut c_void, flags: c_int) -> c_int;
     fn pam_open_session(pamh: *mut c_void, flags: c_int) -> c_int;
     fn pam_close_session(pamh: *mut c_void, flags: c_int) -> c_int;
-    fn pam_strerror(pamh: *mut c_void, errnum: c_int) -> *const c_char;
 }
 
 /// How the display manager was configured.
@@ -142,68 +134,9 @@ fn account(name: &str) -> Option<Account> {
     }
 }
 
-/// An open PAM handle. Ended exactly once: on drop, or handed to a session
-/// worker by [`Pam::forget`].
-struct Pam {
-    handle: *mut c_void,
-    /// The conversation's state; PAM keeps a pointer to it, so it is boxed
-    /// and lives as long as the handle.
-    conv: Box<Conversation>,
-    status: c_int,
-}
-
+/// What the display manager needs of a PAM handle beyond authenticating:
+/// the session's environment.
 impl Pam {
-    fn start(service: &str, user: &str, stream: Option<UnixStream>) -> io::Result<Self> {
-        let service = CString::new(service).map_err(io::Error::other)?;
-        let user = CString::new(user).map_err(io::Error::other)?;
-        let mut conv = Box::new(Conversation {
-            stream,
-            cancelled: false,
-            unexpected: false,
-            broken: false,
-        });
-        let pam_conv = Box::new(PamConv {
-            conv: converse,
-            appdata_ptr: (&raw mut *conv).cast(),
-        });
-        let mut handle = ptr::null_mut();
-        // SAFETY: Linux-PAM copies the conversation struct; the appdata it
-        // points at is boxed and owned by the returned Pam.
-        let status =
-            unsafe { pam::pam_start(service.as_ptr(), user.as_ptr(), &*pam_conv, &mut handle) };
-        if status != PAM_SUCCESS || handle.is_null() {
-            return Err(io::Error::other(format!("pam_start failed ({status})")));
-        }
-        Ok(Self {
-            handle,
-            conv,
-            status,
-        })
-    }
-
-    fn error(&self, status: c_int) -> String {
-        // SAFETY: pam_strerror returns a static string.
-        unsafe { CStr::from_ptr(pam_strerror(self.handle, status)) }
-            .to_string_lossy()
-            .into_owned()
-    }
-
-    fn check(&mut self, what: &str, status: c_int) -> std::result::Result<(), String> {
-        self.status = status;
-        if status == PAM_SUCCESS {
-            Ok(())
-        } else {
-            Err(format!("{what}: {}", self.error(status)))
-        }
-    }
-
-    fn set_tty(&mut self, vt: u32) -> std::result::Result<(), String> {
-        let tty = CString::new(format!("tty{vt}")).unwrap_or_default();
-        // SAFETY: PAM copies the string.
-        let status = unsafe { pam_set_item(self.handle, PAM_TTY, tty.as_ptr().cast()) };
-        self.check("pam_set_item(PAM_TTY)", status)
-    }
-
     fn putenv(&mut self, pair: &str) -> std::result::Result<(), String> {
         let pair = CString::new(pair).map_err(|e| e.to_string())?;
         // SAFETY: PAM copies the string.
@@ -233,132 +166,6 @@ impl Pam {
         }
         out
     }
-
-    /// Lets go of the handle without ending the PAM transaction, in the
-    /// process that forked a worker to own it.
-    fn forget(mut self) {
-        // SAFETY: the handle is valid; PAM_DATA_SILENT frees this copy only.
-        unsafe { pam::pam_end(self.handle, self.status | PAM_DATA_SILENT) };
-        self.handle = ptr::null_mut();
-    }
-}
-
-impl Drop for Pam {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            // SAFETY: the handle is valid and ended exactly once.
-            unsafe { pam::pam_end(self.handle, self.status) };
-        }
-    }
-}
-
-/// PAM's conversation, relayed to the greeter as greetd's protocol: each PAM
-/// message becomes an `auth_message` response, and the greeter's next
-/// request answers it.
-struct Conversation {
-    stream: Option<UnixStream>,
-    /// The greeter cancelled mid-conversation; its cancel is still to be
-    /// answered.
-    cancelled: bool,
-    /// The greeter sent something other than an answer or a cancel.
-    unexpected: bool,
-    /// The socket failed; the greeter is gone.
-    broken: bool,
-}
-
-impl Conversation {
-    /// Asks the greeter one thing. `Ok(None)` when it cancelled.
-    fn ask(&mut self, kind: AuthMessageType, text: String) -> Option<Option<String>> {
-        let stream = self.stream.as_mut()?;
-        let message = Response::AuthMessage {
-            auth_message_type: kind,
-            auth_message: text,
-        };
-        let request =
-            greetd::write_response(stream, &message).and_then(|()| greetd::read_request(stream));
-        match request {
-            Ok(Request::PostAuthMessageResponse { response }) => Some(response),
-            Ok(Request::CancelSession) => {
-                self.cancelled = true;
-                None
-            }
-            Ok(_) => {
-                self.unexpected = true;
-                None
-            }
-            Err(_) => {
-                self.broken = true;
-                None
-            }
-        }
-    }
-}
-
-unsafe extern "C" fn converse(
-    num_msg: c_int,
-    msg: *mut *const PamMessage,
-    resp: *mut *mut PamResponse,
-    appdata_ptr: *mut c_void,
-) -> c_int {
-    let Ok(count) = usize::try_from(num_msg) else {
-        return PAM_CONV_ERR;
-    };
-    if count == 0 || msg.is_null() || resp.is_null() || appdata_ptr.is_null() {
-        return PAM_CONV_ERR;
-    }
-    // SAFETY: appdata_ptr is the boxed Conversation owned by the Pam whose
-    // call this is.
-    let conv = unsafe { &mut *appdata_ptr.cast::<Conversation>() };
-    // SAFETY: calloc returns zeroed memory or null, checked below.
-    let replies = unsafe { libc::calloc(count, size_of::<PamResponse>()) }.cast::<PamResponse>();
-    if replies.is_null() {
-        return PAM_BUF_ERR;
-    }
-    for i in 0..count {
-        // SAFETY: Linux-PAM passes an array of `count` message pointers.
-        let message = unsafe { &**msg.add(i) };
-        let text = if message.msg.is_null() {
-            String::new()
-        } else {
-            // SAFETY: PAM messages are NUL-terminated strings.
-            unsafe { CStr::from_ptr(message.msg) }
-                .to_string_lossy()
-                .into_owned()
-        };
-        let kind = match message.msg_style {
-            PAM_PROMPT_ECHO_OFF => AuthMessageType::Secret,
-            PAM_PROMPT_ECHO_ON => AuthMessageType::Visible,
-            PAM_ERROR_MSG => AuthMessageType::Error,
-            PAM_TEXT_INFO => AuthMessageType::Info,
-            _ => AuthMessageType::Info,
-        };
-        let Some(answer) = conv.ask(kind, text) else {
-            // SAFETY: free the responses filled so far, then the array.
-            unsafe {
-                for j in 0..i {
-                    let r = (*replies.add(j)).resp;
-                    if !r.is_null() {
-                        libc::free(r.cast());
-                    }
-                }
-                libc::free(replies.cast());
-            }
-            return PAM_CONV_ERR;
-        };
-        if matches!(kind, AuthMessageType::Secret | AuthMessageType::Visible) {
-            let mut answer = answer.unwrap_or_default();
-            let copy = CString::new(answer.as_bytes()).unwrap_or_default();
-            pam::wipe(&mut answer);
-            // SAFETY: `replies` holds `count` zeroed responses; strdup copies
-            // a NUL-terminated string, which PAM frees.
-            unsafe { (*replies.add(i)).resp = libc::strdup(copy.as_ptr()) };
-            let mut bytes = copy.into_bytes();
-            bytes.fill(0);
-        }
-    }
-    // SAFETY: resp is PAM's out-pointer for the response array.
-    unsafe { *resp = replies };
-    PAM_SUCCESS
 }
 
 /// Who is in the middle of logging in, and what to start for them.
@@ -466,10 +273,42 @@ fn round(options: &Options, greeter: &Account) -> Result {
     // the log says only that one started, since the name came from the
     // greeter's text field.
     info!("starting a session");
+    apply_password_age(&username);
     let worker = spawn_session(pam, &user, options.vt, "user", &cmd, &env, true)?;
     wait(worker);
     info!("the session ended");
     Ok(())
+}
+
+/// Brings `user`'s homed record up to the system's password age, now that
+/// logging in activated their home and a change can be written into it.
+/// Only root may change those fields, so this is where an account made
+/// before the policy (or under an older one) gets it. A failure is logged and
+/// the login goes on: the policy is a reminder schedule, not a lock.
+fn apply_password_age(user: &str) {
+    let age = PasswordAge::system();
+    let record = std::process::Command::new("homectl")
+        .args(["inspect", user, "--json=short", "--no-pager"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .and_then(|out| serde_json::from_slice(&out.stdout).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let Some(argv) = age.update_argv(user, &record) else {
+        return;
+    };
+    // Never stops to ask: the display manager has no terminal, and the
+    // active home needs no password to update.
+    let status = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .arg("--no-ask-password")
+        .stdin(std::process::Stdio::null())
+        .status();
+    match status {
+        Ok(s) if s.success() => info!("applied the password age policy"),
+        Ok(s) => error!("homectl update for the password age policy failed: {s}"),
+        Err(e) => error!("cannot run homectl for the password age policy: {e}"),
+    }
 }
 
 /// Serves the greeter until it hangs up. Returns the authenticated user and
@@ -496,15 +335,10 @@ fn serve(options: &Options, mut stream: UnixStream) -> Option<Pending> {
                             });
                             Response::Success
                         }
-                        // The cancel that ended the conversation gets its
-                        // answer here.
-                        Auth::Cancelled => Response::Success,
-                        Auth::Failed(description) => Response::Error {
-                            error_type: "auth_error".into(),
-                            description,
-                        },
-                        Auth::Error(description) => error(&description),
                         Auth::Broken => return None,
+                        // A cancel that ended the conversation gets its
+                        // answer here, as does a refusal.
+                        other => other.response().unwrap_or(Response::Success),
                     }
                 }
             }
@@ -539,55 +373,19 @@ fn error(description: &str) -> Response {
     }
 }
 
-enum Auth {
-    Ok(Pam),
-    Cancelled,
-    Failed(String),
-    Error(String),
-    Broken,
-}
-
 /// Runs PAM's authentication for `username`, with the greeter answering its
 /// prompts over `stream`.
 fn authenticate(options: &Options, stream: &mut UnixStream, username: &str) -> Auth {
-    let Ok(conv_stream) = stream.try_clone() else {
+    let Ok(channel) = stream.try_clone() else {
         return Auth::Broken;
     };
-    let mut pam = match Pam::start(&options.service, username, Some(conv_stream)) {
-        Ok(pam) => pam,
-        Err(e) => return Auth::Error(e.to_string()),
-    };
-    if let Err(e) = pam.set_tty(options.vt) {
-        return Auth::Error(e);
-    }
-    // SAFETY: the handle is valid; the conversation lives in `pam`.
-    let status = unsafe { pam::pam_authenticate(pam.handle, 0) };
-    let auth = pam.check("pam_authenticate", status);
-    let conv = &pam.conv;
-    if conv.broken {
-        return Auth::Broken;
-    }
-    if conv.cancelled {
-        return Auth::Cancelled;
-    }
-    if conv.unexpected {
-        return Auth::Error("unexpected request during authentication".into());
-    }
-    if let Err(e) = auth {
-        // No name: a failed login's user name is whatever was typed, which
-        // is sometimes the password typed into the wrong field.
-        info!("a login failed: {e}");
-        return Auth::Failed(e);
-    }
-    // SAFETY: as above.
-    let status = unsafe { pam::pam_acct_mgmt(pam.handle, 0) };
-    if let Err(e) = pam.check("pam_acct_mgmt", status) {
-        return Auth::Failed(e);
-    }
-    // The conversation is over; the session modules get no greeter to talk
-    // to, and fail rather than block if one asks.
-    pam.conv.stream = None;
-    Auth::Ok(pam)
+    pam::authenticate(
+        &options.service,
+        username,
+        Some(options.vt),
+        pam::Expired::Change,
+        Box::new(channel),
+    )
 }
 
 /// Opens `pam`'s session for `user` on `vt` and runs `cmd` as them, in a

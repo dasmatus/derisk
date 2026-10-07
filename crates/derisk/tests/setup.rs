@@ -5,6 +5,7 @@
 use derisk::{
     install::{self, Disk, Event, Request},
     locale::{self, Keyboard},
+    password_age::PasswordAge,
     setup::{self, Account, Choices, Step},
     wizard,
 };
@@ -142,6 +143,7 @@ fn the_plan_saves_everything_and_creates_the_account_last() {
             confirm: "correct horse".into(),
             user_name_edited: false,
         },
+        password_age: PasswordAge::default(),
     };
     let plan = setup::plan(&choices);
     let argv: Vec<Vec<&str>> = plan
@@ -181,6 +183,25 @@ fn the_plan_saves_everything_and_creates_the_account_last() {
     });
     assert_eq!(bare.len(), 1);
     assert!(!bare[0].argv.iter().any(|a| a.starts_with("--timezone")));
+}
+
+#[test]
+fn the_account_is_created_under_the_password_age_policy() {
+    let choices = Choices {
+        account: Account {
+            user_name: "ada".into(),
+            ..Account::default()
+        },
+        password_age: PasswordAge {
+            max_days: 365,
+            warn_days: 14,
+        },
+        ..Choices::default()
+    };
+    let plan = setup::plan(&choices);
+    let argv = &plan.last().unwrap().argv;
+    assert!(argv.contains(&"--password-change-max=365d".to_owned()));
+    assert!(argv.contains(&"--password-change-warn=14d".to_owned()));
 }
 
 #[test]

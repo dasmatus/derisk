@@ -8,7 +8,7 @@
 //! steps and their rules without a toolkit, so they can be tested headless;
 //! `derisk setup` draws them with [`crate::wizard`].
 
-use crate::locale;
+use crate::{locale, password_age::PasswordAge};
 
 /// One page of the setup, in order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -206,6 +206,9 @@ pub struct Choices {
     pub time_zone: String,
     /// The first account.
     pub account: Account,
+    /// How often the system wants passwords changed
+    /// ([`crate::password_age`]); the account is created under it.
+    pub password_age: PasswordAge,
 }
 
 /// A command the setup runs to save a choice.
@@ -266,6 +269,9 @@ pub fn plan(choices: &Choices) -> Vec<Task> {
             format!("--timezone={}", choices.time_zone),
         ]
         .into_iter()
+        // With no policy the age options would only clear fields a new
+        // record does not have; the filter below drops them.
+        .chain(choices.password_age.homectl_args())
         .filter(|a| !a.ends_with('='))
         .collect(),
         env: vec![("NEWPASSWORD".into(), account.password.clone())],

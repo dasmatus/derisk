@@ -70,6 +70,7 @@ pub mod menu;
 pub mod mobile;
 pub mod overview;
 pub mod palette;
+pub mod password_age;
 pub mod privacy;
 pub mod setup;
 pub mod shell;
