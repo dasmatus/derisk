@@ -144,7 +144,7 @@ fn scan_follows_xdg_precedence_and_desktop_file_ids() {
 fn palette_lists_app_actions() {
     let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
     let extra = palette::desktop_app(&firefox(), "🖥");
-    let entries = palette::entries(&shell, &extra, &[]);
+    let entries = palette::entries(&shell, &[extra], &[]);
 
     let hits = palette::search(&entries, "private", &History::default());
     let private = &entries[hits[0]];

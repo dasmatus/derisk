@@ -1,0 +1,15 @@
+[package]
+name = "palette-commands"
+description = "derisk palette plugin: The shell's own commands: overview, keyboard, focus, layouts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-palette-sdk = { path = "../sdk" }

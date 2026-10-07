@@ -10,7 +10,14 @@
 //! {"method":"register_menu","window":1,"menus":[...]}
 //! {"method":"register_widget","widget":{"id":"weather","title":"Weather","rows":[...]}}
 //! {"method":"remove_widget","id":"weather"}
+//! {"method":"register_palette","source":"danube","data":{"tabs":[...]}}
+//! {"method":"remove_palette","source":"danube"}
 //! ```
+//!
+//! `register_palette` hands data to the command palette's plugins: the
+//! bundled browser plugin turns Danube's tabs and extensions into palette
+//! rows. On a live session the connection owns it and hears of picks from
+//! those rows as `{"event":"palette","source":"danube","command":{...}}`.
 //!
 //! `register_widget` adds a card to the overview, built from text, progress
 //! and button rows ([`crate::widgets`]); on a live session the connection
@@ -100,6 +107,22 @@ pub enum Request {
     RemoveWidget {
         /// Its ID.
         id: String,
+    },
+    /// Register or replace data for the palette's plugins under `source`,
+    /// such as a browser's tabs ([`crate::palette::Sources`]). On a live
+    /// session's socket the connection then owns it, hears of picks from
+    /// the rows plugins make of it as `palette` events, and takes it away
+    /// when it closes.
+    RegisterPalette {
+        /// The program's name, such as `danube`.
+        source: String,
+        /// Its data, in the shape its plugin reads.
+        data: Value,
+    },
+    /// Remove a program's palette data.
+    RemovePalette {
+        /// Its source name.
+        source: String,
     },
 }
 
@@ -679,6 +702,20 @@ fn handle(shell: &mut Shell, request: Request) -> (Result<Value, String>, Vec<Ef
         ),
         Request::RemoveWidget { id } => (
             shell.widgets.remove(&id, None).map(|()| Value::Null),
+            Vec::new(),
+        ),
+        Request::RegisterPalette { source, data } => (
+            shell
+                .palette_sources
+                .register(source, data, None)
+                .map(|()| Value::Null),
+            Vec::new(),
+        ),
+        Request::RemovePalette { source } => (
+            shell
+                .palette_sources
+                .remove(&source, None)
+                .map(|()| Value::Null),
             Vec::new(),
         ),
     };

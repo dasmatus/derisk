@@ -41,6 +41,10 @@
               ./crates/derisk-portal/data
               ./crates/derisk-apps/data
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./crates)
+              # The command palette's plugins, which derisk-palette's build
+              # script compiles to WebAssembly, and the interface they share.
+              (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./plugins)
+              ./crates/derisk-palette/wit
             ];
           };
 
@@ -78,9 +82,18 @@
             strictDeps = true;
             pname = "derisk-workspace";
             version = "0.1.0";
-            nativeBuildInputs = [ pkgs.pkg-config ];
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              # nixpkgs' rustc carries wasm32-unknown-unknown's std, for the
+              # palette plugins, but links it with lld from PATH rather than
+              # a bundled rust-lld.
+              pkgs.lld
+            ];
             buildInputs = buildLibs;
             LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibs;
+            # The checks build with the dev profile (below); without debug
+            # info its test binaries are a fraction of the disk and memory.
+            CARGO_PROFILE_DEV_DEBUG = "0";
           };
 
           # The CI matrix (default and host) plus the apps' preview window.
@@ -90,21 +103,29 @@
           };
 
           depsFor =
-            features:
+            profile: features:
             craneLib.buildDepsOnly (
               commonArgs
               // {
                 pname = "derisk-workspace";
+                CARGO_PROFILE = profile;
                 cargoExtraArgs = "--locked --workspace ${features}";
               }
             );
-          deps = lib.mapAttrs (_: depsFor) variants;
+          # Clippy and the tests build with the dev profile, as the check job
+          # does. Release is fat LTO with one codegen unit, and linking every
+          # test binary that way, each carrying wasmtime for the palette's
+          # plugins, beside the two packages' own links had the CI runner
+          # shut down mid-build.
+          deps = lib.mapAttrs (_: depsFor "dev") variants;
+          releaseDeps = depsFor "release" variants.host;
 
           variantChecks = lib.concatMapAttrs (
             name: features:
             let
               args = commonArgs // {
                 pname = "derisk-workspace";
+                CARGO_PROFILE = "dev";
                 cargoArtifacts = deps.${name};
                 cargoExtraArgs = "--locked --workspace ${features}";
               };
@@ -132,7 +153,7 @@
               commonArgs
               // {
                 pname = "derisk";
-                cargoArtifacts = deps.host;
+                cargoArtifacts = releaseDeps;
                 cargoExtraArgs = "--locked -p derisk -p derisk-portal --features derisk/host";
                 doCheck = false;
                 postInstall = ''
@@ -158,7 +179,7 @@
               commonArgs
               // {
                 pname = "derisk-preview";
-                cargoArtifacts = deps.host;
+                cargoArtifacts = releaseDeps;
                 cargoExtraArgs = "--locked -p derisk-apps --features preview --bin derisk-preview";
                 doCheck = false;
                 postFixup = withRuntimeRpath;
@@ -183,7 +204,7 @@
 
           devShells.default = craneLib.devShell {
             inherit (commonArgs) LD_LIBRARY_PATH;
-            inputsFrom = [ deps.host ];
+            inputsFrom = [ releaseDeps ];
             packages = with pkgs; [
               rust-analyzer
               python3 # scripts/showcase.py

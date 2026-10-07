@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "plugins/*"]
 # A bare `cargo build`, `cargo test` or `cargo run` at the root means derisk
 # itself and the shell crates its binary is made of, as it did when derisk
 # was the root package. The apps, the portal and the GPUI runtime are built
@@ -11,12 +11,13 @@ default-members = [
     "crates/derisk-geom",
     "crates/derisk-install",
     "crates/derisk-login",
+    "crates/derisk-palette",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.96"
 license = "GPL-3.0-only"
 repository = "https://github.com/dasmatus/derisk"
 
@@ -61,6 +62,26 @@ tracing-journald = "0.3.2"
 # `fancy`; each binary turns `fancy` on for the graphical report.
 miette = "7.6.0"
 thiserror = "2"
+derisk-palette = { path = "crates/derisk-palette", version = "0.1.0" }
+# Scoped threads hand their results back over bounded channels.
+crossbeam-channel = "0.5.15"
+# The command palette's plugin host, built the way pm hosts its plugins
+# (losos-project/pm, `src/plugin/engine.rs`): the component model and
+# Cranelift, nothing else. No WASI is compiled in to be linked by mistake.
+wasmtime = { version = "49.0.0", default-features = false, features = [
+    "component-model",
+    "cranelift",
+    "runtime",
+    "std",
+] }
+# Wraps the plugins' core modules in components, in derisk-palette's build
+# script.
+wit-component = "0.261.0"
+# The plugins' side of the WIT, in plugins/sdk.
+wit-bindgen = { version = "0.62.0", default-features = false, features = ["macros", "realloc"] }
+# Signatures on plugins a person installs: pm's detached ed25519 `.sig`
+# format and trust store, so `pm sign` signs a palette plugin too.
+pm-signing = { git = "https://github.com/losos-project/pm" }
 
 # One codegen unit and fat LTO across every crate, mcsapi included: release
 # builds are the ones that ship, so they trade build time for inlining across
@@ -68,4 +89,40 @@ thiserror = "2"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# Cranelift compiles the palette's plugins when it first opens. Unoptimised
+# that takes seconds, which every test that opens the palette would pay, as
+# pm found for its own plugins; optimised it is a fraction of one. Only the
+# compiler is optimised, so derisk's own code stays as debuggable.
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+[profile.dev.package.cranelift-entity]
+opt-level = 3
+[profile.dev.package.cranelift-bforest]
+opt-level = 3
+[profile.dev.package.regalloc2]
+opt-level = 3
+[profile.dev.package.wasmparser]
+opt-level = 3
+[profile.dev.package.wasmtime-environ]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3
+[profile.dev.package.wasmtime]
+opt-level = 3
+[profile.dev.package.gimli]
+opt-level = 3
+
+# The palette plugins under plugins/, as derisk-palette's build script
+# compiles them to WebAssembly. Cranelift compiles every one of them as the
+# session starts, so their size is latency: `z` roughly halves it, and a
+# plugin that panics only has to trap. What a call costs is copying the
+# view in and the rows out, which no opt-level changes.
+[profile.palette-plugin]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
+strip = true
 

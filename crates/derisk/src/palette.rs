@@ -2,14 +2,23 @@
 //!
 //! Super+Space opens it. Typing searches, in one ranked list:
 //!
-//! - apps (the core apps and anything the host registers),
+//! - apps (the core apps and anything installed) and their actions,
 //! - open windows on every workspace,
 //! - commands for the focused window, including its app's own global-menu
 //!   items, so apps get palette commands just by registering menus,
 //! - shell commands (overview, layouts, workspaces, moving windows),
 //! - session commands (lock, suspend, log out, ...), tray items and failed
 //!   user units,
-//! - settings pages and files.
+//! - a browser's tabs and extensions, files, and
+//! - for the typed text itself, the assistant, Sonne's agent, an address to
+//!   open and a web search.
+//!
+//! Every one of those rows comes from a plugin: a WebAssembly component
+//! run in a sandbox by `derisk-palette`, bundled in derisk or installed
+//! (see that crate). This module is the core around them. It shows each
+//! plugin the parts of the desktop it asked for ([`view`]), keeps their
+//! answers until what they read changes ([`Catalog`]), turns the actions in
+//! them into [`Action`]s, and ranks the rows for the query.
 //!
 //! Anything that matches nothing (or reads like a sentence the assistant
 //! understands, such as "open firefox and snap it left") goes to the
@@ -34,78 +43,50 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
+pub use derisk_palette::{App, AppAction, Category, File, Plugins, Position, View};
+use derisk_palette::{Desk, Hook, Input, MenuCommand, Registration, TrayItem, Window, Workspace};
+use tracing::warn;
+
 use crate::{
-    action::{Action, LayoutKind},
+    action::Action,
     assistant,
     desktop::DesktopEntry,
     menu::{self, MenuEntry},
     shell::Shell,
-    systemd::SessionOp,
 };
 
-/// What an entry is, which decides its group heading and search prefix.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub enum Category {
-    /// An application to launch.
-    App,
-    /// An app's desktop action, such as "New Private Window".
-    AppAction,
-    /// An open window to switch to.
-    Window,
-    /// A command from the focused app's own menus.
-    AppCommand,
-    /// A shell command (window management, overview, layouts).
-    Command,
-    /// Switch to a workspace or move the window there.
-    Workspace,
-    /// A settings page.
-    Setting,
-    /// Lock, suspend, log out, reboot, power off.
-    Session,
-    /// A tray item or a failed service.
-    System,
-    /// A file or folder.
-    File,
-    /// Ask the assistant.
-    Ask,
-    /// Search the web with the chosen engine.
-    Web,
-    /// Hand the request to the agent set up in Sonne.
-    Agent,
+/// Whether rows of `category` are commands, which `>` narrows to.
+fn is_command(category: Category) -> bool {
+    matches!(
+        category,
+        Category::AppAction
+            | Category::AppCommand
+            | Category::Command
+            | Category::Workspace
+            | Category::Session
+            | Category::System
+    )
 }
 
-impl Category {
-    /// Group heading shown above entries of this kind.
-    pub fn heading(self) -> &'static str {
-        match self {
-            Self::App => "Apps",
-            Self::AppAction => "App actions",
-            Self::Window => "Windows",
-            Self::AppCommand => "App commands",
-            Self::Command => "Commands",
-            Self::Workspace => "Workspaces",
-            Self::Setting => "Settings",
-            Self::Session => "Session",
-            Self::System => "System",
-            Self::File => "Files",
-            Self::Ask => "Assistant",
-            Self::Web => "Web",
-            Self::Agent => "Agent",
-        }
-    }
-
-    fn is_command(self) -> bool {
-        matches!(
-            self,
-            Self::AppAction
-                | Self::AppCommand
-                | Self::Command
-                | Self::Workspace
-                | Self::Session
-                | Self::System
-        )
+/// Where rows of `category` sit in the catalog, which breaks ties between
+/// equal scores: apps, windows, menus and commands, workspaces, the
+/// session, the system, then the many rows that only show once typed for.
+fn catalog_order(category: Category) -> u8 {
+    match category {
+        Category::App => 0,
+        Category::Window => 1,
+        Category::AppCommand => 2,
+        Category::Command => 3,
+        Category::Workspace => 4,
+        Category::Session => 5,
+        Category::System => 6,
+        Category::Tab => 7,
+        Category::AppAction | Category::Setting | Category::Extension => 8,
+        Category::File => 9,
+        Category::Ask | Category::Web | Category::Agent => 10,
     }
 }
 
@@ -174,53 +155,430 @@ impl Entry {
         format!("{:?}:{}:{}", self.category, self.title, self.detail)
     }
 
-    /// An app launcher entry.
-    pub fn app(id: &str, name: &str, summary: &str, icon: &str, keywords: &[&str]) -> Self {
-        Self::new(
-            Category::App,
-            icon,
-            name,
-            vec![Action::Launch { app: id.to_owned() }],
-        )
-        .detail(summary)
-        .keywords(format!("{id} {}", keywords.join(" ")))
+    /// A plugin's row with its actions parsed, or `None` when one does not
+    /// parse. A row that logs out, reboots or powers off asks for a second
+    /// Enter whatever the plugin said.
+    pub fn from_plugin(row: derisk_palette::Entry) -> Option<Self> {
+        let actions = row
+            .actions
+            .iter()
+            .map(|a| serde_json::from_str::<Action>(a))
+            .collect::<Result<Vec<_>, _>>()
+            .inspect_err(|e| warn!(title = row.title, "palette row dropped: {e}"))
+            .ok()?;
+        let destructive = actions
+            .iter()
+            .any(|a| matches!(a, Action::Session { op, .. } if op.is_destructive()));
+        Some(Self {
+            category: row.category,
+            title: row.title,
+            detail: row.detail,
+            keywords: row.keywords,
+            icon: row.icon,
+            shortcut: row.shortcut,
+            actions,
+            confirm: row.confirm || destructive,
+        })
     }
 }
 
-/// Entries for an app from its `.desktop` file: the app itself, then one
-/// per desktop action.
-pub fn desktop_app(app: &DesktopEntry, icon: &str) -> Vec<Entry> {
-    let summary = if app.comment.is_empty() {
-        &app.generic_name
+/// An app as the palette's plugins see it.
+pub fn app(id: &str, name: &str, summary: &str, icon: &str, keywords: &[&str]) -> App {
+    App {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        summary: summary.to_owned(),
+        icon: icon.to_owned(),
+        keywords: format!("{id} {}", keywords.join(" ")),
+        actions: Vec::new(),
+    }
+}
+
+/// An app from its `.desktop` file, with its desktop actions.
+pub fn desktop_app(entry: &DesktopEntry, icon: &str) -> App {
+    let summary = if entry.comment.is_empty() {
+        &entry.generic_name
     } else {
-        &app.comment
+        &entry.comment
     };
-    let mut out = vec![
+    App {
+        id: entry.id.clone(),
+        name: entry.name.clone(),
+        summary: summary.clone(),
+        icon: icon.to_owned(),
+        keywords: entry.search_terms(),
+        actions: entry
+            .actions
+            .iter()
+            .map(|a| AppAction {
+                id: a.id.clone(),
+                name: a.name.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// An indexed path as the files plugin sees it, shown under `home` as
+/// `~/...`. Asks the filesystem whether it is a folder, so it belongs where
+/// the index is built, off the frame.
+pub fn file(path: &Path, home: Option<&Path>) -> File {
+    let shown = match home.map(|h| path.strip_prefix(h)) {
+        Some(Ok(rel)) => format!("~/{}", rel.display()),
+        _ => path.display().to_string(),
+    };
+    File {
+        path: path.display().to_string(),
+        shown,
+        folder: path.is_dir(),
+    }
+}
+
+/// The desktop as the palette's plugins see it, without the files, which
+/// [`Catalog`] adds only for a plugin that reads them.
+pub fn view(shell: &Shell, apps: &[App]) -> View {
+    let focused = shell.focused();
+    let mut windows = Vec::new();
+    let mut desk = Desk {
+        workspaces: Vec::new(),
+        window_focused: focused.is_some(),
+        can_add_workspace: shell.can_add_workspace(),
+    };
+    let active = shell.active_workspace();
+    for (i, &ws) in shell.workspaces().iter().enumerate() {
+        let number = i as u32 + 1;
+        let on = shell.windows_on(ws);
+        desk.workspaces.push(Workspace {
+            number,
+            windows: on.len() as u32,
+            active: u64::from(number) == active,
+        });
+        for w in on {
+            let (app, title) = shell.window_label(w).unwrap_or_default();
+            windows.push(Window {
+                id: w.get(),
+                app: shell.apps.look(app).name.into_owned(),
+                title: title.to_owned(),
+                workspace: number,
+                minimized: shell.is_minimized(w),
+                focused: Some(w) == focused,
+            });
+        }
+    }
+
+    // The focused app's own menus, then the shell's Window menu.
+    let mut menus = Vec::new();
+    if let Some(w) = focused {
+        let window = Some(w.get());
+        let (app, _) = shell.window_label(w).unwrap_or_default();
+        let app = shell.apps.look(app).name.into_owned();
+        let command =
+            |path: &str, shortcut: Option<&str>, shell: bool, action: Action| MenuCommand {
+                label: path.rsplit(" › ").next().unwrap_or(path).to_owned(),
+                path: path.to_owned(),
+                app: app.clone(),
+                shortcut: shortcut.map(str::to_owned),
+                shell,
+                actions: vec![serde_json::to_string(&action).unwrap_or_default()],
+            };
+        for m in shell.menus.app_menus(w.get()) {
+            flatten(&m.entries, &m.title, &mut |id, path, shortcut| {
+                let action = Action::ActivateMenu {
+                    window,
+                    item: id.to_owned(),
+                };
+                menus.push(command(path, shortcut, false, action));
+            });
+        }
+        let window_menu = menu::window_menu();
+        flatten(&window_menu.entries, "Window", &mut |id, path, shortcut| {
+            if let Some(action) = menu::shell_action(id, w.get()) {
+                menus.push(command(path, shortcut, true, action));
+            }
+        });
+    }
+
+    View {
+        hour: shell.clock.hour,
+        apps: apps.to_vec(),
+        suggested: shell.habits.suggestions(shell.clock.hour, 5),
+        windows,
+        menus,
+        desk,
+        tray: shell
+            .tray
+            .items()
+            .map(|item| TrayItem {
+                id: item.id.clone(),
+                title: item.title.clone(),
+            })
+            .collect(),
+        failed_units: shell.failed_units.clone(),
+        files: Vec::new(),
+        search_engine: shell.effects.search.map(|e| e.name().to_owned()),
+        registered: shell
+            .palette_sources
+            .iter()
+            .map(|(source, data)| Registration {
+                source: source.to_owned(),
+                data: data.to_string(),
+            })
+            .collect(),
+    }
+}
+
+/// The assistant as plugins call it: [`assistant::interpret`] with its
+/// actions as JSON.
+fn interpret(text: &str) -> Result<Vec<String>, String> {
+    assistant::interpret(text)
+        .map(|actions| {
+            actions
+                .iter()
+                .map(|a| serde_json::to_string(a).unwrap_or_default())
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+}
+
+static PLUGINS: OnceLock<Plugins> = OnceLock::new();
+
+/// The palette's plugins: the bundled ones, then the system's, then the
+/// person's signed ones (see `derisk-palette` for where each comes from).
+/// Loaded once, on first use; [`preload`] starts that early.
+///
+/// # Panics
+///
+/// If the bundled plugins do not load, which is a bug in derisk's build.
+pub fn plugins() -> &'static Plugins {
+    PLUGINS.get_or_init(|| {
+        let started = std::time::Instant::now();
+        let mut plugins = Plugins::bundled(interpret).expect("derisk's bundled palette plugins");
+        let data_dirs = std::env::var_os("XDG_DATA_DIRS")
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+        let data_dirs: Vec<PathBuf> = std::env::split_paths(&data_dirs).collect();
+        let mut refused = plugins.load_system(data_dirs.iter().map(PathBuf::as_path));
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let xdg = |var: &str, fallback: &str| {
+            std::env::var_os(var)
+                .filter(|d| !d.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| home.as_ref().map(|h| h.join(fallback)))
+        };
+        if let (Some(data), Some(config)) = (
+            xdg("XDG_DATA_HOME", ".local/share"),
+            xdg("XDG_CONFIG_HOME", ".config"),
+        ) {
+            let dir = data.join(derisk_palette::PLUGIN_DIR);
+            if dir.is_dir() {
+                match pm_trust(&config) {
+                    Ok(trust) => refused.extend(plugins.load_signed(&dir, &trust)),
+                    Err(e) => refused.push(e),
+                }
+            }
+        }
+        for error in refused {
+            warn!("palette plugin refused: {error}");
+        }
+        tracing::info!(
+            plugins = plugins.len(),
+            ms = started.elapsed().as_millis() as u64,
+            "palette plugins loaded"
+        );
+        plugins
+    })
+}
+
+/// The keys trusted to sign the person's palette plugins.
+fn pm_trust(config: &Path) -> miette::Result<derisk_palette::TrustStore> {
+    derisk_palette::TrustStore::load(&config.join(derisk_palette::TRUST_DIR))
+}
+
+/// Loads [`plugins`] now, so the palette's first opening does not wait for
+/// them to compile. For a thread of its own at startup.
+pub fn preload() {
+    plugins();
+}
+
+/// What one plugin last answered, and from what.
+#[derive(Debug, Default)]
+struct Answer {
+    /// The view it was asked with, files left out.
+    view: Option<View>,
+    /// [`Catalog::files_generation`] then, if it reads files.
+    files: Option<u64>,
+    rows: Vec<Entry>,
+}
+
+/// The palette's rows, kept between frames: each plugin is asked again
+/// only when a part of the desktop it reads has changed, and the query
+/// rows only when the query has.
+#[derive(Debug, Default)]
+pub struct Catalog {
+    answers: Vec<Answer>,
+    entries: Vec<Entry>,
+    files_generation: u64,
+    built: bool,
+    query: Option<(String, View)>,
+    rows: Rows,
+}
+
+/// The rows for the typed text, by where they go.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rows {
+    /// The assistant's reading of the text.
+    pub ask: Option<Entry>,
+    /// Above the catalog's matches.
+    pub top: Vec<Entry>,
+    /// Below them.
+    pub bottom: Vec<Entry>,
+}
+
+impl Catalog {
+    /// Tells the catalog the files changed, so the plugins reading them
+    /// are asked again.
+    pub fn files_changed(&mut self) {
+        self.files_generation += 1;
+    }
+
+    /// The catalog for `view` and `files`, asking again only the plugins
+    /// whose part of it changed.
+    pub fn entries(&mut self, plugins: &Plugins, view: &View, files: &[File]) -> &[Entry] {
+        self.answers.resize_with(plugins.len(), Answer::default);
+        let stale: Vec<(usize, View, Option<u64>)> = plugins
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.has(Hook::Entries))
+            .filter_map(|(i, p)| {
+                let seen = p.view(view);
+                let files = p.reads(Input::Files).then_some(self.files_generation);
+                let answer = &self.answers[i];
+                (answer.view.as_ref() != Some(&seen) || answer.files != files)
+                    .then_some((i, seen, files))
+            })
+            .collect();
+        if stale.is_empty() && self.built {
+            return &self.entries;
+        }
+        let fresh = plugins.each(
+            |i, _| stale.iter().any(|(s, ..)| *s == i),
+            |p| {
+                let mut seen = p.view(view);
+                if p.reads(Input::Files) {
+                    seen.files = files.to_vec();
+                }
+                plugins.entries(p, &seen)
+            },
+        );
+        for ((index, rows), (_, seen, files)) in fresh.into_iter().zip(stale) {
+            self.answers[index] = Answer {
+                view: Some(seen),
+                files,
+                rows: rows.into_iter().filter_map(Entry::from_plugin).collect(),
+            };
+        }
+        self.built = true;
+        let mut entries: Vec<Entry> = self
+            .answers
+            .iter()
+            .flat_map(|a| a.rows.iter().cloned())
+            .collect();
+        // Stable: within a category, plugins' own order stands.
+        entries.sort_by_key(|e| catalog_order(e.category));
+        self.entries = entries;
+        &self.entries
+    }
+
+    /// The rows for `query`, asked again only when it or the view changed.
+    /// Only a query with no scope prefix has any.
+    pub fn rows(&mut self, plugins: &Plugins, view: &View, query: &str) -> &Rows {
+        let (scope, text) = scope(query);
+        if scope != Scope::All || text.is_empty() {
+            self.query = None;
+            self.rows = Rows::default();
+            return &self.rows;
+        }
+        if self
+            .query
+            .as_ref()
+            .is_some_and(|(q, v)| q == text && v == view)
+        {
+            return &self.rows;
+        }
+        let answers = plugins.each(|_, p| p.has(Hook::Query), |p| plugins.query(p, view, text));
+        let mut rows = Rows::default();
+        for row in answers.into_iter().flat_map(|(_, rows)| rows) {
+            let position = row.position;
+            let Some(entry) = Entry::from_plugin(row) else {
+                continue;
+            };
+            if entry.category == Category::Ask {
+                rows.ask.get_or_insert(entry);
+            } else if position == Position::Top {
+                rows.top.push(entry);
+            } else {
+                rows.bottom.push(entry);
+            }
+        }
+        self.query = Some((text.to_owned(), view.clone()));
+        self.rows = rows;
+        &self.rows
+    }
+}
+
+/// Everything the palette's catalog holds for `shell`, `apps` and `files`,
+/// from the loaded [`plugins`], asked afresh.
+pub fn entries(shell: &Shell, apps: &[App], files: &[File]) -> Vec<Entry> {
+    Catalog::default()
+        .entries(plugins(), &view(shell, apps), files)
+        .to_vec()
+}
+
+/// The rows for typed `query` in `shell`, from the loaded [`plugins`].
+pub fn rows(shell: &Shell, query: &str) -> Rows {
+    Catalog::default()
+        .rows(plugins(), &view(shell, &[]), query)
+        .clone()
+}
+
+/// The assistant's row for `text`: what it would do, or why it can't.
+pub fn ask(text: &str) -> Entry {
+    let rows = Catalog::default()
+        .rows(plugins(), &View::default(), text)
+        .clone();
+    rows.ask.unwrap_or_else(|| {
         Entry::new(
-            Category::App,
-            icon,
-            app.name.clone(),
-            vec![Action::Launch {
-                app: app.id.clone(),
-            }],
+            Category::Ask,
+            "tool-magic",
+            format!("Ask derisk: {text}"),
+            Vec::new(),
         )
-        .detail(summary.clone())
-        .keywords(app.search_terms()),
-    ];
-    out.extend(app.actions.iter().map(|action| {
-        Entry::new(
-            Category::AppAction,
-            icon,
-            action.name.clone(),
-            vec![Action::LaunchAction {
-                app: app.id.clone(),
-                id: action.id.clone(),
-            }],
-        )
-        .detail(app.name.clone())
-        .keywords(format!("{} {}", app.name, action.id).to_lowercase())
-    }));
-    out
+        .detail("No assistant plugin is loaded")
+    })
+}
+
+/// The rows the palette lists for `query`, in order: the assistant first
+/// when the query reads like a request it understands, then the query's
+/// top rows, the catalog's `hits`, the assistant otherwise (only when it
+/// understood, or nothing else matched, to say why), then the query's
+/// bottom rows.
+pub fn list<'a>(
+    entries: &'a [Entry],
+    hits: &[usize],
+    rows: &'a Rows,
+    query: &str,
+) -> Vec<&'a Entry> {
+    let ask = rows
+        .ask
+        .as_ref()
+        .filter(|ask| !ask.actions.is_empty() || hits.is_empty());
+    let first = ask.filter(|_| prefer_assistant(entries, hits, query));
+    first
+        .into_iter()
+        .chain(&rows.top)
+        .chain(hits.iter().map(|&i| &entries[i]))
+        .chain(ask.filter(|_| first.is_none()))
+        .chain(&rows.bottom)
+        .collect()
 }
 
 /// How often each entry was chosen, so frequent picks rank first.
@@ -351,7 +709,7 @@ pub fn scope(query: &str) -> (Scope, &str) {
 fn in_scope(scope: Scope, category: Category) -> bool {
     match scope {
         Scope::All => true,
-        Scope::Commands => category.is_command(),
+        Scope::Commands => is_command(category),
         Scope::Windows => category == Category::Window,
         Scope::Files => category == Category::File,
         Scope::Ask => false,
@@ -402,436 +760,6 @@ pub fn prefer_assistant(entries: &[Entry], hits: &[usize], query: &str) -> bool 
         lower.split_whitespace().all(|w| title.contains(w))
     });
     !close && assistant::interpret(text).is_ok()
-}
-
-/// The assistant entry for a query: what it would do, or why it can't.
-///
-/// Session operations count as confirmed: the user typed them. Destructive
-/// ones still need the palette's second Enter ([`Entry::confirm`]).
-pub fn ask(query: &str) -> Entry {
-    let (_, text) = scope(query);
-    match assistant::interpret(text) {
-        Ok(actions) => {
-            let confirm = actions
-                .iter()
-                .any(|a| matches!(a, Action::Session { op, .. } if op.is_destructive()));
-            let steps = actions.len();
-            let mut entry = Entry::new(
-                Category::Ask,
-                "tool-magic",
-                format!("Ask derisk: {text}"),
-                actions
-                    .into_iter()
-                    .map(|a| match a {
-                        Action::Session { op, .. } => Action::Session {
-                            op,
-                            confirmed: true,
-                        },
-                        other => other,
-                    })
-                    .collect(),
-            )
-            .detail(if steps == 1 {
-                "1 step".to_owned()
-            } else {
-                format!("{steps} steps")
-            });
-            entry.confirm = confirm;
-            entry
-        }
-        Err(e) => Entry::new(
-            Category::Ask,
-            "tool-magic",
-            format!("Ask derisk: {text}"),
-            Vec::new(),
-        )
-        .detail(e.to_string()),
-    }
-}
-
-/// The entry handing a request the assistant did not understand to the
-/// agent set up in Sonne, which can do far more than the built-in rules with
-/// the model key or agent CLI the person installed there. It only opens the
-/// request in Sonne's agent panel, for the person to send.
-pub fn agent(query: &str) -> Option<Entry> {
-    let (scope, text) = scope(query);
-    if scope != Scope::All || text.is_empty() || assistant::interpret(text).is_ok() {
-        return None;
-    }
-    Some(
-        Entry::new(
-            Category::Agent,
-            "tool-magic",
-            format!("Ask Sonne's agent: {text}"),
-            vec![Action::AskAgent {
-                text: text.to_owned(),
-            }],
-        )
-        .detail("Opens in Sonne, with the model or agent CLI set up there"),
-    )
-}
-
-/// The web search entry for a query, when a search engine has been chosen
-/// (Settings, Default apps). The palette shows it after everything else, so
-/// it is there for what nothing on the computer matches.
-pub fn web(query: &str, engine: Option<derisk_settings::choice::SearchEngine>) -> Option<Entry> {
-    let (scope, text) = scope(query);
-    let engine = engine.filter(|_| scope == Scope::All && !text.is_empty())?;
-    Some(
-        Entry::new(
-            Category::Web,
-            "system-search",
-            format!("Search the web for “{text}”"),
-            vec![Action::SearchWeb {
-                query: text.to_owned(),
-            }],
-        )
-        .detail(engine.name()),
-    )
-}
-
-/// Everything the palette can offer right now.
-///
-/// `extra` holds host-provided entries (apps, settings pages); `files` are
-/// paths from [`index_files`].
-pub fn entries(shell: &Shell, extra: &[Entry], files: &[PathBuf]) -> Vec<Entry> {
-    let mut out = Vec::new();
-    let suggested = shell.habits.suggestions(shell.clock.hour, 5);
-
-    // Apps: suggested ones first, so they lead an empty query.
-    let mut apps: Vec<&Entry> = extra
-        .iter()
-        .filter(|e| e.category == Category::App)
-        .collect();
-    apps.sort_by_key(|e| {
-        e.actions
-            .iter()
-            .find_map(|a| match a {
-                Action::Launch { app } => suggested.iter().position(|s| s == app),
-                _ => None,
-            })
-            .unwrap_or(usize::MAX)
-    });
-    out.extend(apps.into_iter().cloned());
-    // Suggested commands that are not in the catalog (plain programs).
-    for app in &suggested {
-        let known = out
-            .iter()
-            .any(|e| e.actions == [Action::Launch { app: app.clone() }]);
-        if !known {
-            out.push(Entry::app(app, app, "Suggested", "🖥", &[]));
-        }
-    }
-
-    // Windows on every workspace.
-    let focused = shell.focused();
-    for (i, &ws) in shell.workspaces().iter().enumerate() {
-        for w in shell.windows_on(ws) {
-            let (app, title) = shell.window_label(w).unwrap_or_default();
-            let app = shell.apps.look(app).name;
-            let minimized = shell.is_minimized(w);
-            let action = if minimized {
-                Action::Restore { window: w.get() }
-            } else {
-                Action::Focus { window: w.get() }
-            };
-            let name = if title.is_empty() { &app } else { title };
-            let mut detail = format!("{app} · workspace {}", i + 1);
-            if minimized {
-                detail.push_str(" · minimized");
-            }
-            if Some(w) == focused {
-                detail.push_str(" · focused");
-            }
-            out.push(
-                Entry::new(Category::Window, "view-restore", name, vec![action])
-                    .detail(detail)
-                    .keywords("window switch"),
-            );
-        }
-    }
-
-    // The focused app's own menus, then the shell's Window menu.
-    if let Some(w) = focused {
-        let window = Some(w.get());
-        let (app, _) = shell.window_label(w).unwrap_or_default();
-        let app = shell.apps.look(app).name;
-        for m in shell.menus.app_menus(w.get()) {
-            flatten(&m.entries, &m.title, &mut |id, path, shortcut| {
-                let mut e = Entry::new(
-                    Category::AppCommand,
-                    "open-menu",
-                    path.rsplit(" › ").next().unwrap_or(path),
-                    vec![Action::ActivateMenu {
-                        window,
-                        item: id.to_owned(),
-                    }],
-                )
-                .detail(format!("{app} · {path}"));
-                e.shortcut = shortcut.map(str::to_owned);
-                out.push(e);
-            });
-        }
-        let window_menu = menu::window_menu();
-        flatten(&window_menu.entries, "Window", &mut |id, path, shortcut| {
-            let Some(action) = menu::shell_action(id, w.get()) else {
-                return;
-            };
-            let title = path.rsplit(" › ").next().unwrap_or(path);
-            let title = if path.contains("Snap") {
-                format!("Snap {title}")
-            } else {
-                title.to_owned()
-            };
-            let mut e = Entry::new(Category::Command, "window-maximize", title, vec![action])
-                .detail(format!("Window · {app}"))
-                .keywords("window");
-            e.shortcut = shortcut.map(str::to_owned);
-            out.push(e);
-        });
-    }
-
-    // Shell commands.
-    let commands = [
-        (
-            "Overview",
-            "view-app-grid",
-            Action::Overview { visible: None },
-            Some("Super"),
-            "expose desktop show all",
-        ),
-        (
-            "On-Screen Keyboard",
-            "input-keyboard",
-            Action::Keyboard { visible: None },
-            None,
-            "osk virtual touch type keys show hide",
-        ),
-        (
-            "Next Window",
-            "go-next",
-            Action::FocusNext,
-            Some("Alt+Tab"),
-            "focus switch cycle",
-        ),
-        (
-            "Previous Window",
-            "go-previous",
-            Action::FocusPrevious,
-            Some("Alt+Shift+Tab"),
-            "focus switch cycle back",
-        ),
-        (
-            "Tall Layout",
-            "view-dual",
-            Action::SetLayout {
-                layout: LayoutKind::Tall,
-            },
-            Some("Super+Shift+M"),
-            "tiling main stack",
-        ),
-        (
-            "Monocle Layout",
-            "view-fullscreen",
-            Action::SetLayout {
-                layout: LayoutKind::Monocle,
-            },
-            Some("Super+M"),
-            "tiling fullscreen one at a time",
-        ),
-    ];
-    for (title, icon, action, shortcut, keywords) in commands {
-        let mut e = Entry::new(Category::Command, icon, title, vec![action])
-            .detail("Desktop")
-            .keywords(keywords);
-        e.shortcut = shortcut.map(str::to_owned);
-        out.push(e);
-    }
-    // Workspaces, by position (they are dynamic; see `Shell::workspaces`).
-    let active = shell.active_workspace();
-    let shortcut = |chord: &str, n: u64| (n <= 9).then(|| format!("{chord}{n}"));
-    for (i, &ws) in shell.workspaces().iter().enumerate() {
-        let n = i as u64 + 1;
-        if n != active {
-            let count = shell.windows_on(ws).len();
-            let mut e = Entry::new(
-                Category::Workspace,
-                "video-display",
-                format!("Go to Workspace {n}"),
-                vec![Action::SwitchWorkspace { workspace: n }],
-            )
-            .detail(match count {
-                0 => "Empty".to_owned(),
-                1 => "1 window".to_owned(),
-                c => format!("{c} windows"),
-            })
-            .keywords("switch desktop");
-            e.shortcut = shortcut("Super+", n);
-            out.push(e);
-            if focused.is_some() {
-                let mut e = Entry::new(
-                    Category::Workspace,
-                    "go-jump",
-                    format!("Move Window to Workspace {n}"),
-                    vec![Action::MoveToWorkspace {
-                        window: None,
-                        workspace: n,
-                    }],
-                )
-                .keywords("send throw desktop");
-                e.shortcut = shortcut("Super+Shift+", n);
-                out.push(e);
-            }
-        }
-    }
-    if focused.is_some() && shell.can_add_workspace() {
-        let n = shell.workspaces().len() as u64 + 1;
-        let mut e = Entry::new(
-            Category::Workspace,
-            "go-jump",
-            "Move Window to New Workspace",
-            vec![Action::MoveToWorkspace {
-                window: None,
-                workspace: n,
-            }],
-        )
-        .keywords("send throw desktop space add");
-        e.shortcut = shortcut("Super+Shift+", n);
-        out.push(e);
-    }
-
-    // Session.
-    for (title, icon, op, keywords) in [
-        (
-            "Lock Screen",
-            "system-lock-screen",
-            SessionOp::Lock,
-            "lock away system session",
-        ),
-        (
-            "Suspend",
-            "system-suspend",
-            SessionOp::Suspend,
-            "sleep system power",
-        ),
-        (
-            "Hibernate",
-            "system-hibernate",
-            SessionOp::Hibernate,
-            "sleep disk system power",
-        ),
-        (
-            "Log Out",
-            "system-log-out",
-            SessionOp::Logout,
-            "sign out logout exit system session",
-        ),
-        (
-            "Restart",
-            "system-reboot",
-            SessionOp::Reboot,
-            "reboot system power",
-        ),
-        (
-            "Shut Down",
-            "system-shutdown",
-            SessionOp::PowerOff,
-            "power off poweroff shutdown system",
-        ),
-    ] {
-        let mut e = Entry::new(
-            Category::Session,
-            icon,
-            title,
-            vec![Action::Session {
-                op,
-                confirmed: true,
-            }],
-        )
-        .keywords(keywords);
-        e.confirm = op.is_destructive();
-        out.push(e);
-    }
-
-    // Tray items and failed services.
-    for item in shell.tray.items() {
-        out.push(
-            Entry::new(
-                Category::System,
-                "starred",
-                item.title.clone(),
-                vec![Action::ActivateTray {
-                    id: item.id.clone(),
-                    item: None,
-                }],
-            )
-            .detail("Tray")
-            .keywords(item.id.clone()),
-        );
-    }
-    for unit in &shell.failed_units {
-        out.push(
-            Entry::new(
-                Category::System,
-                "dialog-warning",
-                format!("Restart {unit}"),
-                vec![Action::RestartUnit { unit: unit.clone() }],
-            )
-            .detail("Failed service")
-            .keywords("unit service systemd"),
-        );
-        out.push(
-            Entry::new(
-                Category::System,
-                "dialog-warning",
-                format!("Dismiss {unit}"),
-                vec![Action::ResetFailed { unit: unit.clone() }],
-            )
-            .detail("Failed service")
-            .keywords("unit service systemd reset"),
-        );
-    }
-
-    // Host extras that are not apps (settings pages, ...).
-    out.extend(
-        extra
-            .iter()
-            .filter(|e| e.category != Category::App)
-            .cloned(),
-    );
-
-    // Files.
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    for path in files {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
-        let shown = match &home {
-            Some(h) => match path.strip_prefix(h) {
-                Ok(rel) => format!("~/{}", rel.display()),
-                Err(_) => path.display().to_string(),
-            },
-            None => path.display().to_string(),
-        };
-        let icon = if path.is_dir() {
-            "folder"
-        } else {
-            "text-x-generic"
-        };
-        out.push(
-            Entry::new(
-                Category::File,
-                icon,
-                name,
-                vec![Action::Open {
-                    path: path.display().to_string(),
-                }],
-            )
-            .detail(shown),
-        );
-    }
-    out
 }
 
 /// Visits every enabled menu item as `(id, "Menu › Submenu › Item", shortcut)`.
@@ -885,4 +813,118 @@ pub fn index_files(root: &Path, depth: usize, limit: usize) -> Vec<PathBuf> {
         level = next;
     }
     out
+}
+
+/// Most programs that may register palette data at once.
+const MAX_SOURCES: usize = 32;
+
+/// Largest registration, as JSON text: a browser's tabs and extensions fit
+/// many times over.
+const MAX_SOURCE_BYTES: usize = 256 << 10;
+
+/// Data programs registered for the palette's plugins over the agent socket
+/// (`register_palette`), such as a browser's tabs, and which connection, if
+/// any, owns each. Plugins that asked for a source see its data; picks from
+/// their rows go back to the owner as `palette` events ([`event`]).
+#[derive(Clone, Debug, Default)]
+pub struct Sources {
+    data: BTreeMap<String, serde_json::Value>,
+    owners: BTreeMap<String, u64>,
+}
+
+impl Sources {
+    /// Registers or replaces `source`'s data on behalf of `owner` (none for
+    /// a headless agent). A source another connection owns is refused, so
+    /// one program cannot speak for another.
+    pub fn register(
+        &mut self,
+        source: String,
+        data: serde_json::Value,
+        owner: Option<u64>,
+    ) -> Result<(), String> {
+        let valid = (1..=32).contains(&source.len())
+            && source
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !valid {
+            return Err(format!(
+                "palette source {source:?} must be 1-32 characters of a-z, 0-9 and -"
+            ));
+        }
+        if let Some(&other) = self.owners.get(&source)
+            && Some(other) != owner
+        {
+            return Err(format!(
+                "another connection registered palette source {source}"
+            ));
+        }
+        let size = data.to_string().len();
+        if size > MAX_SOURCE_BYTES {
+            return Err(format!(
+                "palette data for {source} is {size} bytes, more than {MAX_SOURCE_BYTES}"
+            ));
+        }
+        if !self.data.contains_key(&source) && self.data.len() >= MAX_SOURCES {
+            return Err(format!(
+                "at most {MAX_SOURCES} programs may register palette data"
+            ));
+        }
+        match owner {
+            Some(owner) => self.owners.insert(source.clone(), owner),
+            None => self.owners.remove(&source),
+        };
+        self.data.insert(source, data);
+        Ok(())
+    }
+
+    /// Removes `source`, unless another connection than `owner` owns it.
+    pub fn remove(&mut self, source: &str, owner: Option<u64>) -> Result<(), String> {
+        if let Some(&other) = self.owners.get(source)
+            && Some(other) != owner
+        {
+            return Err(format!(
+                "another connection registered palette source {source}"
+            ));
+        }
+        self.owners.remove(source);
+        self.data
+            .remove(source)
+            .map(drop)
+            .ok_or_else(|| format!("no palette source {source}"))
+    }
+
+    /// Removes what connection `owner` registered, as it closes.
+    pub fn disown(&mut self, owner: u64) {
+        let gone: Vec<String> = self
+            .owners
+            .iter()
+            .filter(|&(_, &o)| o == owner)
+            .map(|(s, _)| s.clone())
+            .collect();
+        for source in gone {
+            self.owners.remove(&source);
+            self.data.remove(&source);
+        }
+    }
+
+    /// Whether `source` is registered.
+    pub fn has(&self, source: &str) -> bool {
+        self.data.contains_key(source)
+    }
+
+    /// The connection to tell of a pick from `source`'s rows.
+    pub fn recipient(&self, source: &str) -> Option<u64> {
+        self.owners.get(source).copied()
+    }
+
+    /// Every registration, by source.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &serde_json::Value)> {
+        self.data.iter().map(|(s, d)| (s.as_str(), d))
+    }
+}
+
+/// The event a source's owner hears when a row of its is picked:
+/// `{"event":"palette","source":"danube","command":{...}}`.
+pub fn event(source: &str, command: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"event": "palette", "source": source, "command": command})
 }

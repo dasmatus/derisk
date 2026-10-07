@@ -168,8 +168,8 @@ pub fn effect_argv(
     match effect {
         Effect::Launch { app } => launch_argv(app, instance),
         Effect::Session { op } => Some(session_argv(*op, session_id)),
-        // The shell only emits absolute paths and https URLs, so the path
-        // cannot be read as an option.
+        // The shell only emits absolute paths and URLs with a scheme, so
+        // the path cannot be read as an option.
         Effect::Open { path } => launch_argv("xdg-open", instance).map(|mut argv| {
             argv.push(path.clone());
             argv
@@ -197,7 +197,8 @@ pub fn effect_argv(
         | Effect::Close { .. }
         | Effect::MenuActivated { .. }
         | Effect::TrayActivated { .. }
-        | Effect::WidgetActivated { .. } => None,
+        | Effect::WidgetActivated { .. }
+        | Effect::PaletteCommand { .. } => None,
     }
 }
 

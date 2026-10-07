@@ -109,6 +109,10 @@ pub enum Error {
     #[error("no search engine chosen in Settings")]
     #[diagnostic(code(derisk::shell::no_search_engine))]
     NoSearchEngine,
+    /// No program registered this palette source, or it has gone.
+    #[error("no program registered palette source {0:?}")]
+    #[diagnostic(code(derisk::shell::unknown_palette_source))]
+    UnknownPaletteSource(String),
 }
 
 /// What running a sequence of actions did.
@@ -261,6 +265,9 @@ pub struct Shell {
     pub tray: Tray,
     /// Custom overview widgets registered by programs.
     pub widgets: CustomWidgets,
+    /// Data programs registered for the palette's plugins, such as a
+    /// browser's tabs.
+    pub palette_sources: crate::palette::Sources,
     /// Learned launch habits.
     pub habits: Habits,
     /// Current time, updated by the host.
@@ -332,6 +339,19 @@ pub fn agent_url(text: &str) -> String {
 /// ELF) or Windows `MZ` executable whatever its name, and a zip (a jar or
 /// apk) only without an extension, since documents like .docx are zips too
 /// and their glob decides their type first.
+/// Whether `url` is a web address `xdg-open` hands to a browser: `https://`
+/// or `http://`, with a host, and nothing in it a shell or an argument
+/// parser could read another way.
+fn is_web_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"));
+    rest.is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'))
+        && url.len() <= 8192
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 fn openable(path: &Path) -> bool {
     use std::{io::Read, os::unix::fs::PermissionsExt};
 
@@ -387,6 +407,7 @@ impl Shell {
             menus: GlobalMenu::default(),
             tray: Tray::default(),
             widgets: CustomWidgets::default(),
+            palette_sources: crate::palette::Sources::default(),
             habits: Habits::default(),
             clock: Clock::default(),
             battery: None,
@@ -1058,6 +1079,18 @@ impl Shell {
                 return Ok(vec![Effect::Open {
                     path: engine.url(&query),
                 }]);
+            }
+            Action::OpenUrl { url } => {
+                if !is_web_url(&url) {
+                    return Err(Error::NotOpenable(url));
+                }
+                return Ok(vec![Effect::Open { path: url }]);
+            }
+            Action::PaletteCommand { source, command } => {
+                if !self.palette_sources.has(&source) {
+                    return Err(Error::UnknownPaletteSource(source));
+                }
+                return Ok(vec![Effect::PaletteCommand { source, command }]);
             }
             Action::AskAgent { text } => {
                 // Sonne registers the zed: scheme; xdg-open cannot read a
