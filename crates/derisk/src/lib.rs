@@ -25,7 +25,8 @@
 //! - [`conversation`]: requests and their progress, shown in the palette.
 //! - [`keys`]: keyboard shortcuts.
 //! - [`lock`] and [`greetd`]: the lock screen, and the login conversation
-//!   `derisk greeter` holds with `derisk display-manager` (or greetd).
+//!   `derisk greeter` holds with `derisk display-manager` (or greetd);
+//!   [`polkit`]: the dialog the session's polkit agent shows.
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
 //!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.
@@ -39,7 +40,7 @@
 //! The shell's lowest layers are crates of their own, re-exported here at the
 //! paths they always had: `derisk-geom` ([`geom`], [`snap`], [`decorations`]),
 //! `derisk-desktop` ([`desktop`], [`apps`]), `derisk-install` ([`install`],
-//! [`locale`], [`network`]) and `derisk-login` ([`greetd`], [`lock`]).
+//! [`locale`], [`network`]) and `derisk-login` ([`greetd`], [`lock`], [`polkit`]).
 //!
 //! ```
 //! use derisk::{action::Action, geom::rect, shell::Shell, snap::SnapZone};
@@ -96,4 +97,5 @@ pub use derisk_install::locale;
 pub use derisk_install::network;
 pub use derisk_login::greetd;
 pub use derisk_login::lock;
+pub use derisk_login::polkit;
 pub use mcsapi;

@@ -14,6 +14,10 @@
 //! the system offers one. The screen locks on derisk's own Lock action and,
 //! with `--execute`, whenever logind asks this session to lock
 //! (`loginctl lock-session`, `lock-sessions`).
+//!
+//! With `--execute` the session is also polkit's authentication agent
+//! (`crate::polkit_agent`): a request dims the desktop under a dialog that
+//! takes every key, so no window sees what is typed into it.
 
 use std::{
     collections::HashMap,
@@ -51,7 +55,7 @@ use derisk::{
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
     time::Clock,
-    ui::{ShellUi, set_touch_style, show_lock},
+    ui::{PolkitInput, ShellUi, set_touch_style, show_lock, show_polkit},
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
 };
@@ -59,7 +63,7 @@ use derisk_settings::{Privacy, Shortcuts};
 use mcsapi::WindowId;
 use tracing::{info, warn};
 
-use crate::{pam, unlock};
+use crate::{pam, polkit_agent, unlock};
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
     Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press,
@@ -197,6 +201,8 @@ pub struct Session {
     auth: Option<unlock::Conversation>,
     /// The fingerprint reader's, beside it, when the system offers one.
     reader: Option<unlock::Conversation>,
+    /// polkit's requests to authenticate, the first one shown.
+    polkit: Vec<polkit_agent::Prompt>,
     /// This logind session, from `XDG_SESSION_ID`.
     session_id: Option<String>,
     /// Its logind object path, for the lock signal and the locked hint.
@@ -333,6 +339,7 @@ impl Session {
             user,
             auth: None,
             reader: None,
+            polkit: Vec::new(),
             session_id,
             session_path,
         }
@@ -407,6 +414,73 @@ impl Session {
             self.reader = None;
             self.set_locked_hint(false);
             info!("screen unlocked");
+        }
+    }
+
+    /// Shows a request from polkit, after any already showing.
+    pub(crate) fn polkit_begin(&mut self, prompt: polkit_agent::Prompt) {
+        self.shell.pointer_up();
+        self.polkit.push(prompt);
+        // The keyboard learns no words typed here, and comes up on a
+        // touchscreen as it does for any password field.
+        compositor::Shell::text_input(self, Some(TextField { password: true }));
+    }
+
+    fn polkit_dialog(&mut self, cookie: &str) -> Option<&mut derisk::polkit::AuthDialog> {
+        self.polkit
+            .iter_mut()
+            .find(|p| p.cookie == cookie)
+            .map(|p| &mut p.dialog)
+    }
+
+    /// What polkit's helper said in the request for `cookie`.
+    pub(crate) fn polkit_line(&mut self, cookie: &str, line: &derisk::polkit::HelperLine) {
+        if let Some(dialog) = self.polkit_dialog(cookie) {
+            dialog.apply(line);
+        }
+    }
+
+    /// PAM refused an attempt; the request starts another.
+    pub(crate) fn polkit_failed(&mut self, cookie: &str) {
+        if let Some(dialog) = self.polkit_dialog(cookie) {
+            dialog.failed();
+        }
+    }
+
+    /// The request for `cookie` is over, whichever way it went.
+    pub(crate) fn polkit_end(&mut self, cookie: &str) {
+        self.polkit.retain(|p| p.cookie != cookie);
+        if self.polkit.is_empty() {
+            compositor::Shell::text_input(self, None);
+        }
+    }
+
+    /// Draws the first of polkit's requests over the desktop and sends on
+    /// what the person did. Only real input counts: an agent driving the
+    /// desktop must not authenticate for the person (the shell marks
+    /// synthetic input), though it may cancel.
+    fn show_polkit(&mut self, ui: &mut egui::Ui) {
+        let Some(prompt) = self.polkit.first_mut() else {
+            return;
+        };
+        let theme = self.ui.theme;
+        let input = show_polkit(ui, &mut prompt.dialog, &self.shell, &theme);
+        let synthetic = self.shell.synthetic_input();
+        let reply = match input {
+            PolkitInput::None => None,
+            PolkitInput::Cancel => Some(polkit_agent::Reply::Cancel),
+            _ if synthetic => None,
+            PolkitInput::Submit => prompt.dialog.submit().map(polkit_agent::Reply::Answer),
+            PolkitInput::Choose(index) => prompt
+                .dialog
+                .choose(index)
+                .then_some(polkit_agent::Reply::Identity(index)),
+        };
+        if let Some(reply) = reply
+            && prompt.replies.send(reply).is_err()
+        {
+            // Its request already ended; the dialog goes with it.
+            self.polkit.remove(0);
         }
     }
 
@@ -910,7 +984,7 @@ impl compositor::Shell for Session {
     }
 
     fn focused(&self) -> Option<WindowId> {
-        if self.lock.is_locked() {
+        if self.lock.is_locked() || !self.polkit.is_empty() {
             return None;
         }
         self.shell.focused()
@@ -1008,6 +1082,7 @@ impl compositor::Shell for Session {
             x >= g.loc.x && y >= g.loc.y && x < g.loc.x + g.size.w && y < g.loc.y + g.size.h
         };
         self.lock.is_locked()
+            || !self.polkit.is_empty()
             || self.shell.overview_visible()
             || self.shell.palette_visible()
             || self.shell.pending_confirmation().is_some()
@@ -1029,7 +1104,7 @@ impl compositor::Shell for Session {
 
     fn pointer_down(&mut self, at: (i32, i32), time_ms: u64) -> Press {
         self.super_tap.cancel();
-        if self.lock.is_locked() {
+        if self.lock.is_locked() || !self.polkit.is_empty() {
             return Press::Handled;
         }
         match self.shell.pointer_down(at, time_ms) {
@@ -1061,6 +1136,12 @@ impl compositor::Shell for Session {
             if key.pressed {
                 self.wake_reader();
             }
+            return KeyRoute::Chrome;
+        }
+        // So does polkit's dialog, so nothing typed into it reaches a
+        // window or triggers a shortcut.
+        if !self.polkit.is_empty() {
+            self.super_tap.cancel();
             return KeyRoute::Chrome;
         }
         let is_super = matches!(key.sym, Keysym::Super_L | Keysym::Super_R);
@@ -1182,6 +1263,7 @@ impl compositor::Shell for Session {
         }
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
+        self.show_polkit(ui);
         // What the on-screen keyboard typed for windows goes to the focused
         // one. It goes through the same synthetic-input path agents use, so
         // the keyboard can't confirm what only a direct tap may (the
@@ -1486,6 +1568,14 @@ pub fn run(options: Options) -> Result {
     let remote = compositor.remote();
     if let Some(path) = agent_socket(options.socket, remote.clone())? {
         info!("agent protocol on {}", path.display());
+    }
+    // Only the real session: a nested one would take its parent's place
+    // as the logind session's agent.
+    if options.execute
+        && let Some(session_id) = systemd::session_id()
+    {
+        let user = pam::current_user().unwrap_or_default();
+        polkit_agent::start(session_id, user, remote.clone());
     }
     let lock_watch = lock_path.map(|path| LockWatch::start(path, remote));
     for app in options.launch {

@@ -9,7 +9,8 @@
 //!    palette, and the startup animation. On phones the top bar becomes a
 //!    status bar and a navigation bar runs along the bottom edge (see
 //!    [`crate::mobile`]). While the screen is locked, [`show_lock`] draws
-//!    the lock screen instead, over the whole output.
+//!    the lock screen instead, over the whole output, and [`show_polkit`]
+//!    draws polkit's authentication dialog over everything else.
 //!
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
@@ -2694,6 +2695,124 @@ pub fn show_lock(
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(100));
     submit
+}
+
+/// What the person did in polkit's dialog this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PolkitInput {
+    /// Nothing to act on.
+    None,
+    /// Enter or Authenticate: send what was typed.
+    Submit,
+    /// Escape or Cancel.
+    Cancel,
+    /// Authenticate as someone else instead, by index.
+    Choose(usize),
+}
+
+/// Draws polkit's request to authenticate over the dimmed desktop: what the
+/// app wants to do, who is asked (a choice when polkit accepts several
+/// administrators), the field answering whatever PAM asks and the line under
+/// it, where the fingerprint reader's prompt shows. On a phone it sits at
+/// the top, clear of the on-screen keyboard.
+///
+/// It is drawn by the shell rather than by an app, and the host routes
+/// every key here while it is open, so no window can read what is typed.
+pub fn show_polkit(
+    ui: &mut Ui,
+    dialog: &mut crate::polkit::AuthDialog,
+    shell: &Shell,
+    theme: &Theme,
+) -> PolkitInput {
+    let mut input = PolkitInput::None;
+    let screen = to_rect(shell.output());
+    ui.ctx()
+        .layer_painter(egui::LayerId::new(
+            Order::Foreground,
+            Id::new("derisk-polkit-dim"),
+        ))
+        .rect_filled(screen, 0, Color32::from_black_alpha(140));
+    let (anchor, offset) = if shell.is_phone() {
+        (Align2::CENTER_TOP, vec2(0.0, 48.0))
+    } else {
+        (Align2::CENTER_CENTER, vec2(0.0, 0.0))
+    };
+    egui::Area::new(Id::new("derisk-polkit"))
+        .order(Order::Tooltip)
+        .anchor(anchor, offset)
+        .show(ui.ctx(), |ui| {
+            card(ui, theme, |ui| {
+                // Phones are narrower than the dialog; 16 points of margin
+                // either side.
+                ui.set_max_width(420.0_f32.min(screen.width() - 32.0));
+                let title = "Authentication required";
+                ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                    node.set_role(Role::AlertDialog);
+                    node.set_label(title);
+                    node.set_modal();
+                });
+                ui.label(RichText::new(title).size(18.0).strong());
+                ui.add_space(6.0);
+                ui.label(&dialog.message);
+                ui.add_space(12.0);
+                if dialog.identities.len() > 1 {
+                    let chosen = dialog.who().map(|w| w.name.clone()).unwrap_or_default();
+                    egui::ComboBox::from_id_salt("derisk-polkit-who")
+                        .selected_text(chosen)
+                        .width(ui.available_width())
+                        .show_ui(ui, |ui| {
+                            for (index, identity) in dialog.identities.iter().enumerate() {
+                                if ui
+                                    .selectable_label(index == dialog.chosen, &identity.name)
+                                    .clicked()
+                                {
+                                    input = PolkitInput::Choose(index);
+                                }
+                            }
+                        });
+                } else if let Some(who) = dialog.who() {
+                    ui.label(RichText::new(&who.name).strong());
+                }
+                ui.add_space(8.0);
+                let editable = dialog.editable();
+                let secret = dialog.secret();
+                let hint = dialog.hint().to_owned();
+                if editable {
+                    login_field(ui, &mut dialog.answer, true, secret, &hint);
+                } else {
+                    let mut nothing = String::new();
+                    login_field(ui, &mut nothing, false, true, &hint);
+                }
+                ui.add_space(6.0);
+                let (text, error) = dialog.status();
+                login_status(ui, text, error, theme);
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        input = PolkitInput::Cancel;
+                    }
+                    let allow = ui.add_enabled(
+                        editable,
+                        egui::Button::new(RichText::new("Authenticate").color(theme.background))
+                            .fill(theme.accent),
+                    );
+                    if allow.clicked() {
+                        input = PolkitInput::Submit;
+                    }
+                });
+            });
+        });
+    ui.input(|i| {
+        if i.key_pressed(Key::Escape) {
+            input = PolkitInput::Cancel;
+        } else if i.key_pressed(Key::Enter) && input == PolkitInput::None {
+            input = PolkitInput::Submit;
+        }
+    });
+    // The helper answers between frames, the reader's prompt among them.
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(100));
+    input
 }
 
 /// What the user did on the greeter this frame.
