@@ -418,6 +418,69 @@ fn close_title_matches_beat_the_assistant() {
 }
 
 #[test]
+fn an_address_opens_in_the_browser_and_nothing_else_does() {
+    assert_eq!(palette::address("rust book"), None);
+    assert_eq!(
+        palette::address(">example.com"),
+        None,
+        "scoped queries stay local"
+    );
+    assert_eq!(palette::address("example"), None);
+    assert_eq!(palette::address(".com"), None);
+    assert_eq!(palette::address("a..b"), None);
+    let entry = palette::address("example.com/docs?q=1").unwrap();
+    assert_eq!(entry.category, Category::Web);
+    assert_eq!(entry.title, "Open https://example.com/docs?q=1");
+    // The web entry is the address even with no search engine chosen, and
+    // the address rather than a search for it when one is.
+    assert_eq!(
+        palette::web("example.com/docs?q=1", None),
+        Some(entry.clone())
+    );
+    assert_eq!(
+        palette::web(
+            "example.com/docs?q=1",
+            Some(derisk_settings::choice::SearchEngine::DuckDuckGo)
+        ),
+        Some(entry)
+    );
+    assert_eq!(
+        palette::web_address("localhost:8080/x").as_deref(),
+        Some("http://localhost:8080/x")
+    );
+    assert_eq!(
+        palette::web_address("10.0.0.1").as_deref(),
+        Some("http://10.0.0.1")
+    );
+    assert_eq!(
+        palette::web_address("HTTP://Example.com").as_deref(),
+        Some("HTTP://Example.com")
+    );
+
+    let mut shell = shell();
+    assert!(matches!(
+        shell.apply(Action::OpenUrl {
+            url: "file:///etc/passwd".into()
+        }),
+        Err(Error::NotOpenable(_))
+    ));
+    assert!(matches!(
+        shell.apply(Action::OpenUrl {
+            url: "--help".into()
+        }),
+        Err(Error::NotOpenable(_))
+    ));
+    let effects = shell
+        .apply(Action::OpenUrl {
+            url: "https://example.com".into(),
+        })
+        .unwrap();
+    assert!(effects.iter().any(
+        |e| matches!(e, derisk::action::Effect::Open { path } if path == "https://example.com")
+    ));
+}
+
+#[test]
 fn web_search_needs_a_chosen_engine_and_opens_only_its_results() {
     use derisk_settings::choice::SearchEngine;
 

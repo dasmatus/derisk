@@ -471,10 +471,14 @@ pub fn agent(query: &str) -> Option<Entry> {
     )
 }
 
-/// The web search entry for a query, when a search engine has been chosen
-/// (Settings, Default apps). The palette shows it after everything else, so
-/// it is there for what nothing on the computer matches.
+/// The web entry for a query: the address it names, when it reads as one
+/// ([`address`]), else a search for it when a search engine has been
+/// chosen (Settings, Default apps). The palette shows it after everything
+/// else, so it is there for what nothing on the computer matches.
 pub fn web(query: &str, engine: Option<derisk_settings::choice::SearchEngine>) -> Option<Entry> {
+    if let Some(address) = address(query) {
+        return Some(address);
+    }
     let (scope, text) = scope(query);
     let engine = engine.filter(|_| scope == Scope::All && !text.is_empty())?;
     Some(
@@ -487,6 +491,59 @@ pub fn web(query: &str, engine: Option<derisk_settings::choice::SearchEngine>) -
             }],
         )
         .detail(engine.name()),
+    )
+}
+
+/// The URL a query names when it reads as a web address: `http://` or
+/// `https://` as typed, `localhost` and IPv4 addresses with `http://` in
+/// front, a host with a dot in it (and nothing but letters, digits, `-`
+/// and `.`) with `https://`. Anything with a space is not one.
+pub fn web_address(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() || text.contains(char::is_whitespace) {
+        return None;
+    }
+    let lower = text.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Some(text.to_owned());
+    }
+    let host = text.split(['/', '?', '#']).next().unwrap_or_default();
+    let name = host.rsplit_once(':').map_or(host, |(name, port)| {
+        if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+            name
+        } else {
+            host
+        }
+    });
+    if name == "localhost" || name.parse::<std::net::Ipv4Addr>().is_ok() {
+        return Some(format!("http://{text}"));
+    }
+    let looks_like_host = name.contains('.')
+        && !name.starts_with('.')
+        && !name.ends_with('.')
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '.');
+    looks_like_host.then(|| format!("https://{text}"))
+}
+
+/// The entry that opens a query that reads as a web address in the
+/// default browser; the palette is the browser's address bar.
+pub fn address(query: &str) -> Option<Entry> {
+    let (scope, text) = scope(query);
+    if scope != Scope::All {
+        return None;
+    }
+    let url = web_address(text)?;
+    Some(
+        Entry::new(
+            Category::Web,
+            "web-browser",
+            format!("Open {url}"),
+            vec![Action::OpenUrl { url }],
+        )
+        .detail("In the default browser"),
     )
 }
 
