@@ -22,6 +22,8 @@ mod installer;
 #[cfg(feature = "host")]
 mod pam;
 #[cfg(feature = "host")]
+mod polkit_agent;
+#[cfg(feature = "host")]
 mod unlock;
 #[cfg(feature = "host")]
 mod wizard_host;

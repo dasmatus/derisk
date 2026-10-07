@@ -9,7 +9,8 @@
 //!    palette, and the startup animation. On phones the top bar becomes a
 //!    status bar and a navigation bar runs along the bottom edge (see
 //!    [`crate::mobile`]). While the screen is locked, [`show_lock`] draws
-//!    the lock screen instead, over the whole output.
+//!    the lock screen instead, over the whole output, and [`show_polkit`]
+//!    draws polkit's authentication dialog over everything else.
 //!
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
@@ -2694,6 +2695,101 @@ pub fn show_lock(
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(100));
     submit
+}
+
+/// What the person did in polkit's dialog this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PolkitInput {
+    /// Nothing to act on.
+    None,
+    /// Enter or Authenticate: send what was typed.
+    Submit,
+    /// Escape or Cancel.
+    Cancel,
+    /// Authenticate as someone else instead, by index.
+    Choose(usize),
+}
+
+/// Draws polkit's request to authenticate as mcsapi's [`NativeDialog`],
+/// which in the compositor is a modal over the dimmed desktop: what the app
+/// wants to do, who is asked (a choice when polkit accepts several
+/// administrators), the field answering whatever PAM asks and the line under
+/// it, where the fingerprint reader's prompt shows, then Cancel and
+/// Authenticate, which Escape and Enter answer.
+///
+/// It is drawn by the shell rather than by an app, and the host routes
+/// every key here while it is open, so no window can read what is typed.
+///
+/// [`NativeDialog`]: mcsapi_components::NativeDialog
+pub fn show_polkit(
+    ui: &mut Ui,
+    dialog: &mut crate::polkit::AuthDialog,
+    shell: &Shell,
+    theme: &Theme,
+) -> PolkitInput {
+    use mcsapi_components::NativeDialog;
+    use mcsapi_ui::dialog::{ActionRole, DialogAction};
+
+    let mut input = PolkitInput::None;
+    let mut open = true;
+    let actions = [
+        DialogAction::new("Cancel", ActionRole::Cancel),
+        DialogAction::new("Authenticate", ActionRole::Default),
+    ];
+    // A phone is narrower than the dialog: its frame and 16 points of
+    // margin either side.
+    let width = 400.0_f32.min(to_rect(shell.output()).width() - 80.0);
+    let answer = NativeDialog::new("derisk-polkit", &mut open, "Authentication required")
+        .width(width)
+        .show(ui.ctx(), |ui| {
+            ui.label(RichText::new("Authentication required").size(18.0).strong());
+            ui.add_space(6.0);
+            ui.label(&dialog.message);
+            ui.add_space(12.0);
+            if dialog.identities.len() > 1 {
+                let chosen = dialog.who().map(|w| w.name.clone()).unwrap_or_default();
+                egui::ComboBox::from_id_salt("derisk-polkit-who")
+                    .selected_text(chosen)
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        for (index, identity) in dialog.identities.iter().enumerate() {
+                            if ui
+                                .selectable_label(index == dialog.chosen, &identity.name)
+                                .clicked()
+                            {
+                                input = PolkitInput::Choose(index);
+                            }
+                        }
+                    });
+            } else if let Some(who) = dialog.who() {
+                ui.label(RichText::new(&who.name).strong());
+            }
+            ui.add_space(8.0);
+            let secret = dialog.secret();
+            let hint = dialog.hint().to_owned();
+            if dialog.editable() {
+                login_field(ui, &mut dialog.answer, true, secret, &hint);
+            } else {
+                let mut nothing = String::new();
+                login_field(ui, &mut nothing, false, true, &hint);
+            }
+            ui.add_space(6.0);
+            let (text, error) = dialog.status();
+            login_status(ui, text, error, theme);
+            ui.add_space(12.0);
+            NativeDialog::actions(ui, &actions)
+        })
+        .flatten();
+    match answer {
+        Some(0) => input = PolkitInput::Cancel,
+        Some(_) => input = PolkitInput::Submit,
+        None if !open => input = PolkitInput::Cancel,
+        None => {}
+    }
+    // The helper answers between frames, the reader's prompt among them.
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(100));
+    input
 }
 
 /// What the user did on the greeter this frame.

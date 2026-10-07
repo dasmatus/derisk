@@ -222,6 +222,14 @@ same theme.
   `tree`, `screenshot` and `input` included, gets `"the session is locked"`,
   and the AT-SPI tree is empty and ignores actions, since window titles
   would show through the lock.
+- **polkit agent.** With `--execute` the session registers as polkit's
+  authentication agent for its logind session, so run0, system-wide app
+  installs and fingerprint enrolment can ask someone to authenticate.
+  Each request dims the desktop under a dialog that relays what PAM's
+  `polkit-1` stack asks through `polkit-agent-helper-1`'s socket
+  (`/run/polkit/agent-helper.socket`): the fingerprint reader, a password or
+  security key PIN, a code. Every key goes to the dialog while it is open,
+  and input from agents can cancel it but not authenticate.
 - **Display manager.** `derisk display-manager` replaces gdm: run as root
   from a system service, it starts `derisk greeter` (the lock screen as a
   login screen) on a VT as an unprivileged user, checks the password it is
@@ -448,7 +456,7 @@ nothing but the workspace at the root:
 | `derisk-geom` | Geometry, snapping and server-side decorations. |
 | `derisk-desktop` | `.desktop` entries and app names and icons by app ID. |
 | `derisk-install` | The installer's backend protocol, locales and time zones, and the network. |
-| `derisk-login` | The greetd login protocol and the lock screen's state. |
+| `derisk-login` | The greetd login protocol, the lock screen's state and the polkit dialog's. |
 | `derisk-portal` | `xdg-desktop-portal-derisk`. |
 | `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
 
