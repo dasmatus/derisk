@@ -1,8 +1,8 @@
-//! The bundled plugins, loaded and called through the sandbox.
+//! The bundled palette plugins, loaded and called through the sandbox.
 
 use std::time::Instant;
 
-use derisk_palette::{
+use derisk_plugin::palette::{
     App, Category, Desk, File, Hook, Input, Plugins, Registration, View, Workspace,
 };
 

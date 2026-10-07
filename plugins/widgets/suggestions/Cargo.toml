@@ -1,0 +1,15 @@
+[package]
+name = "widget-suggestions"
+description = "derisk widget plugin: Apps you usually open around now"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-widget-sdk = { path = "../sdk" }

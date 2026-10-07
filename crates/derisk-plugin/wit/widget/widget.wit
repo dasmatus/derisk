@@ -1,0 +1,257 @@
+// The interface a derisk overview widget plugin is compiled against.
+//
+// A widget plugin is a WebAssembly component derisk loads into its own
+// process and asks for the cards it shows on the overview. Every card there
+// comes from one: the clock, the calendar, the battery, suggested apps,
+// failed services, the notes, and the cards programs register over the agent
+// socket. The overview only lays the cards out and draws them.
+//
+// A plugin never draws. It answers `render` with cards made of semantic
+// parts (a line of text in a tone, a progress bar, a row of buttons, a
+// grid), and derisk draws every part with its theme, the way its own
+// controls are drawn. No color, font, size in pixels or image crosses the
+// boundary, so restyling derisk restyles every widget, and no plugin can
+// paint over the desktop or pass itself off as something else.
+//
+// The sandbox is the palette's (`palette.wit`): no WASI, a one-way log, a
+// fuel budget, capped memory, a fresh instance for every call, and a
+// manifest the host holds the plugin to. derisk asks again only when a part
+// of the view the plugin reads has changed.
+package derisk:widget@0.1.0;
+
+/// The values that cross the boundary.
+interface types {
+    /// A part of the desktop a plugin may see. The host fills only the parts
+    /// the manifest lists; the rest of the view is empty.
+    enum input {
+        /// `view.clock`.
+        clock,
+        /// `view.battery`.
+        battery,
+        /// `view.suggested`.
+        apps,
+        /// `view.failed-units`.
+        units,
+        /// `view.registered`: the cards programs registered over the agent
+        /// socket (`register_widget`).
+        registered,
+    }
+
+    /// The time, local, to the minute.
+    record clock {
+        /// e.g. 2026.
+        year: s32,
+        /// 1-12.
+        month: u8,
+        /// Day of the month, 1-31.
+        day: u8,
+        /// 0-23.
+        hour: u8,
+        /// 0-59.
+        minute: u8,
+        /// Day of the week, 0 = Monday.
+        weekday: u8,
+        /// Whether the person reads the time on a 24-hour clock.
+        twenty-four-hour: bool,
+    }
+
+    /// The battery, on a device that has one.
+    record battery {
+        /// Charge, 0-100.
+        percent: u8,
+        /// Whether it is charging.
+        charging: bool,
+    }
+
+    /// A card a program registered over the agent socket, as JSON text in
+    /// the shape `register_widget` takes (`{"id":..,"title":..,"icon":..,
+    /// "rows":[..]}`). Already checked by the host.
+    record registration {
+        /// The card's ID, which its buttons' `activate_widget` actions name.
+        id: string,
+        /// The card, as JSON text.
+        data: string,
+    }
+
+    /// The desktop as a plugin sees it.
+    record view {
+        /// The time. Needs `input.clock`; noon on 1 January 2000 otherwise.
+        clock: clock,
+        /// The battery, if any. Needs `input.battery`.
+        battery: option<battery>,
+        /// App IDs worth suggesting now, best first. Needs `input.apps`.
+        suggested: list<string>,
+        /// Failed systemd user units. Needs `input.units`.
+        failed-units: list<string>,
+        /// Registered cards, in the order they were registered. Needs
+        /// `input.registered`.
+        registered: list<registration>,
+    }
+
+    /// Which of the theme's colors text takes. The theme decides what each
+    /// looks like.
+    enum tone {
+        /// The theme's text color.
+        normal,
+        /// Its secondary color, for hints and captions.
+        dim,
+        /// Its accent, for what is current (today in a calendar).
+        accent,
+        /// Its warning color, for something wrong (a failed service).
+        danger,
+    }
+
+    /// How prominent text is. The theme decides the sizes.
+    enum emphasis {
+        /// Body text.
+        normal,
+        /// Bold, for a card's heading.
+        strong,
+        /// The largest text the overview draws, for a clock.
+        display,
+    }
+
+    /// A run of text.
+    record text {
+        /// What it says.
+        text: string,
+        /// Its color.
+        tone: tone,
+        /// Its prominence.
+        emphasis: emphasis,
+    }
+
+    /// A button. What it runs is derisk `Action`s, each a JSON object as the
+    /// agent socket's `dispatch` takes them (`{"action":"restart_unit",
+    /// "unit":"foo.service"}`). The host refuses an action that does not
+    /// parse or whose kind is not in the manifest's `actions`, and drops the
+    /// card with it.
+    record button {
+        /// Its text.
+        label: string,
+        /// What pressing it runs.
+        actions: list<string>,
+    }
+
+    /// An app, drawn as a button with its icon and name from the icon theme
+    /// and its `.desktop` file, which the plugin never sees.
+    record app-button {
+        /// Its desktop file ID or core app ID.
+        app: string,
+        /// What pressing it runs.
+        actions: list<string>,
+    }
+
+    /// Something that sits in a row.
+    variant inline {
+        /// Text.
+        text(text),
+        /// A symbolic icon from the icon theme, by freedesktop name, drawn
+        /// at the size and color of the text beside it.
+        icon(string),
+        /// A button.
+        button(button),
+        /// An app.
+        app(app-button),
+    }
+
+    /// A bar filled from 0.0 to 1.0.
+    record progress {
+        /// How full; the host clamps it.
+        value: f32,
+        /// Text on the bar.
+        label: option<string>,
+    }
+
+    /// A grid of short text, filled a row at a time.
+    record grid {
+        /// Cells per row, 1-12.
+        columns: u8,
+        /// The cells, left to right, top to bottom; an empty one is a gap.
+        cells: list<text>,
+    }
+
+    /// A text field whose contents derisk keeps, per card, for as long as
+    /// the session runs. The plugin never sees what is typed.
+    record field {
+        /// Names the field within its card.
+        id: string,
+        /// Shown, dimmed, while it is empty.
+        hint: string,
+        /// Lines tall, 1-12.
+        lines: u8,
+    }
+
+    /// One part of a card, top to bottom.
+    variant part {
+        /// A paragraph, wrapped to the card's width.
+        text(text),
+        /// A progress bar.
+        progress(progress),
+        /// Inline parts side by side on one line, cut short if too wide.
+        row(list<inline>),
+        /// Inline parts side by side, wrapped onto more lines as needed.
+        flow(list<inline>),
+        /// A grid.
+        grid(grid),
+        /// A text field.
+        field(field),
+    }
+
+    /// One card on the overview.
+    record card {
+        /// Names the card within its plugin, so derisk keeps a field's text
+        /// across renders. Stable from one render to the next.
+        key: string,
+        /// Its parts, top to bottom.
+        parts: list<part>,
+    }
+
+    /// What a plugin is, and the most it will ever see and do.
+    ///
+    /// Asked for once, at load. The host holds the plugin to it: a plugin
+    /// sees only its `inputs`, and a card with a button whose action kind is
+    /// not in `actions` is dropped.
+    record manifest {
+        /// Identifies the plugin in derisk's log and in settings.
+        /// 1-32 characters of `[a-z0-9]` and `-`.
+        name: string,
+        /// Free-form version string.
+        version: string,
+        /// One line saying what the plugin shows.
+        summary: string,
+        /// The parts of the desktop it may see.
+        inputs: list<input>,
+        /// The action kinds its buttons may run, by their `action` tag
+        /// (`launch`, `restart_unit`, ...).
+        actions: list<string>,
+    }
+}
+
+/// The one-way log.
+interface host {
+    /// How loud a log line is.
+    enum level {
+        error,
+        warn,
+        info,
+        debug,
+        trace,
+    }
+
+    /// Write a line to derisk's log, tagged with the plugin's name.
+    log: func(level: level, message: string);
+}
+
+/// What an overview widget plugin is.
+world widget-plugin {
+    use types.{manifest, view, card};
+
+    import host;
+
+    /// Who the plugin is and what it may see and do. Called once, at load.
+    export describe: func() -> manifest;
+    /// The plugin's cards for this view, in the order they are shown. None
+    /// hides the plugin (the battery card on a desktop without one).
+    export render: func(view: view) -> list<card>;
+}

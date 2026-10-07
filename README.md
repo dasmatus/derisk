@@ -69,38 +69,52 @@ closes. Picks you use often rise to the top. Agents can open and close it
 with `{"action":"palette"}` and open files with `{"action":"open","path":...}`
 (absolute paths only; executables and `.desktop` files are refused).
 
-### Palette plugins
+### Plugins
 
-Every row above comes from a plugin: a WebAssembly component built
-against `crates/derisk-palette/wit/palette.wit`. The palette core only
-ranks, remembers and draws. A plugin answers `entries` (its catalog, asked
-again only when the part of the desktop it reads changes) and `query`
-(rows for the typed text, such as the assistant's). The bundled plugins
-are in `plugins/`, one crate each, built by `derisk-palette`'s build
-script (`rustup target add wasm32-unknown-unknown`).
+Every palette row and every overview card comes from a plugin: a
+WebAssembly component built against
+`crates/derisk-plugin/wit/palette/palette.wit` or
+`crates/derisk-plugin/wit/widget/widget.wit`. The palette core only ranks,
+remembers and draws rows; the overview only lays out and draws cards.
 
-Plugins run the way [pm](https://github.com/losos-project/pm) runs its
-own: in derisk's process, with no WASI, only a one-way log and the
-built-in assistant to call, a fuel budget per call, capped memory, and a
-fresh instance every time. A plugin's manifest names the parts of the
-desktop it may see (one that does not ask for files never sees a file
-name) and the action kinds and categories its rows may have; rows outside
-it are dropped. Rows that log out, reboot or power off always need the
-second Enter.
+A palette plugin answers `entries` (its catalog, asked again only when the
+part of the desktop it reads changes) and `query` (rows for the typed
+text, such as the assistant's). A widget plugin answers `render` with
+cards made of semantic parts: text in a tone (normal, dim, accent,
+danger) and an emphasis (normal, strong, display), progress bars, rows of
+buttons and apps, grids and text fields. It never chooses a color, a font
+or a size in pixels, so the theme draws every card, and restyling derisk
+restyles every widget. The clock, calendar, battery, suggested apps,
+failed services and notes are widget plugins.
+
+The bundled plugins are in `plugins/palette/` and `plugins/widgets/`, one
+crate each, built by `derisk-plugin`'s build script (`rustup target add
+wasm32-unknown-unknown`).
+
+Both kinds run the way [pm](https://github.com/losos-project/pm) runs its
+own plugins: in derisk's process, with no WASI, only a one-way log (and,
+for the palette, the built-in assistant) to call, a fuel budget per call,
+capped memory, and a fresh instance every time. A plugin's manifest names
+the parts of the desktop it may see (one that does not ask for files never
+sees a file name) and the action kinds its rows or buttons may run, and,
+for the palette, the categories of its rows; anything outside it is
+dropped. Rows that log out, reboot or power off always need the second
+Enter.
 
 Besides the bundled ones, derisk loads plugins from
-`derisk/palette-plugins/*.wasm` under `$XDG_DATA_DIRS` when root owns
-them and nobody else can write them, and from
-`$XDG_DATA_HOME/derisk/palette-plugins/` when each carries a detached
+`derisk/palette-plugins/*.wasm` and `derisk/widget-plugins/*.wasm` under
+`$XDG_DATA_DIRS` when root owns them and nobody else can write them, and
+from the same folders under `$XDG_DATA_HOME` when each carries a detached
 `.sig` (pm's format: `pm sign plugin.wasm`) from a key in
 `$XDG_CONFIG_HOME/derisk/trusted/`. A plugin cannot take a name already
-loaded.
+loaded for its kind.
 
-Programs feed plugins over the agent protocol with
+Programs feed palette plugins over the agent protocol with
 `{"method":"register_palette","source":"danube","data":{...}}`; the
 connection owns the data and hears of picks from the rows made of it as
 `{"event":"palette","source":"danube","command":{...}}` (see
-`plugins/browser`).
+`plugins/palette/browser`). Cards a program registers with
+`register_widget` are drawn by the bundled `programs` widget plugin.
 
 ## Agent-first
 

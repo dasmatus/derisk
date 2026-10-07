@@ -39,13 +39,14 @@ use crate::{
     lock::LockScreen,
     menu::{Menu, MenuEntry},
     mobile::{self, NavState},
-    overview::{Battery, OverviewLayout, Widget, fit, grid, row},
+    overview::{Battery, OverviewLayout, fit, grid, row},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
     systemd::SessionOp,
     time::Clock,
-    widgets::{CustomWidget, WidgetRow},
+    widgets::Board,
 };
+use derisk_plugin::widget::{Card, Emphasis, Inline, Part, Text, Tone};
 
 /// Converts a logical geometry to an egui rectangle.
 pub fn to_rect(g: Geometry) -> Rect {
@@ -188,7 +189,11 @@ pub struct ShellUi {
     pub theme: Theme,
     /// The startup animation.
     pub startup: StartupAnimation,
-    notes: String,
+    /// What is typed in widgets' text fields, by plugin, card and field,
+    /// kept for the session; the plugins never see it.
+    fields: HashMap<(String, String, String), String>,
+    /// The overview's cards, from the widget plugins.
+    board: Board,
     overview_open: bool,
     /// Window being dragged in the overview, toward a workspace.
     overview_drag: Option<WindowId>,
@@ -375,7 +380,8 @@ impl ShellUi {
                 reduced_motion,
                 bar_height: shell.profile().top_bar as f32,
             },
-            notes: String::new(),
+            fields: HashMap::new(),
+            board: Board::default(),
             overview_open: false,
             overview_drag: None,
             tray: None,
@@ -942,7 +948,7 @@ impl ShellUi {
                     // The overview's clock widget shows the time and date
                     // larger, so the bar's copy steps aside while it is open.
                     let big_clock =
-                        shell.overview_visible() && Widget::DEFAULT.contains(&Widget::Clock);
+                        shell.overview_visible() && crate::widgets::plugins().has("clock");
                     if !big_clock {
                         let time = if prefs.clock_24h {
                             shell.clock.time_label()
@@ -1641,130 +1647,185 @@ impl ShellUi {
                 .layout(Layout::top_down(Align::Min)),
             |ui| {
                 ui.visuals_mut().override_text_color = Some(self.theme.foreground);
+                let plugins = crate::widgets::plugins();
+                let board = {
+                    let mut board = std::mem::take(&mut self.board);
+                    board.refresh(plugins, &crate::widgets::view(shell));
+                    board
+                };
+                let names: Vec<&str> = plugins.iter().map(|p| p.name()).collect();
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    for widget in Widget::DEFAULT {
-                        self.widget(ui, shell, widget, actions);
-                    }
-                    for widget in shell.widgets.list() {
-                        custom_widget(ui, &self.theme, widget, actions);
-                        ui.add_space(10.0);
+                    for (plugin, card) in board.cards() {
+                        self.widget_card(ui, shell, names[plugin], card, actions);
                     }
                 });
+                self.board = board;
             },
         );
     }
 
-    fn widget(&mut self, ui: &mut Ui, shell: &Shell, widget: Widget, actions: &mut Vec<Action>) {
+    /// One widget plugin's card, every part drawn with the theme: the
+    /// plugin says what the card holds, never how it looks.
+    fn widget_card(
+        &mut self,
+        ui: &mut Ui,
+        shell: &Shell,
+        plugin: &str,
+        card: &Card,
+        actions: &mut Vec<Action>,
+    ) {
         let theme = self.theme;
-        match widget {
-            Widget::Clock => card(ui, &theme, |ui| {
-                ui.label(RichText::new(shell.clock.time_label()).size(44.0).strong());
-                ui.label(shell.clock.date_label());
-            }),
-            Widget::Calendar => card(ui, &theme, |ui| calendar(ui, shell, &theme)),
-            Widget::Battery => {
-                let Some(b) = shell.battery else { return };
-                card(ui, &theme, |ui| {
-                    ui.label(if b.charging {
-                        "Battery · charging"
-                    } else {
-                        "Battery"
-                    });
-                    ui.add(
-                        egui::ProgressBar::new(f32::from(b.percent) / 100.0)
-                            .text(format!("{}%", b.percent)),
-                    );
-                });
-            }
-            Widget::Suggestions => card(ui, &theme, |ui| {
-                ui.label(RichText::new("Suggested").strong());
-                let suggestions = shell.habits.suggestions(shell.clock.hour, 5);
-                if suggestions.is_empty() {
-                    ui.label(RichText::new("Apps you use will appear here.").color(theme.border));
-                }
-                // Each app by its icon and name, never its desktop file ID.
-                ui.horizontal_wrapped(|ui| {
-                    for app in suggestions {
-                        let look = shell.apps.look(&app);
-                        let text = RichText::new(look.name.as_ref());
-                        let side = 18.0;
-                        let galley = egui::WidgetText::from(text).into_galley(
-                            ui,
-                            Some(egui::TextWrapMode::Truncate),
-                            ui.available_width() - side - 24.0,
-                            egui::TextStyle::Button,
-                        );
-                        let pad = ui.spacing().button_padding;
-                        let size = vec2(
-                            pad.x * 2.0 + side + 6.0 + galley.size().x,
-                            (pad.y * 2.0 + side.max(galley.size().y))
-                                .max(ui.spacing().interact_size.y),
-                        );
-                        let (r, response) = ui.allocate_exact_size(size, Sense::click());
-                        let visuals = ui.style().interact(&response);
-                        ui.painter().rect(
-                            r,
-                            visuals.corner_radius,
-                            visuals.weak_bg_fill,
-                            visuals.bg_stroke,
-                            StrokeKind::Inside,
-                        );
-                        let icon = Rect::from_min_size(
-                            pos2(r.left() + pad.x, r.center().y - side / 2.0),
-                            vec2(side, side),
-                        );
-                        self.paint_app_icon(ui.painter(), icon, &look);
-                        ui.painter().galley(
-                            pos2(icon.right() + 6.0, r.center().y - galley.size().y / 2.0),
-                            galley,
-                            visuals.text_color(),
-                        );
-                        name(ui, &response, Role::Button, look.name.to_string());
-                        if response.on_hover_text(look.name.as_ref()).clicked() {
-                            actions.push(Action::Launch { app });
-                            actions.push(Action::Overview {
-                                visible: Some(false),
-                            });
-                        }
+        self::card(ui, &theme, |ui| {
+            for (index, part) in card.parts.iter().enumerate() {
+                match part {
+                    Part::Text(text) => {
+                        ui.add(egui::Label::new(rich_text(&theme, text)).wrap());
                     }
-                });
-            }),
-            Widget::Units => card(ui, &theme, |ui| {
-                ui.label(RichText::new("Services").strong());
-                if shell.failed_units.is_empty() {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("All user services running").color(theme.border));
-                        icons::show(ui, "object-select", 14.0, theme.border);
-                    });
-                }
-                for unit in &shell.failed_units {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(unit).color(button_color(Button::Close)));
-                        if ui.small_button("Restart").clicked() {
-                            actions.push(Action::RestartUnit { unit: unit.clone() });
+                    Part::Progress(progress) => {
+                        let mut bar = egui::ProgressBar::new(progress.value.clamp(0.0, 1.0));
+                        if let Some(label) = &progress.label {
+                            bar = bar.text(label.as_str());
                         }
-                        if ui.small_button("Dismiss").clicked() {
-                            actions.push(Action::ResetFailed { unit: unit.clone() });
-                        }
-                    });
+                        ui.add(bar);
+                    }
+                    Part::Row(items) => {
+                        ui.horizontal(|ui| self.widget_inline(ui, shell, items, actions));
+                    }
+                    Part::Flow(items) => {
+                        ui.horizontal_wrapped(|ui| self.widget_inline(ui, shell, items, actions));
+                    }
+                    Part::Grid(grid) => {
+                        // Columns that share the card's width: left to egui,
+                        // each would take a full button's width and push the
+                        // card past the overview's edge.
+                        let columns = usize::from(grid.columns.max(1));
+                        let gap = 4.0;
+                        let col = ((ui.available_width() - (columns - 1) as f32 * gap)
+                            / columns as f32)
+                            .floor()
+                            .max(1.0);
+                        egui::Grid::new((plugin, &card.key, index))
+                            .spacing(vec2(gap, 4.0))
+                            .min_col_width(col)
+                            .max_col_width(col)
+                            .show(ui, |ui| {
+                                for (i, cell) in grid.cells.iter().enumerate() {
+                                    ui.label(rich_text(&theme, cell));
+                                    if (i + 1) % columns == 0 {
+                                        ui.end_row();
+                                    }
+                                }
+                            });
+                    }
+                    Part::Field(field) => {
+                        // The field takes the card's own color and the
+                        // card's width less its frame, instead of the
+                        // theme's darkest input fill stretched past the
+                        // card's edge.
+                        let width = ui.available_width();
+                        let key = (plugin.to_owned(), card.key.clone(), field.id.clone());
+                        let text = self.fields.entry(key).or_default();
+                        ui.add(
+                            egui::TextEdit::multiline(text)
+                                .id_salt((plugin, &card.key, &field.id))
+                                .desired_rows(usize::from(field.lines.max(1)))
+                                .desired_width(width)
+                                .background_color(theme.surface)
+                                .hint_text(RichText::new(&field.hint).color(theme.border)),
+                        );
+                    }
                 }
-            }),
-            Widget::Notes => card(ui, &theme, |ui| {
-                ui.label(RichText::new("Notes").strong());
-                // The field takes the card's own color and the card's width
-                // less its frame, instead of the theme's darkest input fill
-                // stretched past the card's edge.
-                let width = ui.available_width();
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.notes)
-                        .desired_rows(4)
-                        .desired_width(width)
-                        .background_color(theme.surface)
-                        .hint_text(RichText::new("Write something down").color(theme.border)),
-                );
-            }),
-        }
+            }
+        });
         ui.add_space(10.0);
+    }
+
+    /// A widget card's row: text, icons, buttons and apps side by side. An
+    /// icon takes the color and size of the row's first text.
+    fn widget_inline(
+        &self,
+        ui: &mut Ui,
+        shell: &Shell,
+        items: &[Inline],
+        actions: &mut Vec<Action>,
+    ) {
+        let theme = self.theme;
+        let first_text = items.iter().find_map(|item| match item {
+            Inline::Text(text) => Some(text),
+            _ => None,
+        });
+        let icon_color = first_text.map_or(theme.foreground, |t| tone_color(&theme, t.tone));
+        let icon_size = match first_text.map(|t| t.emphasis) {
+            Some(Emphasis::Strong | Emphasis::Display) => 16.0,
+            _ => 14.0,
+        };
+        // Buttons beside text are the small kind, as in a list of failed
+        // services; a row of buttons alone gets full-size ones.
+        let small = first_text.is_some();
+        for item in items {
+            match item {
+                Inline::Text(text) => {
+                    ui.label(rich_text(&theme, text));
+                }
+                Inline::Icon(name) => {
+                    icons::show(ui, name, icon_size, icon_color);
+                }
+                Inline::Button(button) => {
+                    let clicked = if small {
+                        ui.small_button(button.label.as_str()).clicked()
+                    } else {
+                        ui.button(button.label.as_str()).clicked()
+                    };
+                    if clicked {
+                        actions.extend(widget_actions(&button.actions));
+                    }
+                }
+                Inline::App(app) => {
+                    if self.app_chip(ui, shell, &app.app).clicked() {
+                        actions.extend(widget_actions(&app.actions));
+                    }
+                }
+            }
+        }
+    }
+
+    /// An app by its icon and name, never its desktop file ID, as a button.
+    fn app_chip(&self, ui: &mut Ui, shell: &Shell, app: &str) -> egui::Response {
+        let look = shell.apps.look(app);
+        let text = RichText::new(look.name.as_ref());
+        let side = 18.0;
+        let galley = egui::WidgetText::from(text).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            ui.available_width() - side - 24.0,
+            egui::TextStyle::Button,
+        );
+        let pad = ui.spacing().button_padding;
+        let size = vec2(
+            pad.x * 2.0 + side + 6.0 + galley.size().x,
+            (pad.y * 2.0 + side.max(galley.size().y)).max(ui.spacing().interact_size.y),
+        );
+        let (r, response) = ui.allocate_exact_size(size, Sense::click());
+        let visuals = ui.style().interact(&response);
+        ui.painter().rect(
+            r,
+            visuals.corner_radius,
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            StrokeKind::Inside,
+        );
+        let icon = Rect::from_min_size(
+            pos2(r.left() + pad.x, r.center().y - side / 2.0),
+            vec2(side, side),
+        );
+        self.paint_app_icon(ui.painter(), icon, &look);
+        ui.painter().galley(
+            pos2(icon.right() + 6.0, r.center().y - galley.size().y / 2.0),
+            galley,
+            visuals.text_color(),
+        );
+        name(ui, &response, Role::Button, look.name.to_string());
+        response.on_hover_text(look.name.as_ref())
     }
 
     /// The command palette: a search box over [`palette::entries`] with the
@@ -2317,75 +2378,36 @@ fn palette_row(
     response
 }
 
-fn calendar(ui: &mut Ui, shell: &Shell, theme: &Theme) {
-    let clock = shell.clock;
-    ui.label(RichText::new(clock.date_label()).strong());
-    // Seven columns that share the card's width: left to egui, each would
-    // take a full button's width and push the card past the overview's edge.
-    let gap = 4.0;
-    let col = ((ui.available_width() - 6.0 * gap) / 7.0).floor().max(1.0);
-    egui::Grid::new("derisk-calendar")
-        .spacing(vec2(gap, 4.0))
-        .min_col_width(col)
-        .max_col_width(col)
-        .show(ui, |ui| {
-            for d in ["M", "T", "W", "T", "F", "S", "S"] {
-                ui.label(RichText::new(d).color(theme.border));
-            }
-            ui.end_row();
-            let first = usize::from(clock.first_weekday());
-            for _ in 0..first {
-                ui.label("");
-            }
-            for day in 1..=clock.days_in_month() {
-                let text = RichText::new(format!("{day:>2}"));
-                ui.label(if day == clock.day {
-                    text.color(theme.accent).strong()
-                } else {
-                    text
-                });
-                if (first + usize::from(day)) % 7 == 0 {
-                    ui.end_row();
-                }
-            }
-        });
+/// The theme's color for `tone`.
+fn tone_color(theme: &Theme, tone: Tone) -> Color32 {
+    match tone {
+        Tone::Normal => theme.foreground,
+        Tone::Dim => theme.border,
+        Tone::Accent => theme.accent,
+        Tone::Danger => button_color(Button::Close),
+    }
 }
 
-/// A program's custom widget, drawn as a card like the built-in ones.
-fn custom_widget(ui: &mut Ui, theme: &Theme, widget: &CustomWidget, actions: &mut Vec<Action>) {
-    card(ui, theme, |ui| {
-        ui.horizontal(|ui| {
-            if let Some(icon) = &widget.icon {
-                icons::show(ui, icon, 16.0, theme.foreground);
-            }
-            ui.add(egui::Label::new(RichText::new(&widget.title).strong()).truncate());
-        });
-        for row in &widget.rows {
-            match row {
-                WidgetRow::Text { text, dim } => {
-                    let text = RichText::new(text);
-                    ui.add(
-                        egui::Label::new(if *dim { text.color(theme.border) } else { text }).wrap(),
-                    );
-                }
-                WidgetRow::Progress { value, label } => {
-                    let mut bar = egui::ProgressBar::new(value.clamp(0.0, 1.0));
-                    if let Some(label) = label {
-                        bar = bar.text(label.as_str());
-                    }
-                    ui.add(bar);
-                }
-                WidgetRow::Button { label, item } => {
-                    if ui.button(label.as_str()).clicked() {
-                        actions.push(Action::ActivateWidget {
-                            id: widget.id.clone(),
-                            item: item.clone(),
-                        });
-                    }
-                }
-            }
-        }
-    });
+/// A widget plugin's text in the theme: its tone's color, and its emphasis
+/// as weight or the overview's display size.
+fn rich_text(theme: &Theme, text: &Text) -> RichText {
+    let rich = RichText::new(&text.text).color(tone_color(theme, text.tone));
+    match text.emphasis {
+        Emphasis::Normal => rich,
+        Emphasis::Strong => rich.strong(),
+        Emphasis::Display => rich.size(44.0).strong(),
+    }
+}
+
+/// A widget button's actions. `derisk-plugin` let through only JSON objects
+/// whose kind the plugin's manifest lists; one that is not an [`Action`]
+/// does nothing.
+fn widget_actions(actions: &[String]) -> impl Iterator<Item = Action> + '_ {
+    actions.iter().filter_map(|a| {
+        serde_json::from_str(a)
+            .inspect_err(|e| tracing::warn!(action = a, "widget action refused: {e}"))
+            .ok()
+    })
 }
 
 fn menu_button(ui: &mut Ui, menu: &Menu, window: Option<u64>, actions: &mut Vec<Action>) {

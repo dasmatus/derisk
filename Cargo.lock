@@ -1615,7 +1615,7 @@ dependencies = [
  "derisk-icons",
  "derisk-install",
  "derisk-login",
- "derisk-palette",
+ "derisk-plugin",
  "derisk-settings",
  "image",
  "libc",
@@ -1746,7 +1746,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "derisk-palette"
+name = "derisk-palette-sdk"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen 0.62.0",
+]
+
+[[package]]
+name = "derisk-plugin"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
@@ -1756,14 +1764,6 @@ dependencies = [
  "tracing",
  "wasmtime",
  "wit-component 0.261.0",
-]
-
-[[package]]
-name = "derisk-palette-sdk"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "wit-bindgen 0.62.0",
 ]
 
 [[package]]
@@ -1792,6 +1792,14 @@ dependencies = [
  "qrcode",
  "serde_json",
  "sha1",
+]
+
+[[package]]
+name = "derisk-widget-sdk"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen 0.62.0",
 ]
 
 [[package]]
@@ -8986,6 +8994,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "widget-battery"
+version = "0.1.0"
+dependencies = [
+ "derisk-widget-sdk",
+]
+
+[[package]]
+name = "widget-calendar"
+version = "0.1.0"
+dependencies = [
+ "derisk-widget-sdk",
+]
+
+[[package]]
+name = "widget-clock"
+version = "0.1.0"
+dependencies = [
+ "derisk-widget-sdk",
+]
+
+[[package]]
+name = "widget-notes"
+version = "0.1.0"
+dependencies = [
+ "derisk-widget-sdk",
+]
+
+[[package]]
+name = "widget-programs"
+version = "0.1.0"
+dependencies = [
+ "derisk-widget-sdk",
+]
+
+[[package]]
+name = "widget-services"
+version = "0.1.0"
+dependencies = [
+ "derisk-widget-sdk",
+]
+
+[[package]]
+name = "widget-suggestions"
+version = "0.1.0"
+dependencies = [
+ "derisk-widget-sdk",
 ]
 
 [[package]]

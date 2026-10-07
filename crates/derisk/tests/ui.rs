@@ -961,3 +961,101 @@ fn a_short_window_slides_up_over_the_keyboard_instead_of_shrinking() {
         rect(300, 100, 400, 452)
     );
 }
+
+/// Where each piece of text a frame drew is, by its text.
+fn texts(
+    ctx: &egui::Context,
+    ui: &mut ShellUi,
+    shell: &Shell,
+    size: (f32, f32),
+) -> Vec<(String, egui::Rect)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                out.push((text.galley.text().to_owned(), text.visual_bounding_rect()))
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(size.0, size.1),
+        )),
+        ..Default::default()
+    };
+    let out = ctx.run_ui(input, |root| {
+        ui.show(root, shell, 5000);
+    });
+    let mut found = Vec::new();
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut found);
+    }
+    found
+}
+
+#[test]
+fn the_overview_draws_the_widget_plugins_cards_and_runs_their_buttons() {
+    let size = (1920.0, 1080.0);
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.failed_units = vec!["foo.service".into()];
+    shell
+        .widgets
+        .register(
+            serde_json::from_value(serde_json::json!({
+                "id": "weather", "title": "Weather",
+                "rows": [{"type": "text", "text": "18 °C, clear"}],
+            }))
+            .unwrap(),
+            None,
+        )
+        .unwrap();
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    let mut ui = ShellUi::new(&shell, true);
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut ui, &shell, size, vec![], 5000);
+    let drawn = texts(&ctx, &mut ui, &shell, size);
+    let shown = |text: &str| drawn.iter().find(|(t, _)| t == text).map(|(_, r)| *r);
+    for text in [
+        "Suggested",
+        "Services",
+        "foo.service",
+        "Notes",
+        "Weather",
+        "18 °C, clear",
+    ] {
+        assert!(shown(text).is_some(), "{text} not drawn: {drawn:?}");
+    }
+    // The clock's own copy in the top bar steps aside for the clock card.
+    let time = shell.clock.time_label();
+    assert_eq!(drawn.iter().filter(|(t, _)| *t == time).count(), 1);
+
+    let restart = shown("Restart").expect("a Restart button").center();
+    let click = |pressed| egui::Event::PointerButton {
+        pos: restart,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    frame(
+        &ctx,
+        &mut ui,
+        &shell,
+        size,
+        vec![egui::Event::PointerMoved(restart)],
+        5000,
+    );
+    frame(&ctx, &mut ui, &shell, size, vec![click(true)], 5010);
+    let actions = frame(&ctx, &mut ui, &shell, size, vec![click(false)], 5020);
+    assert_eq!(
+        actions,
+        vec![Action::RestartUnit {
+            unit: "foo.service".into()
+        }]
+    );
+}

@@ -1,6 +1,6 @@
 //! What a derisk command palette plugin is built with.
 //!
-//! The bindings for `crates/derisk-palette/wit/palette.wit`, generated once
+//! The bindings for `crates/derisk-plugin/wit/palette/palette.wit`, generated once
 //! here so every plugin shares them, and a few builders for the rows and
 //! actions a plugin returns. A plugin implements [`Guest`] and exports it
 //! with [`export!`]:
@@ -19,7 +19,7 @@
 //! export!(Hello with_types_in derisk_palette_sdk::bindings);
 //! ```
 //!
-//! The plugins compile to `wasm32-unknown-unknown` and `derisk-palette`'s
+//! The plugins compile to `wasm32-unknown-unknown` and `derisk-plugin`'s
 //! build script wraps them in components. They also build for the host, so
 //! `cargo test` runs their logic natively; there the imports are stubs that
 //! must not be called, which is why [`interpret`] and [`log`] are only
@@ -30,7 +30,7 @@ pub use serde_json::{self, Value, json};
 #[allow(missing_docs, clippy::all, clippy::pedantic)]
 pub mod bindings {
     wit_bindgen::generate!({
-        path: "../../crates/derisk-palette/wit",
+        path: "../../../crates/derisk-plugin/wit/palette",
         world: "palette-plugin",
         pub_export_macro: true,
         export_macro_name: "export",

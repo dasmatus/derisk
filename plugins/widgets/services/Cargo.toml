@@ -1,0 +1,15 @@
+[package]
+name = "widget-services"
+description = "derisk widget plugin: Failed user services, with restart and dismiss"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-widget-sdk = { path = "../sdk" }

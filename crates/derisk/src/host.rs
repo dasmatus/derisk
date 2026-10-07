@@ -1628,9 +1628,10 @@ pub fn run(options: Options) -> Result {
         compositor = compositor.runtime(client);
     }
     let result = std::thread::scope(|scope| {
-        // The palette's plugins compile while the session comes up, so its
-        // first opening does not wait for them.
+        // The palette's and the overview's plugins compile while the
+        // session comes up, so neither's first opening waits for them.
         scope.spawn(palette::preload);
+        scope.spawn(widgets::preload);
         compositor.run()
     });
     if let Some(watch) = lock_watch {
