@@ -491,67 +491,7 @@ pub fn listen_fd_from(pid: Option<&str>, fds: Option<&str>, me: u32) -> Option<i
     (pid?.parse::<u32>().ok()? == me && fds?.parse::<u32>().ok()? >= 1).then_some(3)
 }
 
-/// Journal priority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Priority {
-    /// Errors.
-    Error = 3,
-    /// Warnings.
-    Warning = 4,
-    /// Notable events.
-    Notice = 5,
-    /// Informational.
-    Info = 6,
-    /// Debugging.
-    Debug = 7,
-}
-
-/// Encodes fields in journald's native protocol.
-pub fn journal_payload(priority: Priority, message: &str, fields: &[(&str, &str)]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let priority = (priority as u8).to_string();
-    let all = [
-        ("MESSAGE", message),
-        ("PRIORITY", priority.as_str()),
-        ("SYSLOG_IDENTIFIER", LAUNCHER),
-    ];
-    for (key, value) in all.iter().chain(fields) {
-        out.extend_from_slice(key.as_bytes());
-        if value.contains('\n') {
-            out.push(b'\n');
-            out.extend_from_slice(&(value.len() as u64).to_le_bytes());
-            out.extend_from_slice(value.as_bytes());
-        } else {
-            out.push(b'=');
-            out.extend_from_slice(value.as_bytes());
-        }
-        out.push(b'\n');
-    }
-    out
-}
-
-/// Logs a structured message to journald, or to stderr if it is unavailable.
-///
-/// Field names must be uppercase ASCII letters, digits and underscores.
-pub fn log(priority: Priority, message: &str, fields: &[(&str, &str)]) {
-    let fields: Vec<(&str, &str)> = fields
-        .iter()
-        .copied()
-        .filter(|(k, _)| {
-            !k.is_empty()
-                && !k.starts_with('_')
-                && k.bytes()
-                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-        })
-        .collect();
-    let sent = UnixDatagram::unbound().is_ok_and(|s| {
-        s.send_to(
-            &journal_payload(priority, message, &fields),
-            "/run/systemd/journal/socket",
-        )
-        .is_ok()
-    });
-    if !sent {
-        eprintln!("<{}>{LAUNCHER}: {message}", priority as u8);
-    }
-}
+// A hand-written journald client stood here: `log`, `journal_payload` and a
+// `Priority` enum speaking the native protocol to /run/systemd/journal/socket.
+// tracing-journald replaced it, so the shell logs through `tracing` like its
+// libraries do and the binary picks journald or stderr in one place.

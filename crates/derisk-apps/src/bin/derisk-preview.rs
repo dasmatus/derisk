@@ -9,6 +9,8 @@
 //! update a moment after it saves.
 
 use std::{
+    fmt::Write,
+    io::IsTerminal,
     path::PathBuf,
     time::{Duration, Instant, SystemTime},
 };
@@ -17,6 +19,18 @@ use derisk_apps::{APPS, Session, find, visuals};
 use derisk_settings::Settings;
 use mcsapi_runtime::{AppId, InstanceId};
 use mcsapi_ui::{Theme, egui};
+use tracing_subscriber::EnvFilter;
+
+/// An argument that is not one of the core apps' IDs. The report's help
+/// lists them.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[error("unknown app: {app}")]
+#[diagnostic(code(derisk_preview::unknown_app))]
+struct UnknownApp {
+    app: String,
+    #[help]
+    apps: String,
+}
 
 struct Preview {
     session: Session,
@@ -136,15 +150,19 @@ impl eframe::App for Preview {
     }
 }
 
-fn main() -> eframe::Result {
+fn main() -> miette::Result<()> {
+    logging();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(unknown) = args.iter().find(|id| find(id).is_none()) {
-        eprintln!("unknown app: {unknown}");
-        eprintln!("apps:");
+        let mut apps = String::from("apps:");
         for app in &APPS {
-            eprintln!("  {:24} {}", app.id, app.name);
+            let _ = write!(apps, "\n  {:24} {}", app.id, app.name);
         }
-        std::process::exit(2);
+        return Err(UnknownApp {
+            app: unknown.clone(),
+            apps,
+        }
+        .into());
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -157,4 +175,20 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |_| Ok(Box::new(Preview::new(&args)))),
     )
+    // eframe's error is not Send + Sync, so it goes in as its message.
+    .map_err(|error| miette::miette!("running the preview window: {error}"))
+}
+
+/// Logs `tracing` events, and eframe's and winit's `log` records through
+/// tracing-subscriber's bridge, to stderr. `RUST_LOG` picks what is logged:
+/// `info` and up when it is unset or does not parse.
+fn logging() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        // No colour escapes in a pipe or a log file.
+        .with_ansi(std::io::stderr().is_terminal())
+        .init();
 }

@@ -22,6 +22,15 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 mcsapi-theme.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# The binary's subscriber: journald with structured fields under systemd,
+# stderr otherwise.
+tracing-journald.workspace = true
+tracing-subscriber.workspace = true
+# The library's errors are diagnostics; `fancy` is for the binary, which
+# shares this package and prints them.
+miette = { workspace = true, features = ["fancy"] }
 
 # `derisk session` runs on mcsapi-compositor with the derisk core apps. Off by
 # default so the shell library and headless commands build without graphics.

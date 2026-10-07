@@ -23,7 +23,6 @@ use std::{
 
 use derisk::{
     greetd::{self, Login, Phase, Request, Response},
-    systemd::{self, Priority},
     time::Clock,
     ui::{GreeterInput, paint_wallpaper, show_greeter},
 };
@@ -31,6 +30,7 @@ use mcsapi::WindowId;
 use mcsapi_compositor::{
     self as compositor, Command, Compositor, KeyInput, KeyRoute, Placement, Press, Theme, egui,
 };
+use tracing::{error, info};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -84,7 +84,7 @@ impl Greeter {
     /// greetd is gone, so no login can finish here. Exit, and greetd (if it
     /// is still running) starts a fresh greeter.
     fn lost(&mut self, error: &str) {
-        log(Priority::Error, &format!("lost greetd: {error}"));
+        error!("lost greetd: {error}");
         self.login.disconnected(error);
         self.quit();
     }
@@ -113,7 +113,7 @@ impl Greeter {
         }
         if *self.login.phase() == Phase::Started && !self.quit {
             // The display manager logs the session; logind records whose it is.
-            log(Priority::Notice, "starting the session");
+            info!("starting the session");
             self.quit();
         }
     }
@@ -329,10 +329,6 @@ pub fn run(options: Options) -> Result {
     };
     Compositor::new(greeter).title("derisk greeter").run()?;
     Ok(())
-}
-
-fn log(priority: Priority, message: &str) {
-    systemd::log(priority, message, &[]);
 }
 
 #[cfg(test)]

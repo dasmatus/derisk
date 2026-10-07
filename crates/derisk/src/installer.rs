@@ -19,7 +19,6 @@ use std::{
 
 use derisk::{
     install::{self, Disk, Event, Request},
-    systemd::{self, Priority},
     wifi::{NetworkPage, Wifi},
     wizard::{self, Nav, Next, Page, Row, ScreenLayout},
 };
@@ -27,6 +26,7 @@ use egui::{RichText, Ui};
 use mcsapi::widgets::Theme;
 use mcsapi_components::{Progress, Tokens};
 use mcsapi_compositor::{Command, egui};
+use tracing::{error, info};
 
 use crate::wizard_host::{self, Flow};
 
@@ -90,7 +90,7 @@ impl Backend {
             .write_all(install::request_line(request).as_bytes())
             .and_then(|()| self.stdin.flush())
         {
-            log(Priority::Error, &format!("cannot reach the backend: {e}"));
+            error!("cannot reach the backend: {e}");
         }
     }
 }
@@ -437,7 +437,7 @@ impl Flow for Installer {
             (Nav::Next, Step::Disk) => self.go(Step::Confirm),
             (Nav::Next, Step::Confirm) => {
                 if let Some(disk) = self.chosen().map(|d| d.path.clone()) {
-                    log(Priority::Notice, &format!("installing onto {disk}"));
+                    info!("installing onto {disk}");
                     self.install = Install::default();
                     self.backend.send(&Request::Install { disk });
                     self.step = Step::Installing;
@@ -480,8 +480,4 @@ pub fn run(backend: Vec<String>, size: (i32, i32)) -> Result {
         install: Install::default(),
     };
     wizard_host::run(installer, "derisk installer", size)
-}
-
-fn log(priority: Priority, message: &str) {
-    systemd::log(priority, message, &[]);
 }

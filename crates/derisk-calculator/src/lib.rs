@@ -19,36 +19,33 @@ use std::fmt;
 use mcsapi_ui::{App, Theme, egui};
 
 /// Why an expression could not be evaluated.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, thiserror::Error, miette::Diagnostic)]
 pub enum Error {
     /// A character that is not part of any token.
+    #[error("unexpected `{0}`")]
+    #[diagnostic(code(derisk_calculator::unexpected_char))]
     UnexpectedChar(char),
     /// The expression ended too early.
+    #[error("incomplete expression")]
+    #[diagnostic(code(derisk_calculator::unexpected_end))]
     UnexpectedEnd,
     /// A token in the wrong place.
+    #[error("unexpected `{0}`")]
+    #[diagnostic(code(derisk_calculator::unexpected_token))]
     UnexpectedToken(String),
     /// A name that is neither a constant nor a function.
+    #[error("unknown name `{0}`")]
+    #[diagnostic(code(derisk_calculator::unknown_name))]
     UnknownName(String),
     /// Division or remainder by zero.
+    #[error("division by zero")]
+    #[diagnostic(code(derisk_calculator::division_by_zero))]
     DivisionByZero,
     /// The result is not a finite number.
+    #[error("result is not a finite number")]
+    #[diagnostic(code(derisk_calculator::not_finite))]
     NotFinite,
 }
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedChar(c) => write!(f, "unexpected `{c}`"),
-            Self::UnexpectedEnd => f.write_str("incomplete expression"),
-            Self::UnexpectedToken(t) => write!(f, "unexpected `{t}`"),
-            Self::UnknownName(n) => write!(f, "unknown name `{n}`"),
-            Self::DivisionByZero => f.write_str("division by zero"),
-            Self::NotFinite => f.write_str("result is not a finite number"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 #[derive(Clone, Debug, PartialEq)]
 enum Token {

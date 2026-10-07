@@ -71,7 +71,7 @@ pub fn run(id: &str) -> Result<(), String> {
             cx.new(|cx| Calculator::new(window, cx))
         });
         if let Err(error) = opened {
-            eprintln!("derisk-gpui: opening the {title} window: {error}");
+            tracing::error!("opening the {title} window: {error}");
             cx.quit();
             return;
         }

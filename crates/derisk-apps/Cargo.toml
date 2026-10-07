@@ -16,12 +16,21 @@ derisk-settings.workspace = true
 mcsapi-runtime.workspace = true
 mcsapi-ui.workspace = true
 eframe = { workspace = true, optional = true }
+# Only the `derisk-preview` binary installs a subscriber and prints reports.
+tracing-subscriber = { workspace = true, optional = true }
+miette = { workspace = true, features = ["fancy"], optional = true }
+thiserror = { workspace = true, optional = true }
 
 [features]
 # A desktop window that runs the apps through eframe, for trying them out
 # before a compositor host exists. Off by default to keep CI free of windowing
 # dependencies.
-preview = ["dep:eframe"]
+preview = [
+    "dep:eframe",
+    "dep:miette",
+    "dep:thiserror",
+    "dep:tracing-subscriber",
+]
 
 [[bin]]
 name = "derisk-preview"

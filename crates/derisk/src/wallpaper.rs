@@ -405,11 +405,7 @@ impl WallpaperPainter {
     }
 
     fn fail(&mut self, error: &str) {
-        crate::systemd::log(
-            crate::systemd::Priority::Warning,
-            &format!("wallpaper: {error}"),
-            &[],
-        );
+        tracing::warn!("wallpaper: {error}");
         self.source = Source::Failed;
     }
 
@@ -517,11 +513,7 @@ impl WallpaperPainter {
                     .ctx()
                     .request_repaint_after(next_change.saturating_duration_since(Instant::now()));
                 if let Some(e) = error {
-                    crate::systemd::log(
-                        crate::systemd::Priority::Warning,
-                        &format!("wallpaper: {e}"),
-                        &[],
-                    );
+                    tracing::warn!("wallpaper: {e}");
                 }
                 None
             }

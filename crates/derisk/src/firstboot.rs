@@ -17,13 +17,13 @@ use std::{
 use derisk::{
     locale::{self, Language, Layout},
     setup::{self, Account, Choices, Step, Task},
-    systemd::{self, Priority},
     wifi::{NetworkPage, Wifi},
     wizard::{self, Nav, Next, Page, Row, ScreenLayout},
 };
 use egui::{RichText, Ui};
 use mcsapi::widgets::Theme;
 use mcsapi_compositor::{Command, egui};
+use tracing::info;
 
 use crate::wizard_host::{self, Flow};
 
@@ -425,7 +425,7 @@ impl Flow for Setup {
                 self.apply();
             }
             (Nav::Next, Step::Applying) => {
-                log(Priority::Notice, "setup finished");
+                info!("setup finished");
                 out.push(Command::Quit);
             }
             (Nav::Next, _) => self.go(step.next()),
@@ -472,12 +472,8 @@ fn configured() -> bool {
 /// Runs the setup, or returns at once when there is nothing to set up.
 pub fn run(options: Options) -> Result {
     if !options.force && configured() {
-        log(Priority::Info, "a regular user exists; nothing to set up");
+        info!("a regular user exists; nothing to set up");
         return Ok(());
     }
     wizard_host::run(Setup::new(options.dry_run), "derisk setup", options.size)
-}
-
-fn log(priority: Priority, message: &str) {
-    systemd::log(priority, message, &[]);
 }

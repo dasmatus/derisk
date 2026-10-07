@@ -2,7 +2,7 @@ use std::{os::unix::net::UnixDatagram, process::Command, time::Duration};
 
 use derisk::{
     action::Effect,
-    systemd::{self, FocusBoost, Priority, SessionOp},
+    systemd::{self, FocusBoost, SessionOp},
 };
 
 #[test]
@@ -149,16 +149,6 @@ fn socket_activation_and_watchdog_check_the_pid() {
         None
     );
     assert_eq!(systemd::watchdog_interval_from(None, None, 42), None);
-}
-
-#[test]
-fn journal_payload_uses_the_native_protocol() {
-    let p = systemd::journal_payload(Priority::Warning, "hi\nthere", &[("UNIT", "x")]);
-    let mut expected = b"MESSAGE\n".to_vec();
-    expected.extend_from_slice(&8u64.to_le_bytes());
-    expected.extend_from_slice(b"hi\nthere\nPRIORITY=4\n");
-    assert!(p.starts_with(&expected));
-    assert!(p.ends_with(b"UNIT=x\n"));
 }
 
 #[test]

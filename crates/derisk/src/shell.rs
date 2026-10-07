@@ -49,72 +49,67 @@ pub const KEYBOARD_MAX_WIDTH: i32 = 960;
 const KEYBOARD_MIN_CLIENT: i32 = 160;
 
 /// A shell operation failure.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error, miette::Diagnostic)]
 pub enum Error {
     /// An mcsapi policy error.
-    Policy(mcsapi::Error),
+    #[error(transparent)]
+    #[diagnostic(code(derisk::shell::policy))]
+    Policy(#[from] mcsapi::Error),
     /// The window is not managed.
+    #[error("unknown window: {0}")]
+    #[diagnostic(code(derisk::shell::unknown_window))]
     UnknownWindow(u64),
     /// The workspace does not exist.
+    #[error("unknown workspace: {0}")]
+    #[diagnostic(code(derisk::shell::unknown_workspace))]
     UnknownWorkspace(u64),
     /// The action needs a focused window and there is none.
+    #[error("no focused window")]
+    #[diagnostic(code(derisk::shell::no_focused_window))]
     NoFocusedWindow,
     /// A destructive session operation was not confirmed by the user.
+    #[error("{0:?} needs explicit confirmation (set \"confirmed\": true)")]
+    #[diagnostic(code(derisk::shell::needs_confirmation))]
     NeedsConfirmation(SessionOp),
     /// An agent or injected input asked for a destructive session
     /// operation; it waits for the person to confirm it on screen.
+    #[error("{0:?} is waiting for the person at the computer to confirm it on screen")]
+    #[diagnostic(code(derisk::shell::confirm_on_screen))]
     ConfirmOnScreen(SessionOp),
     /// The app name is not a plain command or desktop-file ID.
+    #[error("not a launchable app name: {0:?}")]
+    #[diagnostic(code(derisk::shell::not_launchable))]
     NotLaunchable(String),
     /// No tray item has this ID.
+    #[error("unknown tray item: {0:?}")]
+    #[diagnostic(code(derisk::shell::unknown_tray_item))]
     UnknownTrayItem(String),
     /// No custom widget has that button.
+    #[error("widget {0:?} has no button {1:?}")]
+    #[diagnostic(code(derisk::shell::unknown_widget_button))]
     UnknownWidgetButton(String, String),
     /// Unit actions only apply to currently failed user units.
+    #[error("not a failed user unit: {0:?}")]
+    #[diagnostic(code(derisk::shell::unknown_unit))]
     UnknownUnit(String),
     /// The path is not an absolute path to an existing, non-executable file
     /// or folder.
+    #[error("cannot open {0:?}")]
+    #[diagnostic(code(derisk::shell::not_openable))]
     NotOpenable(String),
     /// The assistant did not understand this request.
+    #[error("I don't know how to \"{0}\"")]
+    #[diagnostic(code(derisk::shell::not_understood))]
     NotUnderstood(String),
     /// Not a valid desktop action ID.
+    #[error("not a desktop action ID: {0:?}")]
+    #[diagnostic(code(derisk::shell::unknown_action))]
     UnknownAction(String),
     /// No web search engine has been chosen in Settings.
+    #[error("no search engine chosen in Settings")]
+    #[diagnostic(code(derisk::shell::no_search_engine))]
     NoSearchEngine,
 }
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Policy(e) => e.fmt(f),
-            Self::UnknownWindow(id) => write!(f, "unknown window: {id}"),
-            Self::UnknownWorkspace(id) => write!(f, "unknown workspace: {id}"),
-            Self::NoFocusedWindow => f.write_str("no focused window"),
-            Self::NeedsConfirmation(op) => {
-                write!(
-                    f,
-                    "{op:?} needs explicit confirmation (set \"confirmed\": true)"
-                )
-            }
-            Self::ConfirmOnScreen(op) => write!(
-                f,
-                "{op:?} is waiting for the person at the computer to confirm it on screen"
-            ),
-            Self::NotLaunchable(app) => write!(f, "not a launchable app name: {app:?}"),
-            Self::UnknownTrayItem(id) => write!(f, "unknown tray item: {id:?}"),
-            Self::UnknownWidgetButton(id, item) => {
-                write!(f, "widget {id:?} has no button {item:?}")
-            }
-            Self::UnknownUnit(unit) => write!(f, "not a failed user unit: {unit:?}"),
-            Self::NotOpenable(path) => write!(f, "cannot open {path:?}"),
-            Self::NotUnderstood(text) => write!(f, "I don't know how to \"{text}\""),
-            Self::UnknownAction(id) => write!(f, "not a desktop action ID: {id:?}"),
-            Self::NoSearchEngine => f.write_str("no search engine chosen in Settings"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 /// What running a sequence of actions did.
 ///
@@ -135,12 +130,6 @@ impl Outcome {
     /// effects of the actions before it).
     pub fn into_result(self) -> Result<Vec<Effect>, Error> {
         self.result.map(|()| self.effects)
-    }
-}
-
-impl From<mcsapi::Error> for Error {
-    fn from(e: mcsapi::Error) -> Self {
-        Self::Policy(e)
     }
 }
 
