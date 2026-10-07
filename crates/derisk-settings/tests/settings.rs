@@ -56,7 +56,7 @@ fn invalid_lines_warn_and_keep_defaults() {
     let (settings, warnings) = Settings::parse(text);
     assert_eq!(settings.desktop.workspaces, 9);
     assert_eq!(settings.desktop.gaps, 16);
-    assert_eq!(settings.appearance.accent, Accent::Lime);
+    assert_eq!(settings.appearance.accent, Accent::Teal);
     assert!(!settings.input.tap_to_click);
     let lines: Vec<usize> = warnings.iter().map(|w| w.line).collect();
     assert_eq!(lines, [2, 4, 5, 6]);

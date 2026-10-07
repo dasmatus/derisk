@@ -23,8 +23,10 @@ pub enum ColorScheme {
 /// Highlight color for active controls and the focused workspace.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Accent {
-    /// Lime, the mcsapi default.
+    /// Teal, the mcsapi default and the LosOS web interface's accent.
     #[default]
+    Teal,
+    /// Lime, the default before mcsapi took the web interface's look.
     Lime,
     /// Sky blue.
     Sky,
@@ -38,7 +40,14 @@ pub enum Accent {
 
 impl Accent {
     /// Every accent, in display order.
-    pub const ALL: [Self; 5] = [Self::Lime, Self::Sky, Self::Violet, Self::Rose, Self::Amber];
+    pub const ALL: [Self; 6] = [
+        Self::Teal,
+        Self::Lime,
+        Self::Sky,
+        Self::Violet,
+        Self::Rose,
+        Self::Amber,
+    ];
 
     /// The accent's color, from the theming engine's built-in accents.
     pub fn spec_color(self) -> mcsapi_theme::Color {
@@ -592,7 +601,7 @@ impl Default for Settings {
             appearance: Appearance {
                 theme: ThemeId::AUTOMATIC,
                 scheme: ColorScheme::Dark,
-                accent: Accent::Lime,
+                accent: Accent::Teal,
                 text_scale: 1.0,
                 reduce_motion: false,
                 blur: 6,
@@ -685,7 +694,7 @@ macro_rules! enum_text {
 }
 
 enum_text!(ColorScheme { Dark => "dark", Light => "light" });
-enum_text!(Accent { Lime => "lime", Sky => "sky", Violet => "violet", Rose => "rose", Amber => "amber" });
+enum_text!(Accent { Teal => "teal", Lime => "lime", Sky => "sky", Violet => "violet", Rose => "rose", Amber => "amber" });
 enum_text!(Layout { Tall => "tall", Monocle => "monocle" });
 enum_text!(Vrr { Automatic => "auto", On => "on", Off => "off" });
 enum_text!(LowPower { Off => "off", OnBattery => "on_battery", On => "on" });

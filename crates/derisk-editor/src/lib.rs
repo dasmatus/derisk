@@ -27,7 +27,7 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use mcsapi_components::{ErrorAlert, Tokens};
+use mcsapi_components::{ErrorDialog, Tokens};
 use mcsapi_ui::{App, Context as _, DocLink, Error, Theme, egui};
 
 /// The documentation section on files the editor could not open or save.
@@ -207,7 +207,7 @@ impl EditorApp {
         self.error.as_ref()
     }
 
-    /// Shows `error` until the next action or until it is dismissed; the
+    /// Shows `error` in a dialog until the next action or until "OK"; the
     /// status line carries its message too.
     fn fail(&mut self, error: Error) {
         self.status = Some(error.to_string());
@@ -348,7 +348,7 @@ impl App for EditorApp {
                     self.document.text.lines().count().max(1),
                     self.document.text.chars().count()
                 ));
-                // An error has its own alert above, so the line does not
+                // An error has its own dialog, so the line does not
                 // repeat it.
                 if let Some(status) = self.status.as_ref().filter(|_| self.error.is_none()) {
                     ui.separator();
@@ -356,14 +356,10 @@ impl App for EditorApp {
                 }
             });
         });
-        if let Some(error) = &self.error {
-            let mut dismissed = false;
-            egui::Panel::bottom("editor-error").show(ui, |ui| {
-                Tokens::from_theme(theme).install(ui.ctx());
-                dismissed = ErrorAlert::new(error).dismissible(true).show(ui).dismissed;
-            });
-            if dismissed {
-                self.error = None;
+        if self.error.is_some() {
+            Tokens::from_theme(theme).install(ui.ctx());
+            let shown = ErrorDialog::new("editor-error", &mut self.error).show(ui.ctx());
+            if shown.closed {
                 self.status = None;
             }
         }

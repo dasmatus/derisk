@@ -18,7 +18,7 @@ use egui::{
 };
 use mcsapi::{Geometry, toolkit::egui, widgets::Theme};
 use mcsapi_components::{
-    Alert, AlertVariant, Button, ButtonSize, ButtonVariant, ErrorAlert, Spinner, Tokens,
+    Alert, AlertVariant, Button, ButtonSize, ButtonVariant, ErrorDialog, Spinner, Tokens,
 };
 use mcsapi_ui::{DocLink, Error};
 
@@ -329,12 +329,15 @@ pub fn notice(ui: &mut Ui, text: &str, error: bool) {
     }
 }
 
-/// A failure as an error alert: the message, its causes and the address of
-/// the documentation section it names. The address, not a "Learn more":
-/// the installer and setup run before any session, with no browser to open,
-/// so the person reads it on another device.
-pub fn error(ui: &mut Ui, error: &Error) {
-    ErrorAlert::new(error).address_only(true).show(ui);
+/// A failure as an alert dialog: the message, its causes and the address
+/// of the documentation section it names, until "OK" takes it out of
+/// `error`. The address, not a "Learn more": the installer and setup run
+/// before any session, with no browser to open, so the person reads it on
+/// another device.
+pub fn error(ui: &Ui, id: &str, error: &mut Option<Error>) {
+    ErrorDialog::new(id, error)
+        .address_only(true)
+        .show(ui.ctx());
 }
 
 /// A message from the installer's or setup's backend as an [`Error`] that

@@ -59,6 +59,9 @@ enum Progress {
 struct Applying {
     tasks: Vec<Task>,
     current: usize,
+    /// Set for good on a failure; `error` is only the dialog saying why,
+    /// and "OK" empties it.
+    failed: bool,
     error: Option<mcsapi_ui::Error>,
     done: bool,
     events: Receiver<Progress>,
@@ -173,6 +176,7 @@ impl Setup {
         self.applying = Some(Applying {
             tasks,
             current: 0,
+            failed: false,
             error: None,
             done: false,
             events,
@@ -330,9 +334,8 @@ impl Setup {
             wizard::Entry::Secret,
             "Password again",
         );
-        if let Some(error) = &self.account_error {
-            wizard::error(ui, error);
-        } else if let Some(problem) = self.account.problem() {
+        wizard::error(ui, "account-error", &mut self.account_error);
+        if let Some(problem) = self.account.problem() {
             // Only once there is something to judge: an empty form is not
             // an error.
             if !self.account.real_name.is_empty() && !self.account.password.is_empty() {
@@ -350,6 +353,7 @@ impl Setup {
                 Progress::Started(i) => applying.current = i,
                 Progress::Failed(i, e) => {
                     applying.current = i;
+                    applying.failed = true;
                     applying.error = Some(wizard::failure(e, "setup-could-not-finish"));
                 }
                 Progress::Done => {
@@ -359,11 +363,9 @@ impl Setup {
             }
         }
         let labels: Vec<&str> = applying.tasks.iter().map(|t| t.label).collect();
-        wizard::steps(ui, &labels, applying.current, applying.error.is_some());
-        if let Some(error) = &applying.error {
-            ui.add_space(8.0);
-            wizard::error(ui, error);
-        } else if applying.done {
+        wizard::steps(ui, &labels, applying.current, applying.failed);
+        wizard::error(ui, "setup-error", &mut applying.error);
+        if applying.done {
             ui.add_space(8.0);
             ui.label(RichText::new("All set. Log in with your new account.").strong());
         }
@@ -383,7 +385,7 @@ impl Flow for Setup {
             Step::Applying => {
                 let applying = self.applying.as_ref();
                 let done = applying.is_some_and(|a| a.done);
-                let failed = applying.is_some_and(|a| a.error.is_some());
+                let failed = applying.is_some_and(|a| a.failed);
                 (Next::new("Continue", done), failed)
             }
             Step::Language => (
@@ -411,7 +413,8 @@ impl Flow for Setup {
         match (nav, step) {
             (Nav::Back, Step::Applying) => {
                 // Only after a failure: back to the account, the step most
-                // likely refused (the password policy).
+                // likely refused (the password policy), with the dialog
+                // again if "OK" has not closed it yet.
                 self.account_error = self.applying.take().and_then(|a| a.error);
                 self.go(Step::Account);
             }

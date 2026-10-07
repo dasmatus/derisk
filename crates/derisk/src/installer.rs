@@ -109,6 +109,9 @@ struct Install {
     fraction: Option<f32>,
     log: Vec<String>,
     done: bool,
+    /// Set for good on a failure; `error` is only the dialog saying why,
+    /// and "OK" empties it.
+    failed: bool,
     error: Option<mcsapi_ui::Error>,
     show_log: bool,
 }
@@ -181,6 +184,7 @@ impl Installer {
                 Event::Failed { message } => {
                     let error = wizard::failure(message, "the-installer-stopped");
                     if self.step == Step::Installing {
+                        self.install.failed = true;
                         self.install.error = Some(error);
                     } else {
                         self.error = Some(error);
@@ -241,10 +245,7 @@ impl Installer {
     }
 
     fn disk_page(&mut self, ui: &mut Ui) {
-        if let Some(error) = &self.error {
-            wizard::error(ui, error);
-            ui.add_space(8.0);
-        }
+        wizard::error(ui, "installer-error", &mut self.error);
         let Some(disks) = &self.disks else {
             wizard::busy(ui, "Looking for disks…");
             return;
@@ -296,19 +297,17 @@ impl Installer {
         if labels.is_empty() {
             wizard::busy(ui, "Starting…");
         } else {
-            wizard::steps(ui, &labels, install.current, install.error.is_some());
+            wizard::steps(ui, &labels, install.current, install.failed);
         }
         if let Some(fraction) = install.fraction
             && !install.done
-            && install.error.is_none()
+            && !install.failed
         {
             ui.add(Progress::new(fraction));
             ui.add_space(8.0);
         }
-        if let Some(error) = &install.error {
-            wizard::error(ui, error);
-            ui.add_space(8.0);
-        } else if install.done {
+        wizard::error(ui, "install-error", &mut install.error);
+        if install.done && !install.failed {
             ui.label(
                 RichText::new("Installed. Remove the installer's medium, then restart.").strong(),
             );
@@ -329,7 +328,7 @@ impl Installer {
             install.show_log = !install.show_log;
         }
         // Shown by itself after a failure: it is what says why.
-        if install.show_log || install.error.is_some() {
+        if install.show_log || install.failed {
             let tokens = Tokens::current(ui.ctx());
             egui::ScrollArea::vertical()
                 .id_salt("install-log")
@@ -390,7 +389,7 @@ impl Flow for Installer {
             ),
             Step::Installing => {
                 let done = self.install.done;
-                let failed = self.install.error.is_some();
+                let failed = self.install.failed;
                 (
                     if done {
                         "Installed"
