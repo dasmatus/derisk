@@ -173,6 +173,14 @@ fn logging() {
             // Every unit derisk starts is `app-derisk-...`; its own lines
             // keep the identifier they had, whatever argv[0] says.
             .with_syslog_identifier(systemd::LAUNCHER.to_owned())
+            // `info!` is informational (6), as most of these lines were
+            // before, not tracing-journald's default of notice (5); debug
+            // drops to 7 with it.
+            .with_priority_mappings(tracing_journald::PriorityMappings {
+                info: tracing_journald::Priority::Informational,
+                debug: tracing_journald::Priority::Debug,
+                ..tracing_journald::PriorityMappings::new()
+            })
     });
     let stderr = journald.is_none().then(|| {
         tracing_subscriber::fmt::layer()
