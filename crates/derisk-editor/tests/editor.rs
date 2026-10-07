@@ -114,5 +114,11 @@ fn app_saves_to_the_location_field() {
     let mut untitled = EditorApp::new();
     untitled.save();
     assert!(untitled.status().unwrap().starts_with("Could not save"));
+    let error = untitled.error().unwrap();
+    assert_eq!(
+        error.causes().next().unwrap().to_string(),
+        "type a file path to save to"
+    );
+    assert_eq!(error.doc().unwrap().page(), "troubleshooting");
     fs::remove_dir_all(dir).unwrap();
 }

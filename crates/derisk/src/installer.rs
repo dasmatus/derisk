@@ -109,7 +109,7 @@ struct Install {
     fraction: Option<f32>,
     log: Vec<String>,
     done: bool,
-    error: Option<String>,
+    error: Option<mcsapi_ui::Error>,
     show_log: bool,
 }
 
@@ -124,7 +124,7 @@ struct Installer {
     network: NetworkPage,
     disks: Option<Vec<Disk>>,
     disk: Option<usize>,
-    error: Option<String>,
+    error: Option<mcsapi_ui::Error>,
     install: Install,
 }
 
@@ -179,10 +179,11 @@ impl Installer {
                     self.install.current = self.install.labels.len();
                 }
                 Event::Failed { message } => {
+                    let error = wizard::failure(message, "the-installer-stopped");
                     if self.step == Step::Installing {
-                        self.install.error = Some(message);
+                        self.install.error = Some(error);
                     } else {
-                        self.error = Some(message);
+                        self.error = Some(error);
                     }
                 }
             }
@@ -241,7 +242,7 @@ impl Installer {
 
     fn disk_page(&mut self, ui: &mut Ui) {
         if let Some(error) = &self.error {
-            wizard::notice(ui, error, true);
+            wizard::error(ui, error);
             ui.add_space(8.0);
         }
         let Some(disks) = &self.disks else {
@@ -305,7 +306,7 @@ impl Installer {
             ui.add_space(8.0);
         }
         if let Some(error) = &install.error {
-            wizard::notice(ui, error, true);
+            wizard::error(ui, error);
             ui.add_space(8.0);
         } else if install.done {
             ui.label(

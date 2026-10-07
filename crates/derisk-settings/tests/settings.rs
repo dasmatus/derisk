@@ -130,6 +130,8 @@ fn app_reports_invalid_files() {
     std::fs::write(&path, "desktop.gaps = lots\n").unwrap();
     let app = SettingsApp::open(Some(path));
     assert!(app.status().unwrap().contains("line 1"));
+    assert!(app.error().unwrap().is_warning());
+    assert!(app.error().unwrap().doc().is_some());
     let mut memory_only = SettingsApp::open(None);
     memory_only.settings.desktop.gaps = 2;
     memory_only.save();

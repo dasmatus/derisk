@@ -59,7 +59,7 @@ enum Progress {
 struct Applying {
     tasks: Vec<Task>,
     current: usize,
-    error: Option<String>,
+    error: Option<mcsapi_ui::Error>,
     done: bool,
     events: Receiver<Progress>,
 }
@@ -81,7 +81,7 @@ struct Setup {
     wifi: Wifi,
     network: NetworkPage,
     account: Account,
-    account_error: Option<String>,
+    account_error: Option<mcsapi_ui::Error>,
     applying: Option<Applying>,
 }
 
@@ -331,7 +331,7 @@ impl Setup {
             "Password again",
         );
         if let Some(error) = &self.account_error {
-            wizard::notice(ui, error, true);
+            wizard::error(ui, error);
         } else if let Some(problem) = self.account.problem() {
             // Only once there is something to judge: an empty form is not
             // an error.
@@ -350,7 +350,7 @@ impl Setup {
                 Progress::Started(i) => applying.current = i,
                 Progress::Failed(i, e) => {
                     applying.current = i;
-                    applying.error = Some(e);
+                    applying.error = Some(wizard::failure(e, "setup-could-not-finish"));
                 }
                 Progress::Done => {
                     applying.current = applying.tasks.len();
@@ -362,7 +362,7 @@ impl Setup {
         wizard::steps(ui, &labels, applying.current, applying.error.is_some());
         if let Some(error) = &applying.error {
             ui.add_space(8.0);
-            wizard::notice(ui, error, true);
+            wizard::error(ui, error);
         } else if applying.done {
             ui.add_space(8.0);
             ui.label(RichText::new("All set. Log in with your new account.").strong());

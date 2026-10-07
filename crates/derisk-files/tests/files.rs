@@ -318,6 +318,10 @@ fn app_opens_files_and_folders() {
             .unwrap()
             .starts_with("Could not open folder")
     );
+    assert_eq!(
+        missing.error().unwrap().doc().unwrap().heading(),
+        Some("files-could-not-open-or-change-something")
+    );
     run_frame(
         &mut missing,
         &context,
