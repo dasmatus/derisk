@@ -130,8 +130,10 @@ fn random(len: usize) -> io::Result<Vec<u8>> {
 pub fn recovery_codes() -> io::Result<Vec<u32>> {
     let bytes = random(4 * RECOVERY_CODES)?;
     Ok(bytes
-        .chunks_exact(4)
-        .map(|c| 10_000_000 + u32::from_le_bytes([c[0], c[1], c[2], c[3]]) % 90_000_000)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| 10_000_000 + u32::from_le_bytes(*c) % 90_000_000)
         .collect())
 }
 
