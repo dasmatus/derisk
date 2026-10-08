@@ -24,8 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
-      # wasm32-unknown-unknown: derisk-palette's build script compiles the
-      # palette's plugins under plugins/ to WebAssembly. 1.96 is the oldest
+      # wasm32-unknown-unknown: derisk-plugin's build script compiles the
+      # palette's and the overview's plugins under plugins/ to WebAssembly. 1.96 is the oldest
       # rustc wasmtime 49, which runs them, builds with.
       - run: rustup toolchain install 1.96 --profile minimal --component clippy,rustfmt --target wasm32-unknown-unknown && rustup default 1.96
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl-dev libgles-dev libpam0g-dev libinput-dev libudev-dev libgbm-dev libseat-dev libdrm-dev

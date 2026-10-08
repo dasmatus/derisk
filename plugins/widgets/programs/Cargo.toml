@@ -1,0 +1,15 @@
+[package]
+name = "widget-programs"
+description = "derisk widget plugin: Cards programs register over the agent socket"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-widget-sdk = { path = "../sdk" }

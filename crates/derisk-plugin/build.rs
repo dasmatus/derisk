@@ -1,13 +1,13 @@
-//! Builds the bundled palette plugins under `plugins/` and wraps each in a
-//! component for `src/bundled.rs` to embed, the way pm's build script builds
-//! pm's bundled plugins.
+//! Builds the bundled plugins under `plugins/palette/` and
+//! `plugins/widgets/` and wraps each in a component for `src/lib.rs` to
+//! embed, the way pm's build script builds pm's bundled plugins.
 //!
 //! The plugins are members of derisk's workspace, so one Cargo.lock (and one
 //! vendored set of sources in a Nix build) covers them, but they have to be
 //! compiled for `wasm32-unknown-unknown`, which the outer build is not doing.
-//! A nested cargo builds them into `palette-plugins/` in the target
-//! directory, so it never waits on the lock the outer build holds, and the
-//! `palette-plugin` profile in the workspace's Cargo.toml keeps them small.
+//! A nested cargo builds them into `wasm-plugins/` in the target directory,
+//! so it never waits on the lock the outer build holds, and the
+//! `wasm-plugin` profile in the workspace's Cargo.toml keeps them small.
 
 use std::{
     env,
@@ -21,11 +21,11 @@ use std::{
 use wit_component::ComponentEncoder;
 
 const TARGET: &str = "wasm32-unknown-unknown";
-const PROFILE: &str = "palette-plugin";
+const PROFILE: &str = "wasm-plugin";
 
-/// The bundled plugins, in the order the palette asks them. Each is the
-/// package `palette-<name>` under `plugins/<name>`.
-const BUNDLED: [&str; 12] = [
+/// The bundled palette plugins, in the order the palette asks them. Each is
+/// the package `palette-<name>` under `plugins/palette/<name>`.
+const PALETTE: [&str; 12] = [
     "apps",
     "windows",
     "menus",
@@ -38,6 +38,25 @@ const BUNDLED: [&str; 12] = [
     "assistant",
     "agent",
     "web",
+];
+
+/// The bundled widget plugins, in the order the overview shows their cards.
+/// Each is the package `widget-<name>` under `plugins/widgets/<name>`.
+const WIDGETS: [&str; 7] = [
+    "clock",
+    "suggestions",
+    "services",
+    "calendar",
+    "battery",
+    "notes",
+    "programs",
+];
+
+/// Both sets: the package prefix, the list, and the constant `bundled.rs`
+/// names it by.
+const SETS: [(&str, &[&str], &str); 2] = [
+    ("palette", &PALETTE, "PALETTE"),
+    ("widget", &WIDGETS, "WIDGETS"),
 ];
 
 /// What cargo sets for this build script that describes derisk's own build.
@@ -58,7 +77,7 @@ fn main() {
     let workspace = manifest
         .ancestors()
         .nth(2)
-        .expect("crates/derisk-palette sits two levels below the workspace")
+        .expect("crates/derisk-plugin sits two levels below the workspace")
         .to_path_buf();
     let plugins = workspace.join("plugins");
     println!("cargo::rerun-if-changed={}", plugins.display());
@@ -73,35 +92,42 @@ fn main() {
 
     let components = out.join("bundled");
     fs::create_dir_all(&components).expect("create the bundled components directory");
-    let mut list = String::from("/// The bundled plugins, in the order the palette asks them.\n");
-    list.push_str("pub(crate) const BUNDLED: &[(&str, &[u8])] = &[\n");
-    for name in BUNDLED {
-        let module = target_dir
-            .join(TARGET)
-            .join(PROFILE)
-            .join(format!("palette_{name}.wasm"));
-        let component = components.join(format!("{name}.wasm"));
-        encode(&module, &component);
+    let mut list = String::new();
+    for (prefix, names, constant) in SETS {
         writeln!(
             list,
-            "    ({name:?}, include_bytes!({:?})),",
-            component.display().to_string()
+            "/// The bundled {prefix} plugins, in the order they are asked.\n\
+             pub(crate) const {constant}: &[(&str, &[u8])] = &["
         )
         .expect("write to a string");
+        for name in names {
+            let module = target_dir
+                .join(TARGET)
+                .join(PROFILE)
+                .join(format!("{prefix}_{name}.wasm"));
+            let component = components.join(format!("{prefix}-{name}.wasm"));
+            encode(&module, &component);
+            writeln!(
+                list,
+                "    ({name:?}, include_bytes!({:?})),",
+                component.display().to_string()
+            )
+            .expect("write to a string");
+        }
+        list.push_str("];\n");
     }
-    list.push_str("];\n");
     write_if_changed(list.as_bytes(), &out.join("bundled.rs"));
 }
 
-/// `palette-plugins/` in the target directory, found as the ancestor of
+/// `wasm-plugins/` in the target directory, found as the ancestor of
 /// `OUT_DIR` that cargo marked with a `CACHEDIR.TAG`; under `OUT_DIR` if
 /// there is none.
 fn shared_target_dir(out: &Path) -> PathBuf {
     out.ancestors()
         .find(|dir| dir.join("CACHEDIR.TAG").is_file())
         .map_or_else(
-            || out.join("palette-plugins"),
-            |root| root.join("palette-plugins"),
+            || out.join("wasm-plugins"),
+            |root| root.join("wasm-plugins"),
         )
 }
 
@@ -120,24 +146,26 @@ fn compile(workspace: &Path, target_dir: &Path) {
         ])
         .arg("--target-dir")
         .arg(target_dir);
-    for name in BUNDLED {
-        command.arg("-p").arg(format!("palette-{name}"));
+    for (prefix, names, _) in SETS {
+        for name in names {
+            command.arg("-p").arg(format!("{prefix}-{name}"));
+        }
     }
     for key in NOT_INHERITED {
         command.env_remove(key);
     }
     let status = command
         .status()
-        .unwrap_or_else(|error| panic!("cannot run cargo to build the palette plugins: {error}"));
+        .unwrap_or_else(|error| panic!("cannot run cargo to build the plugins: {error}"));
     assert!(
         status.success(),
-        "building the palette plugins failed ({status}). They are WebAssembly: this \
+        "building the bundled plugins failed ({status}). They are WebAssembly: this \
          needs `rustup target add {TARGET}`, or with nixpkgs' rustc, lld on PATH"
     );
 }
 
 /// Wraps the core module at `module` in a component, validated, so a module
-/// that does not make one fails the build rather than the palette.
+/// that does not make one fails the build rather than the session.
 fn encode(module: &Path, component: &Path) {
     let bytes = fs::read(module)
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", module.display()));

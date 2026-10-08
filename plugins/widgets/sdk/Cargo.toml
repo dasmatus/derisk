@@ -1,0 +1,13 @@
+[package]
+name = "derisk-widget-sdk"
+description = "What a derisk overview widget plugin is built with: the WIT bindings and card builders"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+wit-bindgen.workspace = true

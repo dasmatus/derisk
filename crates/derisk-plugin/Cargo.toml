@@ -1,6 +1,6 @@
 [package]
-name = "derisk-palette"
-description = "The derisk command palette's plugin host: WebAssembly components that supply its rows"
+name = "derisk-plugin"
+description = "derisk's plugin host: WebAssembly components that supply the command palette's rows and the overview's widgets"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

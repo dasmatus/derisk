@@ -1,5 +1,15 @@
-//! Custom overview widgets: cards a program describes over the agent socket
-//! and the overview draws after its own.
+//! The overview's widgets: cards from widget plugins (see `derisk-plugin`),
+//! and the cards programs register over the agent socket, which the bundled
+//! `programs` plugin turns into cards like the others.
+//!
+//! Every card comes from a plugin: the clock, the calendar, the battery,
+//! suggested apps, failed services and the notes are bundled plugins under
+//! `plugins/widgets/`, and more can be installed the way palette plugins
+//! are. This module builds the [`View`] they are shown ([`view`]) and keeps
+//! their cards until what a plugin reads changes ([`Board`]); the overview
+//! draws the cards with the theme.
+//!
+//! A program's card:
 //!
 //! ```text
 //! {"method":"register_widget","widget":{"id":"weather","title":"Weather",
@@ -17,10 +27,13 @@
 //! button presses as `{"event":"widget","id":"weather","item":"refresh"}`
 //! ([`widget_event`]), and takes the widget with it when it closes.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::OnceLock};
 
+use derisk_plugin::widget::{Battery, Card, Clock, Plugins, Registration, View};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::shell::Shell;
 
 /// Most custom widgets the overview shows, so a runaway program cannot push
 /// the built-in ones out of reach.
@@ -201,4 +214,106 @@ impl CustomWidgets {
 /// The event line telling a widget's owner that a button was pressed.
 pub fn widget_event(id: &str, item: &str) -> Value {
     json!({"event": "widget", "id": id, "item": item})
+}
+
+static PLUGINS: OnceLock<Plugins> = OnceLock::new();
+
+/// The overview's widget plugins: the bundled ones, then the system's, then
+/// the person's signed ones. Loaded once, on first use; [`preload`] starts
+/// that early.
+///
+/// # Panics
+///
+/// If the bundled plugins do not load, which is a bug in derisk's build.
+pub fn plugins() -> &'static Plugins {
+    PLUGINS.get_or_init(|| {
+        crate::plugins::with_installed(Plugins::bundled().expect("derisk's bundled widget plugins"))
+    })
+}
+
+/// Loads [`plugins`] now, so the overview's first opening does not wait
+/// for them to compile. For a thread of its own at startup.
+pub fn preload() {
+    plugins();
+}
+
+/// How many suggested apps the view carries.
+const SUGGESTED: usize = 5;
+
+/// The desktop as widget plugins see it; each sees only the parts its
+/// manifest asks for.
+pub fn view(shell: &Shell) -> View {
+    let clock = shell.clock;
+    View {
+        clock: Clock {
+            year: clock.year,
+            month: clock.month,
+            day: clock.day,
+            hour: clock.hour,
+            minute: clock.minute,
+            weekday: clock.weekday,
+            twenty_four_hour: shell.effects.top_bar.clock_24h,
+        },
+        battery: shell.battery.map(|b| Battery {
+            percent: b.percent,
+            charging: b.charging,
+        }),
+        suggested: shell.habits.suggestions(clock.hour, SUGGESTED),
+        failed_units: shell.failed_units.clone(),
+        registered: shell
+            .widgets
+            .list()
+            .iter()
+            .map(|w| Registration {
+                id: w.id.clone(),
+                data: serde_json::to_string(w).unwrap_or_default(),
+            })
+            .collect(),
+    }
+}
+
+/// What one plugin last showed, and for what.
+#[derive(Debug)]
+struct Answer {
+    /// The view it was rendered for, as the plugin saw it.
+    view: View,
+    cards: Vec<Card>,
+}
+
+/// The overview's cards, kept between frames: each plugin renders again
+/// only when a part of the desktop it reads has changed, which for most of
+/// them is once a minute at most.
+#[derive(Debug, Default)]
+pub struct Board {
+    answers: Vec<Option<Answer>>,
+}
+
+impl Board {
+    /// Renders, in parallel, every plugin whose part of `view` changed
+    /// since it last rendered.
+    pub fn refresh(&mut self, plugins: &Plugins, view: &View) {
+        self.answers.resize_with(plugins.len(), || None);
+        let seen: Vec<View> = plugins.iter().map(|p| p.view(view)).collect();
+        let answers = &self.answers;
+        let fresh = plugins.each(
+            |i, _| answers[i].as_ref().is_none_or(|a| a.view != seen[i]),
+            |plugin| plugins.render(plugin, view),
+        );
+        for (i, cards) in fresh {
+            self.answers[i] = Some(Answer {
+                view: seen[i].clone(),
+                cards,
+            });
+        }
+    }
+
+    /// The cards, plugin by plugin in load order, each with the index of
+    /// the plugin that made it.
+    pub fn cards(&self) -> impl Iterator<Item = (usize, &Card)> {
+        self.answers.iter().enumerate().flat_map(|(i, answer)| {
+            answer
+                .iter()
+                .flat_map(move |a| a.cards.iter().map(move |card| (i, card)))
+        })
+    }
 }

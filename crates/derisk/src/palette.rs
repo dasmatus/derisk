@@ -14,7 +14,7 @@
 //!   open and a web search.
 //!
 //! Every one of those rows comes from a plugin: a WebAssembly component
-//! run in a sandbox by `derisk-palette`, bundled in derisk or installed
+//! run in a sandbox by `derisk-plugin`, bundled in derisk or installed
 //! (see that crate). This module is the core around them. It shows each
 //! plugin the parts of the desktop it asked for ([`view`]), keeps their
 //! answers until what they read changes ([`Catalog`]), turns the actions in
@@ -46,8 +46,10 @@ use std::{
     sync::OnceLock,
 };
 
-pub use derisk_palette::{App, AppAction, Category, File, Plugins, Position, View};
-use derisk_palette::{Desk, Hook, Input, MenuCommand, Registration, TrayItem, Window, Workspace};
+pub use derisk_plugin::palette::{App, AppAction, Category, File, Plugins, Position, View};
+use derisk_plugin::palette::{
+    Desk, Hook, Input, MenuCommand, Registration, TrayItem, Window, Workspace,
+};
 use tracing::warn;
 
 use crate::{
@@ -158,7 +160,7 @@ impl Entry {
     /// A plugin's row with its actions parsed, or `None` when one does not
     /// parse. A row that logs out, reboots or powers off asks for a second
     /// Enter whatever the plugin said.
-    pub fn from_plugin(row: derisk_palette::Entry) -> Option<Self> {
+    pub fn from_plugin(row: derisk_plugin::palette::Entry) -> Option<Self> {
         let actions = row
             .actions
             .iter()
@@ -342,7 +344,7 @@ fn interpret(text: &str) -> Result<Vec<String>, String> {
 static PLUGINS: OnceLock<Plugins> = OnceLock::new();
 
 /// The palette's plugins: the bundled ones, then the system's, then the
-/// person's signed ones (see `derisk-palette` for where each comes from).
+/// person's signed ones (see `derisk-plugin` for where each comes from).
 /// Loaded once, on first use; [`preload`] starts that early.
 ///
 /// # Panics
@@ -350,47 +352,10 @@ static PLUGINS: OnceLock<Plugins> = OnceLock::new();
 /// If the bundled plugins do not load, which is a bug in derisk's build.
 pub fn plugins() -> &'static Plugins {
     PLUGINS.get_or_init(|| {
-        let started = std::time::Instant::now();
-        let mut plugins = Plugins::bundled(interpret).expect("derisk's bundled palette plugins");
-        let data_dirs = std::env::var_os("XDG_DATA_DIRS")
-            .filter(|d| !d.is_empty())
-            .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
-        let data_dirs: Vec<PathBuf> = std::env::split_paths(&data_dirs).collect();
-        let mut refused = plugins.load_system(data_dirs.iter().map(PathBuf::as_path));
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let xdg = |var: &str, fallback: &str| {
-            std::env::var_os(var)
-                .filter(|d| !d.is_empty())
-                .map(PathBuf::from)
-                .or_else(|| home.as_ref().map(|h| h.join(fallback)))
-        };
-        if let (Some(data), Some(config)) = (
-            xdg("XDG_DATA_HOME", ".local/share"),
-            xdg("XDG_CONFIG_HOME", ".config"),
-        ) {
-            let dir = data.join(derisk_palette::PLUGIN_DIR);
-            if dir.is_dir() {
-                match pm_trust(&config) {
-                    Ok(trust) => refused.extend(plugins.load_signed(&dir, &trust)),
-                    Err(e) => refused.push(e),
-                }
-            }
-        }
-        for error in refused {
-            warn!("palette plugin refused: {error}");
-        }
-        tracing::info!(
-            plugins = plugins.len(),
-            ms = started.elapsed().as_millis() as u64,
-            "palette plugins loaded"
-        );
-        plugins
+        crate::plugins::with_installed(
+            Plugins::bundled(interpret).expect("derisk's bundled palette plugins"),
+        )
     })
-}
-
-/// The keys trusted to sign the person's palette plugins.
-fn pm_trust(config: &Path) -> miette::Result<derisk_palette::TrustStore> {
-    derisk_palette::TrustStore::load(&config.join(derisk_palette::TRUST_DIR))
 }
 
 /// Loads [`plugins`] now, so the palette's first opening does not wait for

@@ -1,0 +1,15 @@
+[package]
+name = "widget-battery"
+description = "derisk widget plugin: Battery level, on a device with one"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-widget-sdk = { path = "../sdk" }

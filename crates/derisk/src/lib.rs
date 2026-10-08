@@ -72,6 +72,7 @@ pub mod mobile;
 pub mod overview;
 pub mod palette;
 pub mod password_age;
+pub mod plugins;
 pub mod privacy;
 pub mod setup;
 pub mod shell;

@@ -41,10 +41,11 @@
               ./crates/derisk-portal/data
               ./crates/derisk-apps/data
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./crates)
-              # The command palette's plugins, which derisk-palette's build
-              # script compiles to WebAssembly, and the interface they share.
+              # The palette's and the overview's plugins, which
+              # derisk-plugin's build script compiles to WebAssembly, and the
+              # interfaces they are built against.
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./plugins)
-              ./crates/derisk-palette/wit
+              ./crates/derisk-plugin/wit
             ];
           };
 

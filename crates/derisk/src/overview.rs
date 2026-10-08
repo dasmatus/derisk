@@ -1,4 +1,4 @@
-//! The overview screen: workspace strip, window grid and widgets.
+//! The overview screen: workspace strip, window grid and widget column.
 
 use std::path::Path;
 
@@ -10,35 +10,10 @@ use crate::{
     geom::{centered, inset, rect},
 };
 
-/// A widget shown on the overview.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Widget {
-    /// Large clock and date.
-    Clock,
-    /// Month calendar.
-    Calendar,
-    /// Battery level, if the device has one.
-    Battery,
-    /// Apps the user usually opens around now.
-    Suggestions,
-    /// A scratch pad.
-    Notes,
-    /// Failed systemd user units, with restart/reset buttons.
-    Units,
-}
-
-impl Widget {
-    /// The default widget board.
-    pub const DEFAULT: [Self; 6] = [
-        Self::Clock,
-        Self::Suggestions,
-        Self::Units,
-        Self::Calendar,
-        Self::Battery,
-        Self::Notes,
-    ];
-}
+// The overview's widgets used to be a fixed enum drawn here (Clock,
+// Calendar, Battery, Suggestions, Notes, Units). Each is now a widget plugin
+// under plugins/widgets/, so the board is whatever plugins are loaded; see
+// `crate::widgets`.
 
 /// Regions of the overview.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
