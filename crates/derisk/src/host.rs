@@ -55,7 +55,7 @@ use derisk::{
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
     time::Clock,
-    ui::{PolkitInput, ShellUi, set_touch_style, show_lock, show_polkit},
+    ui::{ChoiceInput, PolkitInput, ShellUi, set_touch_style, show_choice, show_lock, show_polkit},
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
 };
@@ -204,6 +204,9 @@ pub struct Session {
     reader: Option<unlock::Conversation>,
     /// polkit's requests to authenticate, the first one shown.
     polkit: Vec<polkit_agent::Prompt>,
+    /// Choices apps asked the person to make (`derisk choose`), the first
+    /// one shown.
+    choices: Vec<Choice>,
     /// This logind session, from `XDG_SESSION_ID`.
     session_id: Option<String>,
     /// Its logind object path, for the lock signal and the locked hint.
@@ -218,6 +221,16 @@ pub struct Session {
     /// Whether a screen locker other than derisk's own (swaylock, through
     /// `ext_session_lock_v1`) has the session locked.
     locked_elsewhere: bool,
+}
+
+/// A choice waiting for the person: the screen to share, say.
+struct Choice {
+    title: String,
+    options: Vec<String>,
+    /// The highlighted option.
+    picked: usize,
+    /// Where the answer goes, as an agent protocol response line.
+    reply: mpsc::Sender<String>,
 }
 
 /// What an agent asked of the accessibility tree.
@@ -352,6 +365,7 @@ impl Session {
             auth: None,
             reader: None,
             polkit: Vec::new(),
+            choices: Vec::new(),
             session_id,
             session_path,
             idle: None,
@@ -562,6 +576,32 @@ impl Session {
         }
     }
 
+    /// Draws the first choice waiting and answers it once the person picks
+    /// or cancels. Only real input picks: an agent must not share the
+    /// screen for the person, though it may cancel.
+    fn show_choice(&mut self, ui: &mut egui::Ui) {
+        let Some(choice) = self.choices.first_mut() else {
+            return;
+        };
+        let theme = self.ui.theme;
+        let input = show_choice(
+            ui,
+            &choice.title,
+            &choice.options,
+            &mut choice.picked,
+            &self.shell,
+            &theme,
+        );
+        let answer = match input {
+            ChoiceInput::None => return,
+            ChoiceInput::Pick(_) if self.shell.synthetic_input() => return,
+            ChoiceInput::Pick(index) => json!({"ok": true, "result": choice.options[index]}),
+            ChoiceInput::Cancel => json!({"ok": false, "error": "cancelled"}),
+        };
+        let _ = choice.reply.send(answer.to_string());
+        self.choices.remove(0);
+    }
+
     /// A key on the lock screen: wakes a reader that stopped listening.
     fn wake_reader(&mut self) {
         if let Some(request) = self.lock.wake_fingerprint()
@@ -738,6 +778,18 @@ impl Session {
                 }
                 Err(e) => respond(Err(e)),
             },
+            LiveRequest::Choose { title, options } => {
+                if options.is_empty() {
+                    return respond(Err("nothing to choose from".to_owned()));
+                }
+                self.shell.pointer_up();
+                self.choices.push(Choice {
+                    title: title.unwrap_or_else(|| "Share your screen".to_owned()),
+                    options,
+                    picked: 0,
+                    reply,
+                });
+            }
             LiveRequest::RegisterTree { window, nodes } => {
                 let Some(id) =
                     WindowId::new(window).filter(|w| self.shell.window_label(*w).is_some())
@@ -1212,6 +1264,7 @@ impl compositor::Shell for Session {
         };
         self.lock.is_locked()
             || !self.polkit.is_empty()
+            || !self.choices.is_empty()
             || self.shell.overview_visible()
             || self.shell.palette_visible()
             || self.shell.pending_confirmation().is_some()
@@ -1233,7 +1286,7 @@ impl compositor::Shell for Session {
 
     fn pointer_down(&mut self, at: (i32, i32), time_ms: u64) -> Press {
         self.super_tap.cancel();
-        if self.lock.is_locked() || !self.polkit.is_empty() {
+        if self.lock.is_locked() || !self.polkit.is_empty() || !self.choices.is_empty() {
             return Press::Handled;
         }
         match self.shell.pointer_down(at, time_ms) {
@@ -1267,9 +1320,9 @@ impl compositor::Shell for Session {
             }
             return KeyRoute::Chrome;
         }
-        // So does polkit's dialog, so nothing typed into it reaches a
-        // window or triggers a shortcut.
-        if !self.polkit.is_empty() {
+        // So do polkit's dialog, so nothing typed into it reaches a window
+        // or triggers a shortcut, and a choice, so Enter answers it.
+        if !self.polkit.is_empty() || !self.choices.is_empty() {
             self.super_tap.cancel();
             return KeyRoute::Chrome;
         }
@@ -1393,6 +1446,9 @@ impl compositor::Shell for Session {
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
         self.show_polkit(ui);
+        if self.polkit.is_empty() {
+            self.show_choice(ui);
+        }
         // What the on-screen keyboard typed for windows goes to the focused
         // one. It goes through the same synthetic-input path agents use, so
         // the keyboard can't confirm what only a direct tap may (the

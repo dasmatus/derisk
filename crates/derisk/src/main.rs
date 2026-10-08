@@ -91,6 +91,10 @@ USAGE:
                                   Launch an app, or one of its desktop actions,
                                   in the running session
     derisk send <json>            Send one agent-protocol request to the session
+    derisk choose [--title <TEXT>]
+                                  Ask the person to pick one of the lines on
+                                  stdin and print it; exit 1 if they cancel
+                                  (xdg-desktop-portal-wlr's chooser)
     derisk agent [OPTIONS]        Serve the JSON-lines agent protocol
     derisk mcp                    Serve the running session's agent tools
                                   over MCP on stdin and stdout
@@ -239,6 +243,7 @@ fn main() -> miette::Result<()> {
         }
         Some("launch") => launch(&args[1..]),
         Some("send") => send(&args[1..].join(" ")),
+        Some("choose") => choose(&args[1..]),
         Some("agent") => agent(&args[1..]),
         Some("mcp") => mcp(),
         Some("-h" | "--help" | "help") | None => {
@@ -448,6 +453,42 @@ fn launch(args: &[String]) -> Result {
         _ => return Err(usage("usage: derisk launch <APP> [--action <ID>]")),
     };
     send(&serde_json::json!({"method": "dispatch", "actions": [action]}).to_string())
+}
+
+/// `derisk choose`: the lines on stdin as a choice on screen, the one
+/// picked printed as it came. xdg-desktop-portal-wlr runs it as its
+/// `dmenu` chooser to ask which screen or window to share.
+fn choose(args: &[String]) -> Result {
+    let title = match args {
+        [] => None,
+        [flag, title] if flag == "--title" => Some(title.clone()),
+        _ => return Err(usage("usage: derisk choose [--title <TEXT>]")),
+    };
+    let options: Vec<String> = io::stdin()
+        .lock()
+        .lines()
+        .map_while(std::result::Result::ok)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let request = serde_json::json!({"method": "choose", "title": title, "options": options});
+    let path = session_socket()?;
+    let mut stream = UnixStream::connect(&path)
+        .map_err(|e| format!("no derisk session on {}: {e}", path.display()))?;
+    writeln!(stream, "{request}")?;
+    let mut response = String::new();
+    BufReader::new(stream).read_line(&mut response)?;
+    let value: serde_json::Value = serde_json::from_str(&response)?;
+    match value["result"].as_str() {
+        Some(picked) if value["ok"] == true => {
+            println!("{picked}");
+            Ok(())
+        }
+        _ => Err(value["error"]
+            .as_str()
+            .unwrap_or("no answer")
+            .to_owned()
+            .into()),
+    }
 }
 
 fn send(line: &str) -> Result {

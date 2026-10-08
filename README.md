@@ -295,6 +295,12 @@ same theme.
   parent's focus and clicks until it closes.
 - **Pagers.** The open workspaces are listed through `ext_workspace_v1`,
   numbered as derisk numbers them, and a pager can switch between them.
+- **Screen sharing.** xdg-desktop-portal-wlr serves the ScreenCast
+  portal over the compositor's capture protocols, and asks which screen or
+  window to share through `derisk choose`, a dialog in the session that
+  reads xdg-desktop-portal-wlr's dmenu-style list on standard input and
+  prints the line picked. Its config names it:
+  `[screencast]` `chooser_type=dmenu`, `chooser_cmd=derisk choose`.
 - **polkit agent.** With `--execute` the session registers as polkit's
   authentication agent for its logind session, so run0, system-wide app
   installs and fingerprint enrolment can ask someone to authenticate.
@@ -426,6 +432,7 @@ session knows, and `crates/derisk-portal/data/portal/derisk-portals.conf` leaves
 | Screenshot | The whole screen from the compositor, over the agent socket, saved to Pictures/Screenshots |
 | Wallpaper | Sets a picture as the background through `settings.conf`, which the session reloads |
 | Background | Which apps have windows, over the agent socket; apps running without one are allowed for that run and nothing is stored |
+| ScreenCast | Not derisk's: `derisk-portals.conf` gives it to xdg-desktop-portal-wlr (above, Screen sharing) |
 
 xdg-desktop-portal asks before a non-interactive screenshot or a wallpaper
 without a preview. The interactive and preview cases are the backend's to
