@@ -696,6 +696,20 @@ impl ShellUi {
             paint_startup(&painter, to_rect(shell.output()), frame, &self.theme);
             ui.ctx().request_repaint();
         }
+        // Nobody used the session for a while: fade the screen, over the
+        // chrome as well, until the next key or pointer movement.
+        let dim = ui
+            .ctx()
+            .animate_bool_with_time(Id::new("derisk-idle-dim"), shell.dimmed, 1.0);
+        if dim > 0.0 {
+            ui.ctx()
+                .layer_painter(egui::LayerId::new(Order::Debug, Id::new("derisk-idle-dim")))
+                .rect_filled(
+                    to_rect(shell.output()),
+                    0,
+                    Color32::from_black_alpha((dim * 170.0) as u8),
+                );
+        }
         actions
     }
 
@@ -1214,6 +1228,36 @@ impl ShellUi {
     }
 
     fn indicators(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        // Windows that rang the bell or asked to come forward while the
+        // person was elsewhere: their app's icon, ringed, until focused.
+        let side = 18.0;
+        for window in shell.wanting_attention() {
+            let (app, title) = shell.window_label(window).unwrap_or_default();
+            let look = shell.apps.look(app);
+            let (r, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
+            ui.painter().circle_stroke(
+                r.center(),
+                side * 0.65,
+                Stroke::new(2.0, self.theme.accent),
+            );
+            self.paint_app_icon(ui.painter(), r.shrink(1.0), &look);
+            let label = format!("{} wants attention: {title}", look.name);
+            name(ui, &response, Role::Button, label.clone());
+            if response.on_hover_text(label).clicked() {
+                actions.push(Action::Focus {
+                    window: window.get(),
+                });
+            }
+        }
+        if shell.kept_awake {
+            let awake = ui
+                .add(
+                    icons::button(ui.ctx(), "video-display", 14.0, self.theme.foreground)
+                        .frame(false),
+                )
+                .on_hover_text("An app is keeping the screen on");
+            name(ui, &awake, Role::Label, "An app is keeping the screen on");
+        }
         let failed = (!shell.failed_units.is_empty()).then(|| {
             let n = shell.failed_units.len();
             let button = ui
@@ -2807,6 +2851,114 @@ pub fn show_polkit(
     input
 }
 
+/// What the person did in a choice dialog this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChoiceInput {
+    /// Nothing to act on.
+    None,
+    /// Escape or Cancel.
+    Cancel,
+    /// Enter or the default button, on the option at this index.
+    Pick(usize),
+}
+
+/// How an option of a choice reads on screen, and a second, quieter line.
+/// The screen-cast portal names screens `Monitor: <name> <description>`
+/// and windows `Window: <title> (<identifier>)`: those read as "Entire
+/// screen" and the window's title.
+pub fn choice_label(option: &str) -> (String, Option<String>) {
+    if let Some(screen) = option.strip_prefix("Monitor: ") {
+        return ("Entire screen".to_owned(), Some(screen.to_owned()));
+    }
+    if let Some(window) = option.strip_prefix("Window: ") {
+        let title = window.rsplit_once(" (").map_or(window, |(title, _)| title);
+        return (title.to_owned(), Some("Window".to_owned()));
+    }
+    (option.to_owned(), None)
+}
+
+/// Draws a choice an app asked the person to make, such as the screen to
+/// share, as mcsapi's [`NativeDialog`] over the dimmed desktop: one row
+/// per option, `picked` highlighted, and Cancel and Share. Double-clicking
+/// a row picks it.
+///
+/// [`NativeDialog`]: mcsapi_components::NativeDialog
+pub fn show_choice(
+    ui: &mut Ui,
+    title: &str,
+    options: &[String],
+    picked: &mut usize,
+    shell: &Shell,
+    theme: &Theme,
+) -> ChoiceInput {
+    use mcsapi_components::NativeDialog;
+    use mcsapi_ui::dialog::{ActionRole, DialogAction};
+
+    let mut input = ChoiceInput::None;
+    let mut open = true;
+    let actions = [
+        DialogAction::new("Cancel", ActionRole::Cancel),
+        DialogAction::new("Share", ActionRole::Default),
+    ];
+    let width = 420.0_f32.min(to_rect(shell.output()).width() - 80.0);
+    let answer = NativeDialog::new("derisk-choice", &mut open, title)
+        .width(width)
+        .show(ui.ctx(), |ui| {
+            ui.label(RichText::new(title).size(18.0).strong());
+            ui.add_space(10.0);
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    for (index, option) in options.iter().enumerate() {
+                        let (label, detail) = choice_label(option);
+                        let (r, row) = ui
+                            .allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
+                        let fill = if *picked == index {
+                            theme.accent.gamma_multiply(0.35)
+                        } else if row.hovered() {
+                            theme.surface
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+                        let painter = ui.painter();
+                        painter.rect_filled(r, 6, fill);
+                        painter.text(
+                            r.left_top() + vec2(12.0, 6.0),
+                            Align2::LEFT_TOP,
+                            &label,
+                            egui::FontId::proportional(14.0),
+                            theme.foreground,
+                        );
+                        if let Some(detail) = &detail {
+                            painter.text(
+                                r.left_top() + vec2(12.0, 25.0),
+                                Align2::LEFT_TOP,
+                                detail,
+                                egui::FontId::proportional(12.0),
+                                theme.foreground.gamma_multiply(0.6),
+                            );
+                        }
+                        name(ui, &row, Role::Button, label);
+                        if row.clicked() {
+                            *picked = index;
+                        }
+                        if row.double_clicked() {
+                            input = ChoiceInput::Pick(index);
+                        }
+                    }
+                });
+            ui.add_space(12.0);
+            NativeDialog::actions(ui, &actions)
+        })
+        .flatten();
+    match answer {
+        Some(0) => ChoiceInput::Cancel,
+        Some(_) => ChoiceInput::Pick(*picked),
+        None if !open => ChoiceInput::Cancel,
+        None => input,
+    }
+}
+
 /// What the user did on the greeter this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GreeterInput {
@@ -2932,5 +3084,24 @@ mod tests {
                 "{category:?} results should remain available"
             );
         }
+    }
+
+    #[test]
+    fn share_choices_read_as_screens_and_windows() {
+        assert_eq!(
+            choice_label("Monitor: Virtual-1 Unknown Unknown"),
+            (
+                "Entire screen".to_owned(),
+                Some("Virtual-1 Unknown Unknown".to_owned())
+            )
+        );
+        assert_eq!(
+            choice_label("Window: Notes (a (b) c) (12)"),
+            ("Notes (a (b) c)".to_owned(), Some("Window".to_owned()))
+        );
+        assert_eq!(
+            choice_label("Something else"),
+            ("Something else".to_owned(), None)
+        );
     }
 }

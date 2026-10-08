@@ -42,7 +42,14 @@
 //! {"method":"screenshot"}                            PNG of the screen
 //! {"method":"input","events":[{"type":"click","x":40,"y":12}]}
 //! {"method":"register_tree","window":3,"nodes":[...]}
+//! {"method":"choose","title":"Share your screen","options":["Monitor: eDP-1"]}
 //! ```
+//!
+//! `choose` asks the person to pick one of the options on screen and
+//! answers with it, or with an error when they cancel. It is how the
+//! screen-cast portal asks which screen or window to share (`derisk
+//! choose`), so like the confirmation dialog only the person's own
+//! keyboard or pointer can pick; an agent can only cancel.
 //!
 //! Actions on registered nodes come back to the connection that registered
 //! them as `{"event":"action","window":3,"node":1,"action":"click"}`.
@@ -180,6 +187,15 @@ pub enum LiveRequest {
         window: u64,
         /// The nodes; those no other node lists as a child are its top.
         nodes: Vec<TreeNode>,
+    },
+    /// Ask the person to pick one of `options`; the answer is the one they
+    /// picked, an error if they cancelled.
+    Choose {
+        /// What the choice is for.
+        #[serde(default)]
+        title: Option<String>,
+        /// What to choose from, answered as given.
+        options: Vec<String>,
     },
 }
 
@@ -324,13 +340,14 @@ pub fn live_request(line: &str) -> Option<Result<LiveRequest, String>> {
         .get("method")?
         .as_str()?
         .to_owned();
-    const LIVE: [&str; 6] = [
+    const LIVE: [&str; 7] = [
         "tree",
         "find",
         "act",
         "screenshot",
         "input",
         "register_tree",
+        "choose",
     ];
     LIVE.contains(&method.as_str())
         .then(|| serde_json::from_str::<LiveRequest>(line).map_err(|e| format!("bad request: {e}")))

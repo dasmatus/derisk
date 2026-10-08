@@ -462,3 +462,75 @@ fn requests_for_sonnes_agent_open_its_panel() {
         }]
     );
 }
+
+#[test]
+fn a_dialog_floats_centred_on_its_parent() {
+    let mut shell = desktop();
+    // The parent is in the stack beside the first window, where a third
+    // tile would have halved it.
+    let (_first, _) = shell.map_window("other", "Other");
+    let (main, _) = shell.map_window("app", "Main");
+    let (dialog, _) = shell.map_window("app", "Save as");
+    shell.set_parent(dialog, Some(main)).unwrap();
+    let (p, d) = (frame_of(&shell, main), frame_of(&shell, dialog));
+    assert!(matches!(shell.mode(dialog), Some(Mode::Floating { .. })));
+    // Twice the centre, so odd sizes compare exactly, give or take the
+    // pixel halving loses.
+    let centre = |g: mcsapi::Geometry| (2 * g.loc.x + g.size.w, 2 * g.loc.y + g.size.h);
+    let ((dx, dy), (px, py)) = (centre(d), centre(p));
+    assert!(
+        (dx - px).abs() <= 1 && (dy - py).abs() <= 1,
+        "centred on the parent"
+    );
+    assert!(d.size.w < p.size.w && d.size.h < p.size.h);
+}
+
+#[test]
+fn a_modal_dialog_keeps_its_parents_input() {
+    let mut shell = desktop();
+    let (main, _) = shell.map_window("app", "Main");
+    let (other, _) = shell.map_window("other", "Other");
+    let (dialog, _) = shell.map_window("app", "Delete?");
+    shell.set_parent(dialog, Some(main)).unwrap();
+    shell.set_modal(dialog, true).unwrap();
+    shell.apply(Action::Focus { window: main.get() }).unwrap();
+    assert_eq!(
+        shell.focused(),
+        Some(dialog),
+        "focusing the parent focuses the dialog"
+    );
+    shell
+        .apply(Action::Focus {
+            window: other.get(),
+        })
+        .unwrap();
+    // A click in the parent's client area brings the dialog back and does
+    // not reach the parent.
+    let p = frame_of(&shell, main);
+    let corner = (p.loc.x + 5, p.loc.y + p.size.h - 5);
+    assert_eq!(
+        shell.pointer_down(corner, 0).unwrap(),
+        PointerOutcome::Handled { effects: vec![] }
+    );
+    assert_eq!(shell.focused(), Some(dialog));
+    // Closed, it leaves the parent free.
+    shell.unmap_window(dialog).unwrap();
+    shell.apply(Action::Focus { window: main.get() }).unwrap();
+    assert_eq!(shell.focused(), Some(main));
+}
+
+#[test]
+fn attention_lasts_until_the_window_is_focused() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    let (b, _) = shell.map_window("b", "B");
+    shell.set_attention(b, true).unwrap();
+    assert_eq!(shell.wanting_attention().count(), 0, "b is focused already");
+    shell.set_attention(a, true).unwrap();
+    assert_eq!(shell.wanting_attention().collect::<Vec<_>>(), vec![a]);
+    let ws = shell.workspace_of(a).unwrap();
+    assert!(shell.workspace_wants_attention(ws));
+    shell.apply(Action::Focus { window: a.get() }).unwrap();
+    assert_eq!(shell.wanting_attention().count(), 0);
+    assert!(!shell.workspace_wants_attention(ws));
+}

@@ -21,13 +21,13 @@
 
 use std::{
     collections::HashMap,
-    io::{BufReader, Write as _},
+    io::{BufRead as _, BufReader, Write as _},
     os::unix::{
         fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    process::{Child, Command as ProcessCommand, Stdio},
+    process::{Child, ChildStdin, Command as ProcessCommand, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -44,6 +44,7 @@ use derisk::{
     effects::{Effects, SettingsWatch},
     geom::{inset, rect},
     greetd::{Login, Request},
+    idle::{self, Event as IdleEvent},
     ipc::{self, LiveRequest},
     keyboard::{Output as Typed, Predictor},
     keys::{self, Key, Mods, SuperTap},
@@ -54,11 +55,11 @@ use derisk::{
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
     time::Clock,
-    ui::{PolkitInput, ShellUi, set_touch_style, show_lock, show_polkit},
+    ui::{ChoiceInput, PolkitInput, ShellUi, set_touch_style, show_choice, show_lock, show_polkit},
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
 };
-use derisk_settings::{Privacy, Shortcuts};
+use derisk_settings::{Power, Privacy, Shortcuts};
 use mcsapi::WindowId;
 use tracing::{info, warn};
 
@@ -66,7 +67,7 @@ use crate::{pam, polkit_agent, unlock};
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
     Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press,
-    Remote, Reserved, Role, RuntimeClient, TextField, Theme,
+    Remote, Reserved, Role, RuntimeClient, TextField, Theme, WindowHint, WorkspaceInfo,
     a11y::{Origin, Snapshot, Subtree},
     accesskit::{self, NodeId},
     egui,
@@ -203,10 +204,33 @@ pub struct Session {
     reader: Option<unlock::Conversation>,
     /// polkit's requests to authenticate, the first one shown.
     polkit: Vec<polkit_agent::Prompt>,
+    /// Choices apps asked the person to make (`derisk choose`), the first
+    /// one shown.
+    choices: Vec<Choice>,
     /// This logind session, from `XDG_SESSION_ID`.
     session_id: Option<String>,
     /// Its logind object path, for the lock signal and the locked hint.
     session_path: Option<String>,
+    /// swayidle, telling the session when nobody uses it (see
+    /// [`derisk::idle`]), with the Power settings it was started for.
+    idle: Option<IdleWatch>,
+    power: Power,
+    /// When swayidle was last started, so one that keeps exiting (or is
+    /// not installed) is retried once a minute rather than every second.
+    idle_started: Option<Instant>,
+    /// Whether a screen locker other than derisk's own (swaylock, through
+    /// `ext_session_lock_v1`) has the session locked.
+    locked_elsewhere: bool,
+}
+
+/// A choice waiting for the person: the screen to share, say.
+struct Choice {
+    title: String,
+    options: Vec<String>,
+    /// The highlighted option.
+    picked: usize,
+    /// Where the answer goes, as an agent protocol response line.
+    reply: mpsc::Sender<String>,
 }
 
 /// What an agent asked of the accessibility tree.
@@ -341,14 +365,21 @@ impl Session {
             auth: None,
             reader: None,
             polkit: Vec::new(),
+            choices: Vec::new(),
             session_id,
             session_path,
+            idle: None,
+            power: derisk_settings::Settings::default().power,
+            idle_started: None,
+            locked_elsewhere: false,
         }
     }
 
     /// Locks the screen now, and tells logind the session is locked.
     fn lock_screen(&mut self) {
-        if self.lock.is_locked() {
+        // Another locker already hides the session, and unlocking it
+        // should not uncover a second lock screen.
+        if self.lock.is_locked() || self.locked_elsewhere {
             return;
         }
         // PAM would be asked about user "" and refuse every password, so the
@@ -398,6 +429,66 @@ impl Session {
             && let Some(path) = &self.session_path
         {
             let _ = systemd::run(&systemd::locked_hint_argv(path, locked));
+        }
+    }
+
+    /// (Re)starts swayidle when the session runs for real and the Power
+    /// settings it was started for changed, or it exited.
+    fn sync_idle(&mut self) {
+        if !self.execute || self.wayland_display.is_empty() {
+            return;
+        }
+        let changed = self.idle.as_ref().is_some_and(|w| w.power != self.power);
+        let running = self.idle.as_mut().is_some_and(|w| w.running());
+        let retry = self
+            .idle_started
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(60));
+        if !changed && (running || !retry) {
+            return;
+        }
+        self.idle_started = Some(Instant::now());
+        // The old one goes first, so two never dim the screen at once.
+        self.idle = None;
+        self.idle = IdleWatch::start(self.power, &self.wayland_display);
+        if !self.idle.as_mut().is_some_and(|w| w.running()) {
+            warn!("swayidle did not start: the screen will not dim, lock or suspend when idle");
+        }
+    }
+
+    /// Acts on what swayidle reported since the last frame.
+    fn poll_idle(&mut self) {
+        // The frame since the lock showed it: the machine may sleep.
+        if let Some(watch) = self.idle.as_mut()
+            && std::mem::take(&mut watch.sleep_waiting)
+        {
+            let _ = watch.stdin.write_all(idle::SLEEP_DONE);
+        }
+        let events: Vec<IdleEvent> = self
+            .idle
+            .as_ref()
+            .map(|w| w.events.try_iter().collect())
+            .unwrap_or_default();
+        for event in events {
+            match event {
+                IdleEvent::Dim => self.shell.dimmed = true,
+                IdleEvent::Undim => self.shell.dimmed = false,
+                IdleEvent::Lock => {
+                    self.lock_screen();
+                    // Locked, the screen is the lock screen; dimming it
+                    // too would only hide the field.
+                    self.shell.dimmed = false;
+                }
+                IdleEvent::Sleep => {
+                    self.lock_screen();
+                    self.shell.dimmed = false;
+                    if let Some(watch) = self.idle.as_mut() {
+                        watch.sleep_waiting = true;
+                    }
+                }
+                IdleEvent::Suspend => self.perform(vec![Effect::Session {
+                    op: SessionOp::Suspend,
+                }]),
+            }
         }
     }
 
@@ -483,6 +574,32 @@ impl Session {
             // Its request already ended; the dialog goes with it.
             self.polkit.remove(0);
         }
+    }
+
+    /// Draws the first choice waiting and answers it once the person picks
+    /// or cancels. Only real input picks: an agent must not share the
+    /// screen for the person, though it may cancel.
+    fn show_choice(&mut self, ui: &mut egui::Ui) {
+        let Some(choice) = self.choices.first_mut() else {
+            return;
+        };
+        let theme = self.ui.theme;
+        let input = show_choice(
+            ui,
+            &choice.title,
+            &choice.options,
+            &mut choice.picked,
+            &self.shell,
+            &theme,
+        );
+        let answer = match input {
+            ChoiceInput::None => return,
+            ChoiceInput::Pick(_) if self.shell.synthetic_input() => return,
+            ChoiceInput::Pick(index) => json!({"ok": true, "result": choice.options[index]}),
+            ChoiceInput::Cancel => json!({"ok": false, "error": "cancelled"}),
+        };
+        let _ = choice.reply.send(answer.to_string());
+        self.choices.remove(0);
     }
 
     /// A key on the lock screen: wakes a reader that stopped listening.
@@ -661,6 +778,18 @@ impl Session {
                 }
                 Err(e) => respond(Err(e)),
             },
+            LiveRequest::Choose { title, options } => {
+                if options.is_empty() {
+                    return respond(Err("nothing to choose from".to_owned()));
+                }
+                self.shell.pointer_up();
+                self.choices.push(Choice {
+                    title: title.unwrap_or_else(|| "Share your screen".to_owned()),
+                    options,
+                    picked: 0,
+                    reply,
+                });
+            }
             LiveRequest::RegisterTree { window, nodes } => {
                 let Some(id) =
                     WindowId::new(window).filter(|w| self.shell.window_label(*w).is_some())
@@ -1079,6 +1208,7 @@ impl compositor::Shell for Session {
     /// once a second, and whether the machine can hibernate every half
     /// minute.
     fn tick(&mut self) {
+        self.poll_idle();
         if self
             .last_tick
             .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
@@ -1091,6 +1221,7 @@ impl compositor::Shell for Session {
         if let Some(settings) = self.settings.poll() {
             self.shell.effects = Effects::from_settings(&settings);
             self.shortcuts = settings.shortcuts;
+            self.power = settings.power;
             self.wallpaper.configure(&settings.wallpaper);
             if settings.privacy != self.privacy {
                 self.privacy = settings.privacy;
@@ -1102,6 +1233,7 @@ impl compositor::Shell for Session {
             self.ui.palette.history = Default::default();
         }
         self.sweep();
+        self.sync_idle();
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
             // logind works the answer out from swap and memory, which is
@@ -1132,6 +1264,7 @@ impl compositor::Shell for Session {
         };
         self.lock.is_locked()
             || !self.polkit.is_empty()
+            || !self.choices.is_empty()
             || self.shell.overview_visible()
             || self.shell.palette_visible()
             || self.shell.pending_confirmation().is_some()
@@ -1153,7 +1286,7 @@ impl compositor::Shell for Session {
 
     fn pointer_down(&mut self, at: (i32, i32), time_ms: u64) -> Press {
         self.super_tap.cancel();
-        if self.lock.is_locked() || !self.polkit.is_empty() {
+        if self.lock.is_locked() || !self.polkit.is_empty() || !self.choices.is_empty() {
             return Press::Handled;
         }
         match self.shell.pointer_down(at, time_ms) {
@@ -1187,9 +1320,9 @@ impl compositor::Shell for Session {
             }
             return KeyRoute::Chrome;
         }
-        // So does polkit's dialog, so nothing typed into it reaches a
-        // window or triggers a shortcut.
-        if !self.polkit.is_empty() {
+        // So do polkit's dialog, so nothing typed into it reaches a window
+        // or triggers a shortcut, and a choice, so Enter answers it.
+        if !self.polkit.is_empty() || !self.choices.is_empty() {
             self.super_tap.cancel();
             return KeyRoute::Chrome;
         }
@@ -1313,6 +1446,9 @@ impl compositor::Shell for Session {
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
         self.show_polkit(ui);
+        if self.polkit.is_empty() {
+            self.show_choice(ui);
+        }
         // What the on-screen keyboard typed for windows goes to the focused
         // one. It goes through the same synthetic-input path agents use, so
         // the keyboard can't confirm what only a direct tap may (the
@@ -1489,6 +1625,87 @@ impl compositor::Shell for Session {
 
     fn input_source(&mut self, synthetic: bool) {
         self.shell.set_synthetic_input(synthetic);
+    }
+
+    /// Dialogs float centred on the window they belong to, and a modal one
+    /// keeps its parent's input until it closes.
+    fn window_hint(&mut self, window: WindowId, hint: WindowHint) {
+        let result = match hint {
+            WindowHint::Parent(parent) => self.shell.set_parent(window, parent),
+            WindowHint::Modal(modal) => self.shell.set_modal(window, modal),
+            _ => Ok(()),
+        };
+        if let Err(e) = result {
+            warn!("window {window}: {e}");
+        }
+    }
+
+    /// The bell asks for attention on a window the person is not looking
+    /// at; in the one they are, they already heard it, or see its cause.
+    fn bell(&mut self, window: Option<WindowId>) {
+        if let Some(window) = window {
+            let _ = self.shell.set_attention(window, true);
+        }
+    }
+
+    /// A window asked to come forward with a token from something the
+    /// person did. It does, unless the screen is locked or a dialog of the
+    /// shell's own has the keyboard (the palette, polkit's prompt), where
+    /// taking it away would lose what is being typed: it asks for
+    /// attention instead.
+    fn activate(&mut self, window: WindowId) {
+        let busy = self.lock.is_locked()
+            || self.locked_elsewhere
+            || self.shell.palette_visible()
+            || !self.polkit.is_empty();
+        if busy {
+            let _ = self.shell.set_attention(window, true);
+        } else {
+            self.dispatch(vec![Action::Focus {
+                window: window.get(),
+            }]);
+        }
+    }
+
+    /// Shown in the top bar, so a screen that does not dim has a reason.
+    fn idle_inhibited(&mut self, inhibited: bool) {
+        self.shell.kept_awake = inhibited;
+    }
+
+    /// Another screen locker took the session, or gave it back. logind is
+    /// told, as for derisk's own lock, and derisk does not lock beneath it.
+    fn session_locked(&mut self, locked: bool) {
+        self.locked_elsewhere = locked;
+        self.shell.dimmed = false;
+        if !self.lock.is_locked() {
+            self.set_locked_hint(locked);
+        }
+        info!(
+            "session {} by another screen locker",
+            if locked { "locked" } else { "unlocked" }
+        );
+    }
+
+    /// The open workspaces, numbered as the shell numbers them, for pagers
+    /// such as waybar's.
+    fn workspaces(&self) -> Vec<WorkspaceInfo> {
+        let active = self.shell.active_workspace();
+        self.shell
+            .workspaces()
+            .iter()
+            .filter_map(|ws| {
+                let n = self.shell.workspace_number(*ws)?;
+                let mut info = WorkspaceInfo::new(n.to_string(), n.to_string(), n == active);
+                info.urgent = self.shell.workspace_wants_attention(*ws);
+                Some(info)
+            })
+            .collect()
+    }
+
+    fn activate_workspace(&mut self, id: &str) {
+        if let Ok(workspace) = id.parse() {
+            self.dispatch(vec![Action::SwitchWorkspace { workspace }]);
+        }
     }
 
     /// A GTK or Qt app's text field took or lost focus. On a touchscreen the
@@ -1697,6 +1914,67 @@ fn sleep_unless_stopped(delay: Duration, stopping: &AtomicBool) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     !stopping.load(Ordering::SeqCst)
+}
+
+/// swayidle running for the session, its lines read on a thread of their
+/// own into `events`.
+struct IdleWatch {
+    child: Child,
+    /// Where [`idle::SLEEP_DONE`] goes.
+    stdin: ChildStdin,
+    events: mpsc::Receiver<IdleEvent>,
+    /// Sleep waits for the lock screen, which the next frame draws.
+    sleep_waiting: bool,
+    /// The settings its timeouts come from.
+    power: Power,
+}
+
+impl IdleWatch {
+    fn start(power: Power, wayland_display: &str) -> Option<Self> {
+        let argv = idle::argv(&power);
+        let mut child = ProcessCommand::new(&argv[0])
+            .args(&argv[1..])
+            .env("WAYLAND_DISPLAY", wayland_display)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .inspect_err(|e| warn!("swayidle: {e}"))
+            .ok()?;
+        let stdout = child.stdout.take()?;
+        let stdin = child.stdin.take()?;
+        // A handful of lines a minute at most; a full queue means the
+        // session stopped reading, and the thread stops with it.
+        let (send, events) = mpsc::sync_channel(16);
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                if let Some(event) = IdleEvent::parse(&line)
+                    && send.send(event).is_err()
+                {
+                    return;
+                }
+            }
+        });
+        Some(Self {
+            child,
+            stdin,
+            events,
+            sleep_waiting: false,
+            power,
+        })
+    }
+
+    fn running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
+impl Drop for IdleWatch {
+    /// The reader thread ends at the end of swayidle's output.
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 struct LockWatch {
