@@ -696,6 +696,20 @@ impl ShellUi {
             paint_startup(&painter, to_rect(shell.output()), frame, &self.theme);
             ui.ctx().request_repaint();
         }
+        // Nobody used the session for a while: fade the screen, over the
+        // chrome as well, until the next key or pointer movement.
+        let dim = ui
+            .ctx()
+            .animate_bool_with_time(Id::new("derisk-idle-dim"), shell.dimmed, 1.0);
+        if dim > 0.0 {
+            ui.ctx()
+                .layer_painter(egui::LayerId::new(Order::Debug, Id::new("derisk-idle-dim")))
+                .rect_filled(
+                    to_rect(shell.output()),
+                    0,
+                    Color32::from_black_alpha((dim * 170.0) as u8),
+                );
+        }
         actions
     }
 
@@ -1214,6 +1228,36 @@ impl ShellUi {
     }
 
     fn indicators(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        // Windows that rang the bell or asked to come forward while the
+        // person was elsewhere: their app's icon, ringed, until focused.
+        let side = 18.0;
+        for window in shell.wanting_attention() {
+            let (app, title) = shell.window_label(window).unwrap_or_default();
+            let look = shell.apps.look(app);
+            let (r, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
+            ui.painter().circle_stroke(
+                r.center(),
+                side * 0.65,
+                Stroke::new(2.0, self.theme.accent),
+            );
+            self.paint_app_icon(ui.painter(), r.shrink(1.0), &look);
+            let label = format!("{} wants attention: {title}", look.name);
+            name(ui, &response, Role::Button, label.clone());
+            if response.on_hover_text(label).clicked() {
+                actions.push(Action::Focus {
+                    window: window.get(),
+                });
+            }
+        }
+        if shell.kept_awake {
+            let awake = ui
+                .add(
+                    icons::button(ui.ctx(), "video-display", 14.0, self.theme.foreground)
+                        .frame(false),
+                )
+                .on_hover_text("An app is keeping the screen on");
+            name(ui, &awake, Role::Label, "An app is keeping the screen on");
+        }
         let failed = (!shell.failed_units.is_empty()).then(|| {
             let n = shell.failed_units.len();
             let button = ui

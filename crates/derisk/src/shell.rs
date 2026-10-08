@@ -166,6 +166,15 @@ struct WindowInfo {
     /// Last free-floating frame, used when dragging a window out of a snap.
     restore: Option<Geometry>,
     minimized: bool,
+    /// The window this one belongs to, as a dialog belongs to its app's
+    /// main window (see [`Shell::set_parent`]).
+    parent: Option<WindowId>,
+    /// Whether it is a modal dialog: its parent takes no input while it is
+    /// open.
+    modal: bool,
+    /// Whether it asked to be seen while it was not focused: it rang the
+    /// bell, or asked to come forward when it could not.
+    attention: bool,
 }
 
 /// Where a window is drawn this frame.
@@ -297,6 +306,12 @@ pub struct Shell {
     confirmation: Option<SessionOp>,
     /// Names and icons for app IDs, set by the host from `.desktop` files.
     pub apps: Apps,
+    /// Whether the screen is dimmed because nobody used it for a while,
+    /// set by the host (see [`crate::idle`]).
+    pub dimmed: bool,
+    /// Whether a visible app keeps the session from going idle (a playing
+    /// video), set by the host.
+    pub kept_awake: bool,
 }
 
 /// File types whose default handler runs the file as a program rather than
@@ -423,6 +438,8 @@ impl Shell {
             agent_depth: 0,
             confirmation: None,
             apps: Apps::default(),
+            dimmed: false,
+            kept_awake: false,
         };
         shell.apply_profile_layout();
         shell
@@ -717,6 +734,9 @@ impl Shell {
                 before_maximize: None,
                 restore: None,
                 minimized: false,
+                parent: None,
+                modal: false,
+                attention: false,
             },
         );
         self.stack.push(id);
@@ -774,6 +794,13 @@ impl Shell {
     pub fn unmap_window(&mut self, window: WindowId) -> Result<(), Error> {
         self.desktop.remove(window)?;
         self.windows.remove(&window);
+        // Its dialogs outlive it as ordinary windows.
+        for info in self.windows.values_mut() {
+            if info.parent == Some(window) {
+                info.parent = None;
+                info.modal = false;
+            }
+        }
         self.stack.retain(|w| *w != window);
         self.menus.unregister(window.get());
         self.prune_workspaces();
@@ -815,15 +842,140 @@ impl Shell {
         self.stack.push(window);
     }
 
-    fn focus(&mut self, window: WindowId) -> Result<(), Error> {
+    /// Focuses `window`, or the modal dialog open over it, which keeps the
+    /// keyboard until it closes. Returns the window focused.
+    fn focus(&mut self, window: WindowId) -> Result<WindowId, Error> {
         let ws = self
             .workspace_of(window)
             .ok_or(Error::UnknownWindow(window.get()))?;
         self.desktop.switch_to(ws)?;
-        self.desktop.focus(window)?;
-        self.info_mut(window)?.minimized = false;
+        let info = self.info_mut(window)?;
+        info.minimized = false;
+        info.attention = false;
+        self.raise(window);
+        let target = match self.modal_over(window) {
+            Some(dialog) => {
+                let info = self.info_mut(dialog)?;
+                info.minimized = false;
+                info.attention = false;
+                self.raise(dialog);
+                dialog
+            }
+            None => window,
+        };
+        self.desktop.focus(target)?;
+        Ok(target)
+    }
+
+    /// The modal dialog open over `window`, the innermost when a dialog
+    /// opened another.
+    fn modal_over(&self, window: WindowId) -> Option<WindowId> {
+        let mut over = None;
+        let mut at = window;
+        // Bounded by the number of windows, should a client make a cycle.
+        for _ in 0..self.windows.len() {
+            let Some(next) = self
+                .windows
+                .iter()
+                .find(|(_, i)| i.modal && i.parent == Some(at))
+                .map(|(w, _)| *w)
+            else {
+                break;
+            };
+            over = Some(next);
+            at = next;
+        }
+        over
+    }
+
+    /// Records the window `window` belongs to (`None`: none any more). A
+    /// dialog floats centred on its parent, on the parent's workspace,
+    /// rather than taking a tile of its own.
+    pub fn set_parent(&mut self, window: WindowId, parent: Option<WindowId>) -> Result<(), Error> {
+        let parent = parent.filter(|p| *p != window && self.windows.contains_key(p));
+        let info = self.info_mut(window)?;
+        if info.parent == parent {
+            return Ok(());
+        }
+        info.parent = parent;
+        let Some(parent) = parent else {
+            return Ok(());
+        };
+        if let Some(ws) = self.workspace_of(parent)
+            && self.workspace_of(window) != Some(ws)
+        {
+            self.desktop.move_window(window, ws)?;
+        }
+        // Out of the tiling first, so the parent's frame is the one it
+        // keeps once the dialog no longer takes a tile beside it.
+        let float = self.default_float();
+        self.set_mode(
+            window,
+            Mode::Floating {
+                frame: float.into(),
+            },
+        )?;
+        let frame = match self.frame_of(parent) {
+            Some(p) => centered(p, p.size.w * 3 / 4, p.size.h * 3 / 4),
+            None => float,
+        };
+        // Kept on screen when the parent hangs off its edge.
+        let area = self.work_area();
+        let (w, h) = (frame.size.w.min(area.size.w), frame.size.h.min(area.size.h));
+        let frame = rect(
+            frame.loc.x.clamp(area.loc.x, area.loc.x + area.size.w - w),
+            frame.loc.y.clamp(area.loc.y, area.loc.y + area.size.h - h),
+            w,
+            h,
+        );
+        self.set_mode(
+            window,
+            Mode::Floating {
+                frame: frame.into(),
+            },
+        )?;
         self.raise(window);
         Ok(())
+    }
+
+    /// Marks `window` as a modal dialog, or not. Its parent's input goes
+    /// to it while it is open.
+    pub fn set_modal(&mut self, window: WindowId, modal: bool) -> Result<(), Error> {
+        self.info_mut(window)?.modal = modal;
+        let parent = self.windows[&window].parent;
+        if modal && parent.is_some() && self.focused() == parent {
+            self.focus(window)?;
+        }
+        Ok(())
+    }
+
+    /// Asks for the person's attention on `window`, or stops asking. A
+    /// focused window needs none; focusing it later clears it.
+    pub fn set_attention(&mut self, window: WindowId, on: bool) -> Result<(), Error> {
+        let focused = self.focused() == Some(window);
+        self.info_mut(window)?.attention = on && !focused;
+        Ok(())
+    }
+
+    /// Windows asking for attention, oldest first. One focused since, by
+    /// whatever means, no longer is.
+    pub fn wanting_attention(&self) -> impl Iterator<Item = WindowId> + '_ {
+        let focused = self.focused();
+        self.windows
+            .iter()
+            .filter(move |(w, i)| i.attention && Some(**w) != focused)
+            .map(|(w, _)| *w)
+    }
+
+    /// Whether a window on `workspace` asks for attention.
+    pub fn workspace_wants_attention(&self, workspace: WorkspaceId) -> bool {
+        self.desktop
+            .workspaces()
+            .find(|ws| ws.id() == workspace)
+            .is_some_and(|ws| {
+                ws.windows()
+                    .any(|w| self.windows.get(&w).is_some_and(|i| i.attention))
+            })
     }
 
     fn focus_visible(&mut self, forward: bool) {
@@ -1362,7 +1514,13 @@ impl Shell {
             return Ok(PointerOutcome::Desktop);
         };
         let window = hit.window;
-        self.focus(window)?;
+        if self.focus(window)? != window {
+            // A modal dialog is open over it: the press brings the dialog
+            // forward and goes no further.
+            return Ok(PointerOutcome::Handled {
+                effects: Vec::new(),
+            });
+        }
         match self.profile.title_bar.hit(hit.frame, point) {
             Some(Hit::Button(button)) => {
                 let window = Some(window.get());

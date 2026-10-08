@@ -27,6 +27,8 @@
 //! - [`lock`] and [`greetd`]: the lock screen, and the login conversation
 //!   `derisk greeter` holds with `derisk display-manager` (or greetd);
 //!   [`polkit`]: the dialog the session's polkit agent shows.
+//! - [`idle`]: dimming, locking and suspending when nobody uses the
+//!   session, through swayidle.
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
 //!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.
@@ -63,6 +65,7 @@ pub mod assistant;
 pub mod conversation;
 pub mod effects;
 pub mod icons;
+pub mod idle;
 pub mod ipc;
 pub mod keyboard;
 pub mod keys;

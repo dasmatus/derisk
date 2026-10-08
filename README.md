@@ -273,6 +273,28 @@ same theme.
   `tree`, `screenshot` and `input` included, gets `"the session is locked"`,
   and the AT-SPI tree is empty and ignores actions, since window titles
   would show through the lock.
+- **Idle.** With `--execute` the session dims the screen, locks it and
+  suspends after the minutes Settings › Power sets, and locks before the
+  machine sleeps. It learns when nobody is using it from swayidle, which it
+  runs for the purpose and which tells it rather than acting itself
+  (`ext_idle_notifier_v1`); swayidle also keeps logind's idle hint. A
+  playing video or anything else holding `zwp_idle_inhibit_v1` on a
+  visible window keeps all of that from happening, and the top bar says
+  an app is keeping the screen on.
+- **Other screen lockers.** swaylock or any `ext_session_lock_v1` locker
+  can lock the session; derisk sets logind's `LockedHint` for it and does
+  not lock again underneath.
+- **Windows asking for attention.** A window that rings the bell
+  (`xdg_system_bell_v1`) or asks to come forward with an activation token
+  while the palette, a polkit prompt or a lock has the keyboard gets its
+  app's icon, ringed, in the top bar until it is focused, and marks its
+  workspace urgent for pagers. Otherwise an activation focuses it.
+- **Dialogs.** A window that names a parent (`xdg_toplevel.set_parent`, or
+  through `xdg-foreign` as a portal's file chooser does) floats centred on
+  it instead of taking a tile; a modal one (`xdg_dialog_v1`) takes its
+  parent's focus and clicks until it closes.
+- **Pagers.** The open workspaces are listed through `ext_workspace_v1`,
+  numbered as derisk numbers them, and a pager can switch between them.
 - **polkit agent.** With `--execute` the session registers as polkit's
   authentication agent for its logind session, so run0, system-wide app
   installs and fingerprint enrolment can ask someone to authenticate.
