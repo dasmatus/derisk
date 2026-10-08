@@ -337,6 +337,39 @@ fn destructive_session_commands_need_confirmation() {
 }
 
 #[test]
+fn hibernate_is_offered_only_where_logind_can() {
+    let mut shell = shell();
+    let has = |shell: &Shell| {
+        palette::entries(shell, &[], &[])
+            .iter()
+            .any(|e| e.title == "Hibernate")
+    };
+    assert!(!has(&shell));
+    shell.can_hibernate = true;
+    assert!(has(&shell));
+    let hibernate = palette::entries(&shell, &[], &[])
+        .into_iter()
+        .find(|e| e.title == "Hibernate")
+        .unwrap();
+    assert!(hibernate.hibernates());
+    assert!(!hibernate.confirm);
+
+    // One catalog, kept between frames, follows the answer as it changes.
+    let mut catalog = palette::Catalog::default();
+    let view = palette::view(&shell, &[]);
+    let count = |catalog: &mut palette::Catalog, can| {
+        catalog
+            .entries(palette::plugins(), &view, &[], can)
+            .iter()
+            .filter(|e| e.hibernates())
+            .count()
+    };
+    assert_eq!(count(&mut catalog, true), 1);
+    assert_eq!(count(&mut catalog, false), 0);
+    assert_eq!(count(&mut catalog, true), 1);
+}
+
+#[test]
 fn files_are_indexed_and_opened_safely() {
     let dir = std::env::temp_dir().join(format!("derisk-palette-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);

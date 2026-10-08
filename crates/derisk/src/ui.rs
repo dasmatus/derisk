@@ -1876,7 +1876,9 @@ impl ShellUi {
             (&[][..], Vec::new(), None)
         } else {
             let query_rows = state.catalog.rows(plugins, &view, &state.query).clone();
-            let entries = state.catalog.entries(plugins, &view, &state.files);
+            let entries = state
+                .catalog
+                .entries(plugins, &view, &state.files, shell.can_hibernate);
             let hits = palette::search(entries, &state.query, &state.history);
             (
                 entries,
