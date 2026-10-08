@@ -58,6 +58,7 @@ use crate::{
     desktop::DesktopEntry,
     menu::{self, MenuEntry},
     shell::Shell,
+    systemd::SessionOp,
 };
 
 /// Whether rows of `category` are commands, which `>` narrows to.
@@ -150,6 +151,19 @@ impl Entry {
     pub fn shortcut(mut self, shortcut: impl Into<String>) -> Self {
         self.shortcut = Some(shortcut.into());
         self
+    }
+
+    /// Whether choosing this entry hibernates the machine.
+    pub fn hibernates(&self) -> bool {
+        self.actions.iter().any(|a| {
+            matches!(
+                a,
+                Action::Session {
+                    op: SessionOp::Hibernate,
+                    ..
+                }
+            )
+        })
     }
 
     /// The key [`History`] remembers this entry by.
@@ -383,6 +397,8 @@ pub struct Catalog {
     entries: Vec<Entry>,
     files_generation: u64,
     built: bool,
+    /// The `can_hibernate` the entries were filtered with.
+    hibernate: bool,
     query: Option<(String, View)>,
     rows: Rows,
 }
@@ -406,8 +422,15 @@ impl Catalog {
     }
 
     /// The catalog for `view` and `files`, asking again only the plugins
-    /// whose part of it changed.
-    pub fn entries(&mut self, plugins: &Plugins, view: &View, files: &[File]) -> &[Entry] {
+    /// whose part of it changed. Rows the machine cannot carry out are left
+    /// out: Hibernate unless `can_hibernate`.
+    pub fn entries(
+        &mut self,
+        plugins: &Plugins,
+        view: &View,
+        files: &[File],
+        can_hibernate: bool,
+    ) -> &[Entry] {
         self.answers.resize_with(plugins.len(), Answer::default);
         let stale: Vec<(usize, View, Option<u64>)> = plugins
             .iter()
@@ -421,7 +444,7 @@ impl Catalog {
                     .then_some((i, seen, files))
             })
             .collect();
-        if stale.is_empty() && self.built {
+        if stale.is_empty() && self.built && self.hibernate == can_hibernate {
             return &self.entries;
         }
         let fresh = plugins.each(
@@ -442,10 +465,13 @@ impl Catalog {
             };
         }
         self.built = true;
+        self.hibernate = can_hibernate;
         let mut entries: Vec<Entry> = self
             .answers
             .iter()
-            .flat_map(|a| a.rows.iter().cloned())
+            .flat_map(|a| a.rows.iter())
+            .filter(|e| can_hibernate || !e.hibernates())
+            .cloned()
             .collect();
         // Stable: within a category, plugins' own order stands.
         entries.sort_by_key(|e| catalog_order(e.category));
@@ -494,7 +520,7 @@ impl Catalog {
 /// from the loaded [`plugins`], asked afresh.
 pub fn entries(shell: &Shell, apps: &[App], files: &[File]) -> Vec<Entry> {
     Catalog::default()
-        .entries(plugins(), &view(shell, apps), files)
+        .entries(plugins(), &view(shell, apps), files, shell.can_hibernate)
         .to_vec()
 }
 

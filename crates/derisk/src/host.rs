@@ -152,6 +152,7 @@ pub struct Session {
     super_tap: SuperTap,
     start: Instant,
     last_tick: Option<Instant>,
+    last_sleep_check: Option<Instant>,
     palette_open: bool,
     index: Option<mpsc::Receiver<Index>>,
     core_apps: Vec<DesktopEntry>,
@@ -310,6 +311,7 @@ impl Session {
             super_tap: SuperTap::default(),
             start: Instant::now(),
             last_tick: None,
+            last_sleep_check: None,
             palette_open: false,
             index: None,
             core_apps,
@@ -1074,7 +1076,8 @@ impl compositor::Shell for Session {
     }
 
     /// Refreshes the clock, battery, effect settings and failed units about
-    /// once a second.
+    /// once a second, and whether the machine can hibernate every half
+    /// minute.
     fn tick(&mut self) {
         if self
             .last_tick
@@ -1101,6 +1104,15 @@ impl compositor::Shell for Session {
         self.sweep();
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
+            // logind works the answer out from swap and memory, which is
+            // more than a frame should wait on every second.
+            if self
+                .last_sleep_check
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(30))
+            {
+                self.last_sleep_check = Some(Instant::now());
+                self.shell.can_hibernate = systemd::can_hibernate();
+            }
         }
         // Learned words reach the disk at most twice a minute.
         if self.ui.keyboard.predictor.is_dirty()

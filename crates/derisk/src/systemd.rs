@@ -326,6 +326,42 @@ pub fn failed_units() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// `busctl` arguments that ask logind whether this machine can hibernate.
+pub fn can_hibernate_argv() -> Vec<String> {
+    [
+        "busctl",
+        "--system",
+        "call",
+        "org.freedesktop.login1",
+        "/org/freedesktop/login1",
+        "org.freedesktop.login1.Manager",
+        "CanHibernate",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// Whether logind's answer to a `Can*` call, as `busctl` prints it (such as
+/// `s "yes"`), means the operation can be asked for. `challenge` can: polkit
+/// asks the person first. `no` and `na` cannot.
+pub fn parse_can(output: &str) -> bool {
+    let answer = output
+        .trim()
+        .strip_prefix("s ")
+        .map(|a| a.trim_matches('"'));
+    matches!(answer, Some("yes" | "challenge"))
+}
+
+/// Whether the machine can hibernate now. logind says no unless there is a
+/// swap device a resume can find and room in it for what is in memory, so
+/// the answer changes as memory fills.
+pub fn can_hibernate() -> bool {
+    run(&can_hibernate_argv())
+        .ok()
+        .filter(|o| o.status.success())
+        .is_some_and(|o| parse_can(&String::from_utf8_lossy(&o.stdout)))
+}
+
 fn notify_socket() -> Option<UnixDatagram> {
     let path = std::env::var_os("NOTIFY_SOCKET")?;
     let socket = UnixDatagram::unbound().ok()?;

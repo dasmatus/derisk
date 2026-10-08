@@ -279,6 +279,10 @@ pub struct Shell {
     pub conversation: Conversation,
     /// Failed user units, updated by the host (see [`systemd::failed_units`]).
     pub failed_units: Vec<String>,
+    /// Whether logind says the machine can hibernate, updated by the host
+    /// (see [`systemd::can_hibernate`]). The palette offers Hibernate only
+    /// when it can.
+    pub can_hibernate: bool,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
     /// Whether the on-screen keyboard is showing (see
@@ -412,6 +416,7 @@ impl Shell {
             clock: Clock::default(),
             battery: None,
             failed_units: Vec::new(),
+            can_hibernate: false,
             effects: Effects::default(),
             keyboard: false,
             synthetic_input: false,

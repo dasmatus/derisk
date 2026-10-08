@@ -223,3 +223,16 @@ fn waits_for_logind_lock_on_this_session() {
         Some("3")
     );
 }
+
+#[test]
+fn reads_what_logind_can_do() {
+    assert!(systemd::parse_can("s \"yes\"\n"));
+    assert!(systemd::parse_can("s \"challenge\""));
+    assert!(!systemd::parse_can("s \"na\""));
+    assert!(!systemd::parse_can("s \"no\""));
+    assert!(!systemd::parse_can(""));
+    assert_eq!(
+        systemd::can_hibernate_argv().last().map(String::as_str),
+        Some("CanHibernate")
+    );
+}
